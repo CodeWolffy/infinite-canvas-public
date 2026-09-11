@@ -845,3 +845,108 @@ func TestStorageQuotaRejectsUploadAndGeneration(t *testing.T) {
 		t.Fatalf("stats: %d %s", stats.Code, stats.Body.String())
 	}
 }
+
+func TestMultiUpstreamModelBindings(t *testing.T) {
+	ctx := context.Background()
+	a := testApp(t)
+	admin, adminCookie := testAdmin(t, a)
+	_ = admin
+	model, channel := capabilityModel(t, a, "image", "https://example.invalid", moneyScale)
+	router := a.Router()
+
+	// 1. 批量绑定同一渠道下的两个不同上游模型（例如 GPT Image 2.5 flare 和 sunburst）
+	batchResp := testRequest(router, "POST", "/api/admin/models/"+model+"/channels/"+channel+"/batch", map[string]any{
+		"upstreamModels": []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
+		"priority":       10,
+		"weight":         100,
+		"enabled":        true,
+	}, adminCookie)
+	if batchResp.Code != 200 {
+		t.Fatalf("batch bind failed: %d %s", batchResp.Code, batchResp.Body.String())
+	}
+
+	// 2. 查询绑定列表，验证是否生成了 2 条独立的绑定记录及各自的 bindingId
+	listResp := testRequest(router, "GET", "/api/admin/models/"+model+"/channels", nil, adminCookie)
+	if listResp.Code != 200 {
+		t.Fatalf("list bindings failed: %d %s", listResp.Code, listResp.Body.String())
+	}
+	bindings := responseRows(t, listResp, "bindings")
+	if len(bindings) < 2 {
+		t.Fatalf("expected at least 2 bindings, got %d", len(bindings))
+	}
+
+	var flareBinding, sunburstBinding Row
+	for _, b := range bindings {
+		if str(b["upstreamModel"]) == "gpt-image-2.5-flare" {
+			flareBinding = b
+		} else if str(b["upstreamModel"]) == "gpt-image-2.5-sunburst" {
+			sunburstBinding = b
+		}
+	}
+	if flareBinding == nil || sunburstBinding == nil {
+		t.Fatalf("missing flare or sunburst binding in %v", bindings)
+	}
+	if str(flareBinding["id"]) == "" || str(sunburstBinding["id"]) == "" || str(flareBinding["id"]) == str(sunburstBinding["id"]) {
+		t.Fatalf("binding ids should be unique: flare=%s, sunburst=%s", str(flareBinding["id"]), str(sunburstBinding["id"]))
+	}
+
+	// 3. 独立配置上游成本
+	flareCost := testRequest(router, "PUT", "/api/admin/models/"+model+"/bindings/"+str(flareBinding["id"])+"/cost", map[string]string{
+		"fixed": "0.05",
+	}, adminCookie)
+	if flareCost.Code != 200 {
+		t.Fatalf("set flare cost: %d %s", flareCost.Code, flareCost.Body.String())
+	}
+	sunburstCost := testRequest(router, "PUT", "/api/admin/models/"+model+"/bindings/"+str(sunburstBinding["id"])+"/cost", map[string]string{
+		"fixed": "0.20",
+	}, adminCookie)
+	if sunburstCost.Code != 200 {
+		t.Fatalf("set sunburst cost: %d %s", sunburstCost.Code, sunburstCost.Body.String())
+	}
+
+	// 4. 验证 candidates 调度候选集中能独立获取这两个上游模型及其成本
+	candidates, err := a.candidates(ctx, model)
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	foundFlare := false
+	foundSunburst := false
+	for _, c := range candidates {
+		if c.UpstreamModel == "gpt-image-2.5-flare" {
+			foundFlare = true
+			if c.CostConfig["fixed"] != "0.05" {
+				t.Fatalf("flare cost config mismatch: %v", c.CostConfig)
+			}
+		}
+		if c.UpstreamModel == "gpt-image-2.5-sunburst" {
+			foundSunburst = true
+			if c.CostConfig["fixed"] != "0.20" {
+				t.Fatalf("sunburst cost config mismatch: %v", c.CostConfig)
+			}
+		}
+	}
+	if !foundFlare || !foundSunburst {
+		t.Fatalf("candidates missing models: flare=%v, sunburst=%v", foundFlare, foundSunburst)
+	}
+
+	// 5. 精确删除单条绑定（例如移除 flare），验证 sunburst 依然保留
+	delResp := testRequest(router, "DELETE", "/api/admin/models/"+model+"/bindings/"+str(flareBinding["id"]), nil, adminCookie)
+	if delResp.Code != 200 {
+		t.Fatalf("delete binding: %d %s", delResp.Code, delResp.Body.String())
+	}
+	remainingList := testRequest(router, "GET", "/api/admin/models/"+model+"/channels", nil, adminCookie)
+	remaining := responseRows(t, remainingList, "bindings")
+	hasFlare := false
+	hasSunburst := false
+	for _, b := range remaining {
+		if str(b["upstreamModel"]) == "gpt-image-2.5-flare" {
+			hasFlare = true
+		}
+		if str(b["upstreamModel"]) == "gpt-image-2.5-sunburst" {
+			hasSunburst = true
+		}
+	}
+	if hasFlare || !hasSunburst {
+		t.Fatalf("delete failed: flare=%v, sunburst=%v", hasFlare, hasSunburst)
+	}
+}

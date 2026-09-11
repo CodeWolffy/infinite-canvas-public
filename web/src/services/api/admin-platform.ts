@@ -58,6 +58,7 @@ export type AdminChannel = {
 };
 
 export type ModelChannelBinding = {
+    id: string;
     costConfig?: import("./platform-operations").CostConfig;
     modelId: string;
     channelId: string;
@@ -73,7 +74,7 @@ export type ModelChannelBinding = {
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; inputPricePerMillion?: string | null; cachedPricePerMillion?: string | null; outputPricePerMillion?: string | null; pricePerSecond?: string | null; description?: string | null; config?: Record<string, unknown> };
 export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
-export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled">;
+export type BindingInput = { id?: string; upstreamModel: string; priority: number; weight: number; enabled: boolean };
 
 export async function getAdminModels() {
     return (await apiRequest<{ models: AdminModel[] }>("/api/admin/models")).models;
@@ -101,6 +102,14 @@ export async function getModelChannelBindings(modelId: string) {
 
 export async function saveModelChannelBinding(modelId: string, channelId: string, input: BindingInput) {
     await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}`, { method: "PUT", body: input });
+}
+
+export async function batchSaveModelChannelBindings(modelId: string, channelId: string, input: { upstreamModels: string[]; priority: number; weight: number; enabled: boolean }) {
+    await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}/batch`, { method: "POST", body: input });
+}
+
+export async function deleteModelBinding(modelId: string, bindingId: string) {
+    await apiRequest<void>(`/api/admin/models/${modelId}/bindings/${bindingId}`, { method: "DELETE" });
 }
 
 export async function deleteModelChannelBinding(modelId: string, channelId: string) {

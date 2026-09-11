@@ -4,7 +4,7 @@ import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Sw
 import type { TableColumnsType } from "antd";
 import { Cable, Pencil, Plus, Trash2 } from "lucide-react";
 
-import { createAdminModel, deleteAdminModel, deleteModelChannelBinding, getAdminChannels, getAdminModels, getModelChannelBindings, saveModelChannelBinding, updateAdminModel, updateAdminModelStatus, type AdminModel, type BindingInput, type ModelInput } from "@/services/api/admin-platform";
+import { createAdminModel, deleteAdminModel, deleteModelBinding, getAdminChannels, getAdminModels, getModelChannelBindings, saveModelChannelBinding, updateAdminModel, updateAdminModelStatus, type AdminModel, type BindingInput, type ModelInput } from "@/services/api/admin-platform";
 import ChannelCosts from "./components/channel-costs";
 
 type ModelValues = ModelInput & { pricePerImage?: string; tokenPricing?: boolean; inputPrice?: string; cachedPrice?: string; outputPrice?: string; perSecondPricing?: boolean; pricePerSecond?: string };
@@ -16,7 +16,7 @@ export default function AdminModelsPage() {
     const [editing, setEditing] = useState<AdminModel | null | undefined>(undefined);
     const [bindingModel, setBindingModel] = useState<AdminModel | null>(null);
     const [bindingOpen, setBindingOpen] = useState(false);
-    const [editingBindingChannelId, setEditingBindingChannelId] = useState<string | null>(null);
+    const [editingBindingId, setEditingBindingId] = useState<string | null>(null);
     const [modelForm] = Form.useForm<ModelValues>();
     const [bindingForm] = Form.useForm<BindingValues>();
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
@@ -28,7 +28,7 @@ export default function AdminModelsPage() {
     const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: AdminModel["status"] }) => updateAdminModelStatus(id, status), onSuccess: () => void refreshModels(), onError: notifyError(message.error) });
     const deleteMutation = useMutation({ mutationFn: deleteAdminModel, onSuccess: () => { void refreshModels(); message.success("模型已删除"); }, onError: notifyError(message.error) });
     const bindingMutation = useMutation({ mutationFn: ({ channelId, ...values }: BindingValues) => saveModelChannelBinding(bindingModel!.id, channelId, values), onSuccess: () => { void refreshBindings(); setBindingOpen(false); bindingForm.resetFields(); message.success("渠道绑定已保存"); }, onError: notifyError(message.error) });
-    const unbindMutation = useMutation({ mutationFn: (channelId: string) => deleteModelChannelBinding(bindingModel!.id, channelId), onSuccess: () => { void refreshBindings(); message.success("渠道绑定已移除"); }, onError: notifyError(message.error) });
+    const unbindMutation = useMutation({ mutationFn: (bindingId: string) => deleteModelBinding(bindingModel!.id, bindingId), onSuccess: () => { void refreshBindings(); message.success("渠道绑定已移除"); }, onError: notifyError(message.error) });
 
     useEffect(() => {
         if (editing === undefined) return;
@@ -36,7 +36,7 @@ export default function AdminModelsPage() {
         modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, sortOrder: editing.sortOrder, status: editing.status, pricePerImage: editing.pricePerImage || undefined, tokenPricing: Boolean(editing.inputPricePerMillion), inputPrice: editing.inputPricePerMillion || undefined, cachedPrice: editing.cachedPricePerMillion || undefined, outputPrice: editing.outputPricePerMillion || undefined, perSecondPricing: Boolean(editing.pricePerSecond), pricePerSecond: editing.pricePerSecond || undefined, description: editing.description } : { capability: "image", sortOrder: 0, status: "draft" });
     }, [editing, modelForm]);
 
-    const openBinding = (model: AdminModel) => { setBindingModel(model); setEditingBindingChannelId(null); bindingForm.resetFields(); };
+    const openBinding = (model: AdminModel) => { setBindingModel(model); setEditingBindingId(null); bindingForm.resetFields(); };
     const columns: TableColumnsType<AdminModel> = [
         { title: "公开名称", key: "name", width: 220, render: (_, model) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{model.displayName}</div><div className="text-xs text-stone-500">{model.name}</div></div> },
         { title: "能力", dataIndex: "capability", width: 90, render: (value: AdminModel["capability"]) => ({ image: "图片", text: "文本", video: "视频", audio: "音频" })[value] },
@@ -72,13 +72,14 @@ export default function AdminModelsPage() {
                 </Form>
             </Modal>
             <Drawer title={`${bindingModel?.displayName || "模型"} · 渠道配置`} size={680} open={Boolean(bindingModel)} onClose={() => setBindingModel(null)}>
-                <Button className="mb-4" type="primary" icon={<Plus className="size-4" />} onClick={() => { setEditingBindingChannelId(null); bindingForm.resetFields(); bindingForm.setFieldsValue({ priority: 0, weight: 100, enabled: true }); setBindingOpen(true); }}>添加渠道</Button>
-                <Table rowKey="channelId" size="small" loading={bindingsQuery.isLoading} dataSource={bindingsQuery.data || []} pagination={false} columns={[{ title: "渠道", dataIndex: "channelName" }, { title: "上游模型", dataIndex: "upstreamModel" }, { title: "优先级", dataIndex: "priority", width: 80 }, { title: "权重", dataIndex: "weight", width: 70 }, { title: "状态", dataIndex: "enabled", width: 70, render: (value) => value ? <Tag color="green">启用</Tag> : <Tag>停用</Tag> }, { title: "操作", width: 110, render: (_, binding) => <Space><Button type="text" size="small" onClick={() => { setEditingBindingChannelId(binding.channelId); bindingForm.setFieldsValue({ channelId: binding.channelId, upstreamModel: binding.upstreamModel, priority: binding.priority, weight: binding.weight, enabled: binding.enabled }); setBindingOpen(true); }}>编辑</Button><Button type="text" danger size="small" onClick={() => unbindMutation.mutate(binding.channelId)}>移除</Button></Space> }]} />
+                <Button className="mb-4" type="primary" icon={<Plus className="size-4" />} onClick={() => { setEditingBindingId(null); bindingForm.resetFields(); bindingForm.setFieldsValue({ priority: 0, weight: 100, enabled: true }); setBindingOpen(true); }}>添加渠道</Button>
+                <Table rowKey="id" size="small" loading={bindingsQuery.isLoading} dataSource={bindingsQuery.data || []} pagination={false} columns={[{ title: "渠道", dataIndex: "channelName" }, { title: "上游模型", dataIndex: "upstreamModel" }, { title: "优先级", dataIndex: "priority", width: 80 }, { title: "权重", dataIndex: "weight", width: 70 }, { title: "状态", dataIndex: "enabled", width: 70, render: (value) => value ? <Tag color="green">启用</Tag> : <Tag>停用</Tag> }, { title: "操作", width: 110, render: (_, binding) => <Space><Button type="text" size="small" onClick={() => { setEditingBindingId(binding.id); bindingForm.setFieldsValue({ id: binding.id, channelId: binding.channelId, upstreamModel: binding.upstreamModel, priority: binding.priority, weight: binding.weight, enabled: binding.enabled }); setBindingOpen(true); }}>编辑</Button><Button type="text" danger size="small" onClick={() => unbindMutation.mutate(binding.id)}>移除</Button></Space> }]} />
                 {bindingModel ? <ChannelCosts key={bindingModel.id} model={bindingModel} /> : null}
             </Drawer>
             <Modal title="配置模型渠道" open={bindingOpen} footer={null} onCancel={() => setBindingOpen(false)} destroyOnHidden>
                 <Form<BindingValues> form={bindingForm} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => bindingMutation.mutate(values)}>
-                    <Form.Item name="channelId" label="渠道" rules={[{ required: true, message: "请选择渠道" }]}><Select disabled={Boolean(editingBindingChannelId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: `${channel.name} · ${channel.protocol}` }))} /></Form.Item>
+                    <Form.Item name="id" hidden><Input /></Form.Item>
+                    <Form.Item name="channelId" label="渠道" rules={[{ required: true, message: "请选择渠道" }]}><Select disabled={Boolean(editingBindingId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: `${channel.name} · ${channel.protocol}` }))} /></Form.Item>
                     <Form.Item name="upstreamModel" label="上游模型名称" rules={[{ required: true, message: "请输入上游模型名称" }]}><Input /></Form.Item>
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="priority" label="优先级" rules={[{ required: true }]}><InputNumber className="w-full" precision={0} /></Form.Item><Form.Item name="weight" label="同级权重" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item></div>
                     <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>

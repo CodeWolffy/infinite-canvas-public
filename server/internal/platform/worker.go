@@ -123,13 +123,13 @@ func classify(err error) *upstreamError {
 }
 
 type channel struct {
-	ID, Name, Protocol, BaseURL, APIKey, UpstreamModel           string
+	ID, Name, Protocol, BaseURL, APIKey, UpstreamModel, BindingID string
 	TimeoutMS, MaxConcurrency, CooldownSeconds, Priority, Weight int
 	CostConfig                                                   map[string]any
 }
 
 func (a *App) channelFromRow(row Row) (channel, error) {
-	c := channel{ID: str(row["id"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"]))}
+	c := channel{ID: str(row["id"]), BindingID: str(row["bindingId"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"]))}
 	c.CostConfig = object(row["costConfig"])
 	var err error
 	if str(row["encryptedApiKey"]) != "" {
@@ -138,7 +138,7 @@ func (a *App) channelFromRow(row Row) (channel, error) {
 	return c, err
 }
 func (a *App) candidates(ctx context.Context, modelID string) ([]channel, error) {
-	items, err := rows(ctx, a.DB, "SELECT c.*,b.upstream_model,b.priority,b.weight,b.cost_config FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()) ORDER BY b.priority DESC", modelID)
+	items, err := rows(ctx, a.DB, "SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()) ORDER BY b.priority DESC", modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +337,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 			}()
 			if !resuming {
 				var eligible bool
-				err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
+				if candidate.BindingID != "" {
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
+				} else {
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
+				}
 				if err != nil || !eligible {
 					return
 				}

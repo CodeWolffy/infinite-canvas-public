@@ -321,7 +321,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT b.*,c.name AS channel_name,c.status AS channel_status FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 ORDER BY b.priority DESC", id)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT b.*,c.name AS channel_name,c.status AS channel_status FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 ORDER BY b.priority DESC, b.created_at ASC", id)
 		return gin.H{"bindings": items}, err
 	}))
 	admin.PUT("/models/:id/channels/:channelId", respond(func(c *gin.Context) (any, error) {
@@ -334,6 +334,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		input, err := body[struct {
+			ID            string `json:"id"`
 			UpstreamModel string `json:"upstreamModel" binding:"required,max=160"`
 			Priority      int    `json:"priority"`
 			Weight        int    `json:"weight" binding:"required,min=1"`
@@ -342,8 +343,60 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id) DO UPDATE SET upstream_model=excluded.upstream_model,priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
+		if strings.TrimSpace(input.ID) != "" {
+			_, err = a.DB.Exec(c.Request.Context(), "UPDATE model_channels SET upstream_model=$3,priority=$4,weight=$5,enabled=$6,updated_at=now() WHERE id=$1 AND model_id=$2", input.ID, id, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
+		} else {
+			_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
+		}
 		return gin.H{"saved": true}, err
+	}))
+	admin.POST("/models/:id/channels/:channelId/batch", respond(func(c *gin.Context) (any, error) {
+		id, err := idParam(c, "id")
+		if err != nil {
+			return nil, err
+		}
+		channelID, err := idParam(c, "channelId")
+		if err != nil {
+			return nil, err
+		}
+		input, err := body[struct {
+			UpstreamModels []string `json:"upstreamModels" binding:"required,min=1"`
+			Priority       int      `json:"priority"`
+			Weight         int      `json:"weight" binding:"required,min=1"`
+			Enabled        bool     `json:"enabled"`
+		}](c)
+		if err != nil {
+			return nil, err
+		}
+		ctx := c.Request.Context()
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			for _, m := range input.UpstreamModels {
+				m = strings.TrimSpace(m)
+				if m == "" {
+					continue
+				}
+				if len(m) > 160 {
+					m = m[:160]
+				}
+				if _, err := tx.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, m, input.Priority, input.Weight, input.Enabled); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		return gin.H{"saved": true}, err
+	}))
+	admin.DELETE("/models/:id/bindings/:bindingId", respond(func(c *gin.Context) (any, error) {
+		id, err := idParam(c, "id")
+		if err != nil {
+			return nil, err
+		}
+		bindingID, err := idParam(c, "bindingId")
+		if err != nil {
+			return nil, err
+		}
+		_, err = a.DB.Exec(c.Request.Context(), "DELETE FROM model_channels WHERE model_id=$1 AND id=$2", id, bindingID)
+		return nil, err
 	}))
 	admin.DELETE("/models/:id/channels/:channelId", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

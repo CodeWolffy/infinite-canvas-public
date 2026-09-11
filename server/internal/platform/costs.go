@@ -119,6 +119,35 @@ func (a *App) recordCost(ctx context.Context, id string, result generationResult
 }
 
 func (a *App) costRoutes(admin *gin.RouterGroup) {
+	admin.PUT("/models/:id/bindings/:bindingId/cost", respond(func(c *gin.Context) (any, error) {
+		model, err := idParam(c, "id")
+		if err != nil {
+			return nil, err
+		}
+		bindingID, err := idParam(c, "bindingId")
+		if err != nil {
+			return nil, err
+		}
+		config, err := body[map[string]string](c)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateCosts(config); err != nil {
+			return nil, err
+		}
+		ctx := c.Request.Context()
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			result, err := tx.Exec(ctx, "UPDATE model_channels SET cost_config=$3,updated_at=now() WHERE model_id=$1 AND id=$2", model, bindingID, jsonBytes(config))
+			if err != nil {
+				return err
+			}
+			if result.RowsAffected() != 1 {
+				return notFound
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "binding.cost", model+":"+bindingID, config)
+		})
+		return nil, err
+	}))
 	admin.PUT("/models/:id/channels/:channelId/cost", respond(func(c *gin.Context) (any, error) {
 		model, err := idParam(c, "id")
 		if err != nil {
@@ -141,7 +170,7 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			if result.RowsAffected() != 1 {
+			if result.RowsAffected() == 0 {
 				return notFound
 			}
 			return a.audit(ctx, tx, currentUser(c).ID, "channel.cost", model+":"+channel, config)

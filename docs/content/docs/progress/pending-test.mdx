@@ -21,6 +21,8 @@ description: Implemented changes that still need manual verification
   - 代码复用：管理端“获取模型”“查询余额”复用主动检测的统一实现，行为与主动检测一致（去重、无额度时报错）。
   - 测试编译：修复 `capabilities_test.go` 对 map 元素取地址导致的整包测试无法编译。
 
+- Multi-upstream model binding decoupling and batch binding: multiple upstream models from the same channel can be bound to a single platform model without overwriting; batch binding modal supported in channels drawer; independent priority, weight, enabled status, and cost configurations per binding row in models drawer; scheduler eligibility check targets specific binding ID.
+- GPT Image 2.5 adaptation: supports `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`; image settings panel supports `xhigh` (Ultra High) and `max` (Maximum) quality modes; requests omit `response_format` and pass `quality` to upstream properly.
 - Billing: settle the hold and any additional charge once, preserve zero cache prices, distinguish calculated fees from actual charges, save per-second prices, handle string/numeric duration consistently, preserve group pricing on retries, and allow different redeem codes for one account.
 - Channel operations: active generation probes, model changes and balance alerts. Automatic checks default off, share channel slots and cooldown, and recover interrupted checks without replaying the original generation. Verify state-change notifications and mail failure records with real channels and SMTP.
 - Account security: verified email, single-use 30-minute recovery links, TOTP login, one-time recovery code and device revocation. Invalid/expired/replayed proofs must fail; password recovery must retain MFA, and revoked devices must lose access.

@@ -93,7 +93,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT m.id,m.display_name,m.capability,b.upstream_model FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND m.deleted_at IS NULL ORDER BY m.sort_order,m.created_at", id)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT b.id,m.id AS model_id,m.display_name,m.capability,b.upstream_model FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND m.deleted_at IS NULL ORDER BY m.sort_order,m.created_at", id)
 		return gin.H{"models": items}, err
 	}))
 	admin.PUT("/channels/:id/monitoring", respond(func(c *gin.Context) (any, error) {
@@ -121,7 +121,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if len(input.probeIDs()) > 0 {
 				var count int
-				if err := tx.QueryRow(ctx, "SELECT count(*) FROM model_channels WHERE channel_id=$1 AND model_id=ANY($2::text[]::uuid[])", id, input.probeIDs()).Scan(&count); err != nil {
+				if err := tx.QueryRow(ctx, "SELECT count(DISTINCT model_id) FROM model_channels WHERE channel_id=$1 AND model_id=ANY($2::text[]::uuid[])", id, input.probeIDs()).Scan(&count); err != nil {
 					return err
 				}
 				if count != len(input.probeIDs()) {
@@ -239,7 +239,7 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	if probes := config.probeIDs(); len(probes) > 0 {
 		details := []string{}
 		for i, modelID := range probes {
-			binding, err := one(ctx, a.DB, "SELECT m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL", modelID, id)
+			binding, err := one(ctx, a.DB, "SELECT m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL ORDER BY b.priority DESC, b.created_at ASC LIMIT 1", modelID, id)
 			if err != nil {
 				status = "failed"
 				details = append(details, "检测模型绑定已失效")
