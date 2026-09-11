@@ -398,6 +398,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 				}
 				return
 			}
+			// 非文本任务必须拿到并持久化媒体结果才能成功结算，空结果按上游失败处理。
+			if task["capability"] != "text" && len(result.Data) == 0 {
+				last = &upstreamError{Category: "upstream_error", Retryable: true}
+				return
+			}
 			if task["capability"] == "audio" && len(result.Data) > 0 && (task["pricePerSecond"] != nil || candidate.CostConfig["second"] != nil) {
 				result.DurationSeconds, err = audioDuration(jobCtx, result.Data)
 				if err != nil && task["pricePerSecond"] != nil {
@@ -417,7 +422,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 			if len(result.Data) > 0 {
 				media, err = a.storeMedia(jobCtx, str(task["userId"]), result.Data, "")
 				if err != nil {
+					// 保留已识别的配额/超时分类，其余保存故障统一归为存储失败。
 					last = &upstreamError{Category: "storage"}
+					if failure := classify(err); failure.Category == "storage_quota" || failure.Category == "timeout" {
+						last = failure
+					}
 					return
 				}
 				kind := str(task["capability"])
@@ -508,6 +517,10 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		}
 		if task["status"] != "running" || task["workerToken"] != original["workerToken"] || integer(task["run"]) != integer(original["run"]) {
 			return nil
+		}
+		// 结算前的最终防护：非文本任务没有媒体结果不允许按成功扣费。
+		if failure == nil && task["capability"] != "text" && media == nil {
+			failure = &upstreamError{Category: "upstream_error"}
 		}
 		price := integer(task["priceMicros"])
 		status := "succeeded"
@@ -632,7 +645,8 @@ func (a *App) recoverTasks(ctx context.Context) {
 	}
 }
 func (a *App) reconcileExpiredOrders(ctx context.Context) {
-	items, err := rows(ctx, a.DB, "SELECT * FROM payment_orders WHERE status='pending' AND expires_at<=now() ORDER BY expires_at LIMIT 100")
+	// 每轮随机排序：最早一批订单若持续无法确认，不会一直挡住后面的订单。
+	items, err := rows(ctx, a.DB, "SELECT * FROM payment_orders WHERE status='pending' AND expires_at<=now() ORDER BY md5(id::text||$1) LIMIT 100", uuid.NewString())
 	if err != nil {
 		return
 	}

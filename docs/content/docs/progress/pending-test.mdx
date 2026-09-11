@@ -11,6 +11,16 @@ description: Implemented changes that still need manual verification
 
 ### Backend capabilities implemented in this iteration
 
+- 后端审查修复（待人工验证）：
+  - 空结果扣费：图片/视频/音频任务上游返回 HTTP 200 但结果为空时，按上游失败处理并退回冻结余额，不再出现“已扣费但无输出文件”；结算前有最终防护。
+  - 视频时长一致性：提交 `seconds` 与 `durationSeconds` 两个不同值会被拒绝（400 `invalid_duration`）；创建任务时统一规范化时长，Gemini 视频上游请求、冻结额、完成计费使用同一时长。
+  - 存储占位回收：MinIO 上传/生成结果落盘明确失败时立即删除占位记录，页面用量与配额判断不再被失败上传长期占用；结果保存失败保留 `storage_quota` / `timeout` 错误分类，用户能看到“删除文件或联系管理员”的可操作提示。
+  - 订单对账公平性：到期待确认订单每轮随机选取 100 笔，最早一批持续查单失败的订单不会再阻塞后续订单自动确认。
+  - 成本统计口径：管理端成本页的“实付/补贴”改为与成本相同的模型/渠道/来源筛选范围归集，并按任务去重，筛选单个模型不再被其他模型收入抵消差额；全平台口径与之前一致。
+  - 检测中断恢复：多模型渠道检测的全部成本记录通过新增的 `monitor_token` 列关联同一次检测执行，进程中断后一并标记失败，不再遗留 `running` 记录；新增迁移 `007_monitor_cost_link.sql` 添加该列，启动时自动升级。
+  - 代码复用：管理端“获取模型”“查询余额”复用主动检测的统一实现，行为与主动检测一致（去重、无额度时报错）。
+  - 测试编译：修复 `capabilities_test.go` 对 map 元素取地址导致的整包测试无法编译。
+
 - Billing: settle the hold and any additional charge once, preserve zero cache prices, distinguish calculated fees from actual charges, save per-second prices, handle string/numeric duration consistently, preserve group pricing on retries, and allow different redeem codes for one account.
 - Channel operations: active generation probes, model changes and balance alerts. Automatic checks default off, share channel slots and cooldown, and recover interrupted checks without replaying the original generation. Verify state-change notifications and mail failure records with real channels and SMTP.
 - Account security: verified email, single-use 30-minute recovery links, TOTP login, one-time recovery code and device revocation. Invalid/expired/replayed proofs must fail; password recovery must retain MFA, and revoked devices must lose access.

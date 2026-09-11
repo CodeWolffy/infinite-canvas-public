@@ -171,6 +171,17 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if model["capability"] == "text" {
 				return problem(400, "invalid_capability", "文本请使用对话生成入口")
 			}
+			// 视频时长在创建时统一规范化，后续计费与上游请求都使用保存后的值。
+			if model["capability"] == "video" {
+				seconds, err := paramSeconds(input.Parameters)
+				if err != nil {
+					return err
+				}
+				if !seconds.IsZero() {
+					input.Parameters["seconds"] = seconds.String()
+					delete(input.Parameters, "durationSeconds")
+				}
+			}
 			if err = projectAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
 				return err
 			}

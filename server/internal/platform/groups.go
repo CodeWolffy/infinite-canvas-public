@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 
@@ -341,7 +340,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		return nil, a.audit(ctx, a.DB, currentUser(c).ID, "sensitive.delete", id, gin.H{})
 	}))
 
-	// 渠道余额：走 newapi/oneapi 约定的 dashboard/billing 端点；不支持的渠道返回明确提示。
+	// 渠道余额：复用主动检测的查询实现；不支持的渠道返回明确提示。
 	admin.POST("/channels/:id/balance", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
@@ -357,28 +356,14 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, "GET", ch.endpoint("dashboard/billing/subscription"), nil)
-		if err != nil {
-			return nil, err
-		}
-		ch.authorize(req)
-		subscription, err := a.upstreamJSON(req)
+		info, err := a.channelBalance(ctx, ch)
 		if err != nil {
 			return nil, problem(502, "balance_unavailable", "渠道余额查询失败："+err.Error())
 		}
-		hardLimit, _ := toFloat(subscription["hard_limit_usd"])
-		usageReq, err := http.NewRequestWithContext(ctx, "GET", ch.endpoint("dashboard/billing/usage"), nil)
-		if err != nil {
-			return nil, err
+		if info["balance"] == nil {
+			// usage 端点缺失时至少返回额度。
+			return gin.H{"quota": info["quota"]}, nil
 		}
-		ch.authorize(usageReq)
-		usage, err := a.upstreamJSON(usageReq)
-		if err == nil {
-			if spent, ok := toFloat(usage["total_usage"]); ok {
-				return gin.H{"balance": hardLimit - spent/100, "quota": hardLimit, "used": spent / 100}, nil
-			}
-		}
-		// usage 端点缺失时至少返回额度。
-		return gin.H{"quota": hardLimit}, nil
+		return gin.H{"balance": info["balance"], "quota": info["quota"], "used": info["used"]}, nil
 	}))
 }

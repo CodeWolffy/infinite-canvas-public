@@ -247,12 +247,13 @@ func (a *App) runMonitor(root context.Context, row Row) {
 			}
 			ch.UpstreamModel = str(binding["upstreamModel"])
 			ch.CostConfig = object(binding["costConfig"])
+			// 检测的全部成本记录共用 monitor_token，中断恢复时才能一并关联。
 			costID := token
 			if i > 0 {
 				costID = uuid.NewString()
 			}
 			task := Row{"id": costID, "run": 1, "probe": true, "capability": binding["capability"], "prompt": config.Prompt, "parameters": config.Parameters}
-			_, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,model_id,channel_id,capability,cost_config,note) VALUES($1,$2,$3,$4,$5,'渠道生成检测')", costID, modelID, id, binding["capability"], jsonBytes(ch.CostConfig))
+			_, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,model_id,channel_id,capability,cost_config,note,monitor_token) VALUES($1,$2,$3,$4,$5,'渠道生成检测',$6)", costID, modelID, id, binding["capability"], jsonBytes(ch.CostConfig), token)
 			var result generationResult
 			if err == nil {
 				result, err = a.generate(ctx, ch, task)
@@ -402,7 +403,7 @@ func (a *App) recoverMonitoring(ctx context.Context) {
 			if _, err = tx.Exec(ctx, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,'failed',$3,0) ON CONFLICT(id) DO NOTHING", row["monitorToken"], row["id"], jsonBytes(Row{"generation": "检测超时或进程中断，未重新提交原请求"})); err != nil {
 				return err
 			}
-			if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE id=$1 AND status='running'", row["monitorToken"]); err != nil {
+			if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE monitor_token=$1 AND status='running'", row["monitorToken"]); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(ctx, "UPDATE channels SET monitor_token=NULL,monitor_deadline=NULL,monitor_status='failed',monitor_error='检测超时或进程中断',monitor_checked_at=now() WHERE id=$1", row["id"]); err != nil {

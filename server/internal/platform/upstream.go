@@ -489,15 +489,18 @@ func (a *App) generateGemini(ctx context.Context, c channel, capability, prompt 
 				instance["lastFrame"] = images[1]
 			}
 		}
-		parameters := selectedParams(params, "aspectRatio", "durationSeconds", "resolution", "generateAudio")
+		parameters := selectedParams(params, "aspectRatio", "resolution", "generateAudio")
 		if audio, exists := params["generate_audio"]; exists {
 			parameters["generateAudio"] = audio
 		}
 		if resolution := str(params["resolution_name"]); parameters["resolution"] == nil && resolution != "" {
 			parameters["resolution"] = strings.TrimSuffix(resolution, "p") + "p"
 		}
-		if parameters["durationSeconds"] == nil && params["seconds"] != nil {
-			parameters["durationSeconds"] = integer(params["seconds"])
+		// 上游请求使用与计费一致的规范化时长，不再直接透传 durationSeconds。
+		if seconds, err := paramSeconds(params); err != nil {
+			return generationResult{}, err
+		} else if !seconds.IsZero() {
+			parameters["durationSeconds"] = json.Number(seconds.String())
 		}
 		if parameters["aspectRatio"] == nil {
 			parameters["aspectRatio"] = geminiImageConfig(params)["aspectRatio"]

@@ -145,6 +145,8 @@ func (a *App) storeMedia(ctx context.Context, userID string, data []byte, name s
 		return nil, err
 	}
 	if _, err = a.S3.PutObject(ctx, a.Config.Bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: mediaType}); err != nil {
+		// 上传明确失败时立即回收占位记录，避免长期占用存储配额。
+		_, _ = a.DB.Exec(ctx, "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", id)
 		return nil, err
 	}
 	if _, err = a.DB.Exec(ctx, "UPDATE media_objects SET status='ready' WHERE id=$1", id); err != nil {

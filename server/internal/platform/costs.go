@@ -168,8 +168,17 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		var paid, grants int64
-		if err = a.DB.QueryRow(ctx, "SELECT coalesce(-sum(delta_balance+delta_frozen) FILTER(WHERE kind='charge'),0)::bigint,coalesce(sum(delta_balance) FILTER(WHERE kind IN('grant','checkin')),0)::bigint FROM wallet_entries e WHERE ($1::timestamptz IS NULL OR e.created_at>=$1) AND ($2::timestamptz IS NULL OR e.created_at<=$2)", from, to).Scan(&paid, &grants); err != nil {
+		// 实付与成本使用同一筛选范围归集，按任务去重避免故障转移的多条成本记录重复计入实付。
+		var paid int64
+		if err = a.DB.QueryRow(ctx, `SELECT coalesce(-sum(t.billed_micros),0)::bigint FROM generation_tasks t
+			WHERE ($1::timestamptz IS NULL OR t.finished_at>=$1) AND ($2::timestamptz IS NULL OR t.finished_at<=$2)
+			AND ($4='' OR t.model_id::text=$4) AND ($5='' OR t.channel_id::text=$5)
+			AND ($3='' OR EXISTS(SELECT 1 FROM upstream_cost_entries e2 WHERE e2.task_id=t.id AND e2.source=$3))
+			AND ($3<>'' OR $4<>'' OR $5<>'' OR t.id IN(SELECT task_id FROM upstream_cost_entries))`, from, to, source, modelID, channelID).Scan(&paid); err != nil {
+			return nil, err
+		}
+		var grants int64
+		if err = a.DB.QueryRow(ctx, "SELECT coalesce(sum(delta_balance) FILTER(WHERE kind IN('grant','checkin')),0)::bigint FROM wallet_entries WHERE ($1::timestamptz IS NULL OR created_at>=$1) AND ($2::timestamptz IS NULL OR created_at<=$2)", from, to).Scan(&grants); err != nil {
 			return nil, err
 		}
 		known := integer(totals["knownCost"])

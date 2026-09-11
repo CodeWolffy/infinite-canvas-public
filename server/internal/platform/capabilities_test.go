@@ -709,9 +709,11 @@ func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
 	a.cleanup(ctx)
 	counts := map[string]int{}
 	for _, item := range []string{"channel_checks", "notifications", "audit_logs", "upstream_cost_entries"} {
-		if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM "+item).Scan(&counts[item]); err != nil {
+		var count int
+		if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM "+item).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
+		counts[item] = count
 	}
 	if counts["channel_checks"] != 0 || counts["notifications"] != 0 || counts["audit_logs"] != 1 || counts["upstream_cost_entries"] != 1 {
 		t.Fatalf("retention counts %v", counts)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -513,28 +512,9 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(candidate.TimeoutMS)*time.Millisecond)
 		defer cancel()
-		endpoint := candidate.endpoint("models")
-		req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-		candidate.authorize(req)
-		data, err := a.upstreamJSON(req)
+		names, err := a.channelModels(ctx, candidate)
 		if err != nil {
 			return nil, problem(502, "probe_failed", "渠道探测失败，请检查接口、协议和密钥")
-		}
-		names := []string{}
-		list, _ := data["data"].([]any)
-		if candidate.Protocol == "gemini" {
-			list, _ = data["models"].([]any)
-		}
-		for _, item := range list {
-			if model, ok := item.(map[string]any); ok {
-				name := str(model["id"])
-				if candidate.Protocol == "gemini" {
-					name = strings.TrimPrefix(str(model["name"]), "models/")
-				}
-				if name != "" {
-					names = append(names, name)
-				}
-			}
 		}
 		return gin.H{"models": names, "health": gin.H{"ok": true, "checkedAt": time.Now()}}, nil
 	}))

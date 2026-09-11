@@ -16,6 +16,29 @@ func roundedMicros(value decimal.Decimal) (int64, error) {
 	return n, nil
 }
 
+// paramSeconds 统一读取计费时长：seconds 与 durationSeconds 是同义别名，冲突时拒绝请求。
+func paramSeconds(params map[string]any) (decimal.Decimal, error) {
+	seconds := decimal.Zero
+	if value := params["seconds"]; value != nil && value != "" {
+		parsed, err := decimal.NewFromString(str(value))
+		if err != nil || !parsed.IsPositive() {
+			return parsed, problem(400, "invalid_duration", "生成时长必须为正数")
+		}
+		seconds = parsed
+	}
+	if value := params["durationSeconds"]; value != nil && value != "" {
+		parsed, err := decimal.NewFromString(str(value))
+		if err != nil || !parsed.IsPositive() {
+			return parsed, problem(400, "invalid_duration", "生成时长必须为正数")
+		}
+		if !seconds.IsZero() && !seconds.Equal(parsed) {
+			return seconds, problem(400, "invalid_duration", "生成时长参数不一致，请只提供 seconds")
+		}
+		seconds = parsed
+	}
+	return seconds, nil
+}
+
 // 创建、重试和预报价使用相同的价格快照，零单价与未配置分别处理。
 func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any, promptEstimate int64) (Row, error) {
 	p := Row{"pricingKind": "fixed", "groupDiscount": discount.String(), "seconds": nil}
@@ -53,11 +76,11 @@ func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any,
 		hold = max(hold, estimate)
 	} else if p["pricePerSecond"] != nil && (model["capability"] == "video" || model["capability"] == "audio") {
 		seconds := decimal.NewFromInt(5)
-		if params["seconds"] != nil {
+		if params["seconds"] != nil || params["durationSeconds"] != nil {
 			var err error
-			seconds, err = decimal.NewFromString(str(params["seconds"]))
-			if err != nil || !seconds.IsPositive() {
-				return nil, problem(400, "invalid_duration", "生成时长必须为正数")
+			seconds, err = paramSeconds(params)
+			if err != nil {
+				return nil, err
 			}
 		}
 		p["seconds"] = seconds.String()

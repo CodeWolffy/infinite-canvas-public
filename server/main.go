@@ -30,6 +30,9 @@ var platformOps string
 //go:embed migrations/006_storage_quota.sql
 var storageQuota string
 
+//go:embed migrations/007_monitor_cost_link.sql
+var monitorCostLink string
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
 		response, err := http.Get("http://127.0.0.1:3001/health")
@@ -44,7 +47,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota})
+	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink})
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)
