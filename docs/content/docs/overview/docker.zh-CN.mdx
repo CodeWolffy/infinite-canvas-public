@@ -1,91 +1,50 @@
 ---
 title: Docker 部署
-description: 使用 Docker Compose 部署无限画布
+description: 使用 Go、PostgreSQL、Redis 和 MinIO 部署公益创作平台
 ---
 
 # Docker 部署
 
-如果你希望在自己的机器或服务器上运行项目，可以直接使用 Docker Compose。
+本页适用于当前 Go 公益分支。后端入口为 `server/Dockerfile`，原 `api/` 不参与部署。生产镜像构建、静态资源路径与目标环境吞吐量仍需验收。
 
-## 使用发布镜像
+## 配置与启动
 
-```bash
-git clone git@github.com:basketikun/infinite-canvas.git
-cd infinite-canvas
-docker compose up -d
+复制仓库根目录 `.env.example` 为生产配置 `.env`，替换全部 `change-me` 密码和加密密钥，并设置实际 HTTPS 域名的 `PUBLIC_URL`、`CORS_ORIGIN`。仅本机运行时，复制为单独的 `.env.local` 并使用下方 `--env-file .env.local`，不要把公司项目的 `.env` 或数据库配置用于本平台。
+
+生产服务器更新使用新的目录名和三步命令：
+
+```sh
+cd /opt/infinite-canvas-public
+git pull origin main
+docker compose up -d --build app api
 ```
 
-启动后访问：
+首次部署前，将生产配置保存为 `/opt/infinite-canvas-public/.env`，不要提交该文件。
 
-```text
-http://localhost:3000
+本地 HTTP 使用单独配置，默认绑定 `127.0.0.1:3301`；公司项目的 `3300` 端口不属于本平台：
+
+```sh
+docker compose --env-file .env.local -f docker-compose.local.yml up -d --build
 ```
 
-## 本地构建镜像
+本地入口为 `http://localhost:3301`。如需更换本地宿主机端口，在 `.env.local` 中设置 `PUBLIC_WEB_PORT`；容器内仍使用 3000。首次登录初始化管理员后修改初始密码，再创建上游渠道、绑定发布模型、设置价格、签到区间和邀请码。真实支付需要在后台配置商户资料，并完成公网 HTTPS 通知联调。
 
-如果需要基于当前源码构建镜像：
+## 服务与网络
 
-```bash
-docker compose -f docker-compose.local.yml up -d --build
-```
+- `app`：Nginx 静态前端；生产绑定宿主机 `127.0.0.1:3000`，本地 Compose 默认绑定 `127.0.0.1:3301`。
+- `api`：Go 服务，容器内 3001，包含鉴权、任务执行与账务。
+- `postgres`：权威业务数据库。
+- `redis`：启用 AOF 的跨实例频控和渠道槽位。
+- `minio`：私有媒体存储，媒体由已鉴权的 API 提供。
 
-## 文档站镜像
+公网按 `1Panel -> Web Nginx -> Go API` 配置，生产保持 `TRUST_PROXY=true`、`COOKIE_SECURE=true`。不要直接公开 API、数据库、Redis 或 MinIO 端口。
 
-文档站位于 `docs/` 目录，按带服务端能力的 Next.js standalone 应用单独构建，不打进主应用镜像。
+Compose 项目名为 `infinite-canvas-public`，因此容器会显示为 `infinite-canvas-public-app-1`、`infinite-canvas-public-api-1` 等，数据库、Redis、MinIO 的卷和网络也与公司项目 `infinite-canvas` 分开。不要给这些服务添加固定 `container_name`，以免后续扩展 API 副本时产生冲突。
 
-使用发布镜像：
+## 数据与支付
 
-```bash
-cd docs
-docker compose up -d
-```
+Go 服务只初始化独立空库；发现公司版旧表或未知版本时拒绝覆盖。数据库、对象数据、Redis AOF 以及 `CHANNEL_ENCRYPTION_KEY` 都需要纳入备份，并实际演练恢复。
 
-基于当前源码本地构建：
+支付支持易支付经典接口、支付宝当面付、微信 Native API v3。浏览器回跳不会入账；只有服务端验签和查单确认才能更新余额。经典易支付缺少统一远端关单协议，过期后关闭本站入口，迟到的真实付款仍按幂等规则入账。
 
-```bash
-cd docs
-docker compose -f docker-compose.local.yml up -d --build
-```
-
-## 数据说明
-
-当前主应用镜像只启动 Next.js。画布、我的素材、生成记录和 AI API Key 默认保存在浏览器本地；第三方提示词由浏览器前端直连拉取，不需要额外挂载数据目录。
-
-## 统计分析（可选）
-
-项目**默认不接入任何统计**：不设置下列环境变量时，页面不会加载任何统计脚本，也不会发送任何外部请求。你在自己的部署上想查看流量时，设置对应环境变量即可，无需修改代码或重新构建镜像——镜像启动时会据此生成运行期配置。
-
-统计按「每家一个独立变量」配置：**填了谁就启用谁，可同时启用多家**（例如 GA4 + 百度一起开）。仅支持 GA4 与百度，两者都只接受 ID，脚本地址由代码固定拼接，不接受任意脚本地址或内联 JS。
-
-| 变量 | 说明 |
-| --- | --- |
-| `ANALYTICS_GA4_ID` | Google Analytics 4 衡量 ID（`G-XXXX`） |
-| `ANALYTICS_BAIDU_ID` | 百度统计站点 ID（`hm.js?` 后面那串 hash） |
-
-在 `docker-compose.yml` 的 `environment` 中配置（文件内已附注释示例），下例同时启用 GA4 与百度：
-
-```yaml
-services:
-  app:
-    image: ghcr.io/basketikun/infinite-canvas:latest
-    ports:
-      - "3000:3000"
-    environment:
-      ANALYTICS_GA4_ID: G-XXXXXXXXXX
-      ANALYTICS_BAIDU_ID: e8263761cc5c32f5f7a855b8203b965a
-```
-
-或使用 `docker run`：
-
-```bash
-docker run -d -p 3000:3000 \
-  -e ANALYTICS_GA4_ID=G-XXXXXXXXXX \
-  -e ANALYTICS_BAIDU_ID=e8263761cc5c32f5f7a855b8203b965a \
-  ghcr.io/basketikun/infinite-canvas:latest
-```
-
-单页应用的路由切换会自动向所有已启用的统计上报 pageview。
-
-<Callout type="warn">
-请只在你自己的站点上配置统计 ID，不要把 ID 提交进仓库；fork 或自托管本项目的用户默认不会产生任何统计。
-</Callout>
+完整说明见仓库 `docs/public-platform.md`。本次实现的逐项验收见[待测试清单](/zh-CN/docs/progress/pending-test)。

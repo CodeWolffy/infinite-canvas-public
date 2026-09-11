@@ -41,6 +41,11 @@ function localPluginsManifest(): Plugin {
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
     plugins: [react(), localPluginsManifest()],
+    server: {
+        proxy: {
+            "/api": process.env.VITE_API_TARGET || "http://localhost:3001",
+        },
+    },
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),

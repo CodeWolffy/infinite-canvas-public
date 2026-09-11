@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Image as ImageIcon, LoaderCircle, MessageSquare, Music2, Play, Settings2, Square, Video } from "lucide-react";
+import { Image as ImageIcon, LoaderCircle, MessageSquare, Play, Settings2, Square, Video, Volume2 } from "lucide-react";
 import { Button, Segmented } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -46,6 +46,8 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                         value={mode}
                         onChange={(value) => onConfigChange(node.id, { generationMode: value as CanvasGenerationMode })}
                         options={[
+                            { value: "video", label: <span className="inline-flex items-center gap-1"><Video className="size-3.5" />视频</span> },
+                            { value: "audio", label: <span className="inline-flex items-center gap-1"><Volume2 className="size-3.5" />音频</span> },
                             {
                                 value: "image",
                                 label: (
@@ -64,24 +66,6 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                                     </span>
                                 ),
                             },
-                            {
-                                value: "video",
-                                label: (
-                                    <span className="inline-flex items-center gap-1">
-                                        <Video className="size-3.5" />
-                                        {t("canvas.configNode.video")}
-                                    </span>
-                                ),
-                            },
-                            {
-                                value: "audio",
-                                label: (
-                                    <span className="inline-flex items-center gap-1">
-                                        <Music2 className="size-3.5" />
-                                        {t("canvas.configNode.audio")}
-                                    </span>
-                                ),
-                            },
                         ]}
                     />
                 </div>
@@ -90,8 +74,6 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
             <div className="mb-2 flex flex-wrap gap-1.5">
                 <InputChip label={t("canvas.configNode.prompt")} value={t("canvas.configNode.items", { count: inputSummary.textCount })} style={chipStyle} />
                 <InputChip label={t("canvas.configNode.references")} value={t("canvas.configNode.images", { count: inputSummary.imageCount })} style={chipStyle} />
-                <InputChip label={t("canvas.configNode.videoReferences")} value={t("canvas.configNode.items", { count: inputSummary.videoCount })} style={chipStyle} />
-                <InputChip label={t("canvas.configNode.audioReferences")} value={t("canvas.configNode.items", { count: inputSummary.audioCount })} style={chipStyle} />
                 <button type="button" className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border px-2 text-[11px]" style={chipStyle} onMouseDown={(event) => event.stopPropagation()} onClick={onComposerToggle}>
                     <Settings2 className="size-3.5" />
                     {t("canvas.configNode.compose")}

@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import type { AgentReasoningEffort } from "@/stores/use-agent-store";
 
@@ -116,18 +117,22 @@ export function setCodexSkillEnabled(endpoint: string, token: string, skill: Pic
 }
 
 export async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const url = `${endpoint}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
     const res = await fetch(url, init);
     const data = (await res.json().catch(() => ({}))) as T & { error?: string; msg?: string };
+    assertCurrentSession(sessionVersion);
     if (!res.ok) throw new AgentApiError(res.status, data);
     return data;
 }
 
 export async function discoverAgentConfig(endpoint: string) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     try {
         const res = await fetch(`${endpoint}/config`);
         if (!res.ok) return null;
         const data = (await res.json()) as AgentConfigResponse;
+        assertCurrentSession(sessionVersion);
         return data.ok ? data : null;
     } catch {
         return null;

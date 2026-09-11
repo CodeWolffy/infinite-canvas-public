@@ -3,12 +3,15 @@ out/
 node_modules/
 .env*
 !.env.example
+new-api/
 data/
 *.log
 *.tsbuildinfo
 .DS_Store
 .idea
 web/dist
+server/bin/
+server/*.exe
 
 **/dist
 web/public/plugins

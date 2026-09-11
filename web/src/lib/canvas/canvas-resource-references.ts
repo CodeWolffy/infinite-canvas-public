@@ -71,7 +71,12 @@ function getContextInputNodes(nodeId: string, nodes: CanvasNodeData[], connectio
     return connections
         .filter((connection) => connection.toNodeId === nodeId)
         .map((connection) => nodes.find((node) => node.id === connection.fromNodeId))
-        .filter((node): node is CanvasNodeData => Boolean(node && isCanvasReferenceNode(node, nodes)));
+        .filter((node): node is CanvasNodeData => Boolean(node && isCanvasReferenceNode(node, nodes)))
+        .sort((a, b) => {
+            const diffY = a.position.y - b.position.y;
+            if (Math.abs(diffY) > 8) return diffY;
+            return a.position.x - b.position.x;
+        });
 }
 
 function getConnectedConfigInputNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

@@ -9,6 +9,11 @@ docs/out
 web/.next
 web/node_modules
 web/out
+api/node_modules
+api/dist
+new-api
+server/bin
+server/*.exe
 *.log
 .env*
 !.env.example

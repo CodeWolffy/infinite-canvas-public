@@ -4,6 +4,8 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { listModels, type PublicModel } from "@/services/api/models";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -12,6 +14,7 @@ export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 export type ChannelModel = {
     name: string;
     capability: ModelCapability;
+    displayName?: string;
     script?: string;
 };
 
@@ -72,6 +75,7 @@ export type ChannelCredentialsImportResult = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
+const PLATFORM_CHANNEL_ID = "platform";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
@@ -137,6 +141,7 @@ type ConfigStore = {
     isConfigOpen: boolean;
     configTab: ConfigTabKey;
     shouldPromptContinue: boolean;
+    hydratePlatformModels: () => Promise<void>;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     importChannelCredentials: (input: { baseUrl?: string | null; apiKey?: string | null }) => ChannelCredentialsImportResult;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
@@ -185,6 +190,7 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
     const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
     if (currentModel && modelMatchesCapability(config, currentModel, capability)) return currentModel;
     if (defaultModel && modelMatchesCapability(config, defaultModel, capability)) return defaultModel;
+    if (config.channels.some((channel) => channel.id === PLATFORM_CHANNEL_ID)) return "";
     return fallbackModel;
 }
 
@@ -199,8 +205,33 @@ export function resolveModelScript(config: AiConfig, value: string) {
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
+    if (decodeChannelModel(model)?.channelId === PLATFORM_CHANNEL_ID) return Boolean(findChannelModel(config, model));
     const channel = resolveModelChannel(config, model);
     return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
+}
+
+function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
+    // Platform models are selected by UUID. Their public identifiers may be
+    // shared by variants (for example, standard and 4K models routing to the
+    // same upstream model), while the display name remains user-facing.
+    const platformModels = models.map((model) => ({ name: model.id, displayName: model.displayName, capability: model.capability }));
+    const channel = createModelChannel({ id: PLATFORM_CHANNEL_ID, name: "平台模型", baseUrl: "", apiKey: "", models: platformModels });
+    const imageModel = platformModels.find((model) => model.capability === "image");
+    const textModel = platformModels.find((model) => model.capability === "text");
+    const videoModel = platformModels.find((model) => model.capability === "video");
+    const audioModel = platformModels.find((model) => model.capability === "audio");
+    const imageValue = imageModel ? encodeChannelModel(channel.id, imageModel.name) : "";
+    const textValue = textModel ? encodeChannelModel(channel.id, textModel.name) : "";
+    return {
+        ...config,
+        channels: [channel],
+        models: modelOptionsFromChannels([channel]),
+        model: imageValue || textValue,
+        imageModel: imageValue,
+        textModel: textValue,
+        videoModel: videoModel ? encodeChannelModel(channel.id, videoModel.name) : "",
+        audioModel: audioModel ? encodeChannelModel(channel.id, audioModel.name) : "",
+    };
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -211,6 +242,12 @@ export const useConfigStore = create<ConfigStore>()(
             isConfigOpen: false,
             configTab: "channels",
             shouldPromptContinue: false,
+            hydratePlatformModels: async () => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
+                const models = await listModels();
+                if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+                set((state) => ({ config: platformConfig(state.config, models) }));
+            },
             updateConfig: (key, value) =>
                 set((state) => ({
                     config: {
@@ -237,48 +274,66 @@ export const useConfigStore = create<ConfigStore>()(
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
         }),
         {
-            name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
+            name: `${CONFIG_STORE_KEY}:${useUserStore.getState().user?.id || "anonymous"}`,
+            partialize: (state) => ({
+                config: {
+                    quality: state.config.quality,
+                    size: state.config.size,
+                    background: state.config.background,
+                    count: state.config.count,
+                    canvasImageCount: state.config.canvasImageCount,
+                    reasoningEffort: state.config.reasoningEffort,
+                    systemPrompt: state.config.systemPrompt,
+                    videoSeconds: state.config.videoSeconds,
+                    vquality: state.config.vquality,
+                    videoGenerateAudio: state.config.videoGenerateAudio,
+                    videoWatermark: state.config.videoWatermark,
+                    videoMode: state.config.videoMode,
+                    proxyEnabled: state.config.proxyEnabled,
+                    proxyUrl: state.config.proxyUrl,
+                },
+            }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
-                const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                const channels = normalizeChannels(config);
-                const models = modelOptionsFromChannels(channels);
+                const defaults = platformConfig(defaultConfig, []);
                 return {
                     ...current,
-                    webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
+                    webdav: defaultWebdavSyncConfig,
+                    isConfigOpen: false,
+                    shouldPromptContinue: false,
                     config: {
-                        ...config,
-                        channelMode: "local",
-                        apiFormat: normalizeApiFormat(config.apiFormat),
-                        channels,
-                        models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
-                        audioVoice: config.audioVoice || defaultConfig.audioVoice,
-                        audioFormat: config.audioFormat || defaultConfig.audioFormat,
-                        audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
-                        audioInstructions: config.audioInstructions || "",
-                        reasoningEffort: config.reasoningEffort || "auto",
-                        videoSeconds: config.videoSeconds || "6",
-                        vquality: config.vquality || "720",
-                        videoGenerateAudio: config.videoGenerateAudio || "true",
-                        videoWatermark: config.videoWatermark || "false",
-                        videoMode: config.videoMode === "reference" ? "reference" : "frames",
-                        canvasImageCount: config.canvasImageCount || "3",
-                        proxyEnabled: Boolean(config.proxyEnabled),
-                        proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
+                        ...defaults,
+                        quality: persistedConfig.quality ?? defaults.quality,
+                        size: persistedConfig.size ?? defaults.size,
+                        background: persistedConfig.background ?? defaults.background,
+                        count: persistedConfig.count ?? defaults.count,
+                        canvasImageCount: persistedConfig.canvasImageCount ?? defaults.canvasImageCount,
+                        reasoningEffort: persistedConfig.reasoningEffort ?? defaults.reasoningEffort,
+                        systemPrompt: persistedConfig.systemPrompt ?? defaults.systemPrompt,
+                        videoSeconds: persistedConfig.videoSeconds ?? defaults.videoSeconds,
+                        vquality: persistedConfig.vquality ?? defaults.vquality,
+                        videoGenerateAudio: persistedConfig.videoGenerateAudio ?? defaults.videoGenerateAudio,
+                        videoWatermark: persistedConfig.videoWatermark ?? defaults.videoWatermark,
+                        videoMode: persistedConfig.videoMode ?? defaults.videoMode,
+                        proxyEnabled: persistedConfig.proxyEnabled ?? defaults.proxyEnabled,
+                        proxyUrl: persistedConfig.proxyUrl ?? defaults.proxyUrl,
                     },
                 };
             },
         },
     ),
 );
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    if (!useConfigStore.persist) {
+        useConfigStore.setState({ config: platformConfig(defaultConfig, []), webdav: defaultWebdavSyncConfig, isConfigOpen: false, shouldPromptContinue: false });
+        return;
+    }
+    useConfigStore.persist.setOptions({ name: `${CONFIG_STORE_KEY}:${state.user?.id || "anonymous"}` });
+    void useConfigStore.persist.rehydrate();
+});
 
 export function useEffectiveConfig() {
     const config = useConfigStore((state) => state.config);
@@ -294,8 +349,9 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         if (!name || seen.has(name)) continue;
         seen.add(name);
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
+        const displayName = typeof item === "string" ? undefined : item.displayName?.trim() || undefined;
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, script });
+        result.push({ name, capability, displayName, script });
     }
     return result;
 }
@@ -398,7 +454,9 @@ export function modelOptionLabel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     if (!decoded) return value;
     const channel = config.channels.find((item) => item.id === decoded.channelId);
-    return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+    const model = channel?.models.find((item) => item.name === decoded.model);
+    if (channel?.id === PLATFORM_CHANNEL_ID) return model?.displayName || decoded.model;
+    return channel ? `${model?.displayName || decoded.model}（${channel.name}）` : decoded.model;
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {

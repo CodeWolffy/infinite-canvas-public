@@ -35,6 +35,8 @@ export type CanvasNodeImage = {
     naturalHeight: number;
     bytes: number;
     mimeType: string;
+    generationBatchId?: string;
+    generationTaskId?: string;
 };
 
 export type CanvasNodeText = {
@@ -42,6 +44,8 @@ export type CanvasNodeText = {
     status: CanvasNodeStatus;
     errorDetails?: string;
     content: string;
+    conversationId?: string;
+    textRequestId?: string;
 };
 
 export type CanvasNodeMetadata = {
@@ -55,6 +59,8 @@ export type CanvasNodeMetadata = {
     generationType?: CanvasImageGenerationType;
     model?: string;
     reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
+    conversationId?: string;
+    textRequestId?: string;
     size?: string;
     quality?: string;
     background?: string;
@@ -82,7 +88,8 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     videoTaskId?: string;
-    videoTaskProvider?: "openai" | "gemini";
+    audioTaskId?: string;
+    videoTaskProvider?: "platform";
     groupId?: string;
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
 };

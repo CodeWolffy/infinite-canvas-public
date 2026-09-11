@@ -1,0 +1,235 @@
+---
+title: Internal Creative Platform Plan
+description: Plan for a company platform with accounts, server-side projects, object storage, channel routing, usage analytics, and public HTTPS access
+---
+
+# Internal Creative Platform Plan
+
+This document records the plan for adapting Infinite Canvas into a company AI image creation platform. The canvas experience remains largely unchanged while accounts, generation, text conversations, projects, assets, and history move to server-side storage for cross-device access through a public HTTPS domain.
+
+The confirmed deployment uses 1Panel for TLS and reverse proxying, with source ports closed to the Internet. Codex remains an optional integration on each user's own computer, separate from platform text channels. This replaces the original LAN-only deployment assumption.
+
+This document is the implementation baseline for the adaptation. The current implementation is pending verification; actual availability is tracked in [Pending Tests](/docs/progress/pending-test) and will move to the formal feature documentation after user confirmation.
+
+## Goals
+
+- Preserve the existing canvas, image workbench, prompt, and asset-library experience.
+- Let administrators create accounts so users can sign in and generate without configuring API keys.
+- Synchronize canvas projects, nodes, assets, generation history, and text conversations across devices.
+- Store uploads, references, generated images, and asset files in MinIO.
+- Let administrators maintain OpenAI- and Gemini-compatible channels, published models, upstream model mappings, routing order, and image prices.
+- Support strict primary/backup routing, weighted balancing at the same priority, and controlled failover.
+- Provide usage analytics filtered by user, published model, channel, and date range.
+- Move image and text requests to the server while temporarily hiding video and audio features.
+
+## First-release exclusions
+
+- Self-registration, enterprise SSO, LDAP, or third-party login.
+- Real-time collaboration, shared canvases, comments, or review workflows.
+- Trash, storage quotas, automatic retention cleanup, or migration of existing browser data.
+- UI for administrators to inspect prompts and original images, although ownership and request data will be stored for future support.
+- User quotas, upstream-accurate billing, or CSV exports.
+- Video generation, audio generation, or arbitrary JavaScript channel scripts.
+
+## Architecture
+
+Use a small TypeScript monolith rather than running a fork of New API or Sub2API. Their channel-priority, weight, model-mapping, and failover designs are useful references, but their payment, token distribution, subscription, and commercial gateway systems are outside this project's scope.
+
+```txt
+HTTPS browsers through the 1Panel reverse proxy
+    |
+    v
+React frontend + Fastify API
+    |-- PostgreSQL: users, canvases, assets, jobs, channels, analytics, conversations
+    |-- pg-boss: durable jobs with a global image concurrency limit of 20
+    `-- MinIO: reference images, generated images, and asset files
+              |
+              v
+      OpenAI / Gemini compatible channels
+```
+
+Recommended stack:
+
+- Fastify and TypeScript for the application API and worker.
+- Drizzle with PostgreSQL for business data.
+- pg-boss for durable asynchronous jobs without adding Redis in the first release.
+- MinIO for binary objects.
+- Argon2id for password hashing.
+- Server sessions in HttpOnly cookies, valid for seven days by default.
+- Docker Compose managed through 1Panel.
+
+## Network boundary
+
+- Access the public HTTPS domain whose certificate and reverse proxy are configured in 1Panel.
+- Requests pass through 1Panel -> Web Nginx -> API. Ports 3000/3001 are not publicly open; the API trusts only the two nearest proxy hops.
+- PostgreSQL and the MinIO API should only be reachable by application containers and the administration network.
+- Production sessions require Secure cookies. Optional local Codex connects from the user's browser and does not expose an Agent port on the platform server.
+
+## Accounts and permissions
+
+The first release has administrator and regular-user roles.
+
+- Administrators create users with temporary passwords.
+- First login requires a password change.
+- Administrators can disable accounts and reset passwords.
+- Disabling an account or resetting its password invalidates all existing sessions.
+- Accounts cannot be deleted in the first release, preventing orphaned projects, files, and analytics.
+
+Regular users can select the real names of administrator-published models and keep personal generation preferences. They cannot see channel names, URLs, API keys, routing rules, model mappings, prices, administration analytics, or other users' private data.
+
+## Authoritative server data
+
+PostgreSQL and MinIO become authoritative for:
+
+- Canvas project snapshots, nodes, connections, viewport, and assistant sessions.
+- Private and public assets.
+- Uploaded images, references, generated images, and persistent attachments.
+- Image-generation batches, single-image jobs, channel attempts, and history.
+- Text conversations, messages, request status, and response content.
+- Published models, channels, mappings, prices, and routing configuration.
+- Users, sessions, and analytics ownership.
+
+Browser localforage remains only for theme, transient UI state, and optional caches. A new company deployment will not migrate existing browser data.
+
+Canvas projects are stored as complete JSON snapshots rather than normalized node rows. The first release has no collaboration or conflict UI and uses last-write-wins behavior. Large base64 image data must not be embedded in project JSON.
+
+## MinIO and file lifecycle
+
+- Supported image formats are PNG, JPEG, and WebP.
+- A user upload is limited to 20MB per image.
+- A downloaded upstream result is limited to 50MB.
+- SVG and GIF are excluded from the generation pipeline.
+- A generation succeeds and becomes billable only after its image is downloaded and stored in MinIO.
+- A file is physically removed only when no canvas, asset, generation record, or message references it.
+- There is no trash in the first release.
+
+## Private and public assets
+
+- Images are private by default.
+- Every user can add public assets.
+- Creators can edit or delete their own public assets.
+- Administrators can manage all public assets.
+- Other users may use but not modify another user's public asset.
+- Existing canvas references continue to work after a public asset entry is deleted.
+- The new server-side path covers image and text assets, not video assets.
+
+## Models and channels
+
+Administrators publish user-visible models and bind each model to one or more channels. Every binding can map the public model name to a different upstream model ID.
+
+```txt
+Published model: gpt-image-2
+|-- Channel A: upstream gpt-image-2, priority 100, weight 100
+|-- Channel A2: upstream image-v2, priority 100, weight 20
+|-- Channel B: upstream image-v2, priority 50, weight 100
+`-- Channel C: upstream gpt-image, priority 10, weight 100
+```
+
+A channel supports:
+
+- OpenAI or Gemini protocol.
+- Base URL and encrypted API key.
+- Enabled state.
+- Default timeout, initially eight minutes.
+- Per-channel concurrency limit.
+- Priority and same-priority weight.
+- Public-to-upstream model mapping.
+
+Administrators may fetch compatible upstream model lists, but models are exposed to users only after manual selection and publication.
+
+API keys are encrypted with a deployment master key before being stored in PostgreSQL. The UI can replace a key but never retrieves its complete plaintext value. Secrets and authorization headers must not be logged.
+
+## Routing and failover
+
+1. Select healthy candidates at the highest priority that support the requested public model.
+2. A single candidate at that priority behaves as a strict primary.
+3. Multiple candidates at the same priority are selected by weight.
+4. Move to the next priority only after candidates at the current priority fail.
+5. Record channel, upstream model, timing, response status, and error classification for every attempt.
+
+Failover is allowed for network errors, timeouts, HTTP 429, HTTP 5xx, and HTTP 401/403. Authentication failures should also flag or cool down the channel for administrator review.
+
+Invalid parameters, explicit content-safety rejection, and confirmed prompt/input problems do not trigger failover. Ambiguous failures that may already have incurred upstream cost may trigger at most one additional channel attempt.
+
+## Image jobs
+
+A request for four images using one selected model becomes four independent single-image jobs:
+
+- Every job uses the same selected public model.
+- Each image can independently route, retry, store, and bill.
+- One failed image does not restart successful siblings.
+- Each single-image job consumes one concurrency slot.
+- The global running limit is 20; remaining jobs queue.
+- Per-channel concurrency limits also apply.
+- The default timeout is eight minutes and is configurable per channel.
+- Jobs continue after page refresh, browser close, or logout.
+- Returning users can restore batch progress, errors, and results.
+
+Suggested job states are `queued`, `running`, `succeeded`, `failed`, and `canceled`. Historical model, channel, and price snapshots must not change when administrators edit current configuration.
+
+## Text requests
+
+Canvas assistant requests, prompt reversal, and other text-model operations also go through administrator-managed server channels.
+
+Persist conversations, messages, full request and response content, selected public model, actual channel, upstream model, state, timing, errors, and attachments. Text requests are not priced in the first release and do not affect image cost or image success metrics, but conversations must restore across devices.
+
+## Pricing and analytics
+
+Image prices are configured per published model in CNY per successfully stored image, displayed to two decimal places.
+
+- Charge only after successful MinIO storage.
+- Charge by actual successful image count rather than batch or click count.
+- Ignore size, quality, and aspect-ratio price differences in the first release.
+- Store a price snapshot on each successful generated image.
+- Failed jobs and attempts cost zero but remain visible in analytics.
+- Prices are estimates and are not guaranteed to match upstream invoices.
+
+Administration analytics support today, the last 7 days, the last 30 days, and a custom date range, with user, public-model, and channel filters. Show request count, successful-image count, estimated cost, latency, user-task success rate, and channel-attempt success rate. CSV export is excluded.
+
+## Suggested tables
+
+- `users`, `sessions`, and `user_preferences`.
+- `models`, `channels`, and `model_channels`.
+- `canvas_projects`, `assets`, and `media_objects`.
+- `generation_batches`, `generation_tasks`, `generation_attempts`, and `generated_images`.
+- `conversations`, `messages`, and `text_requests`.
+
+The exact fields should be finalized against the current frontend types during implementation.
+
+## Administration UI
+
+Add a protected `/admin` area for:
+
+- Creating, disabling, and resetting users.
+- Publishing models and configuring CNY-per-image prices.
+- Creating, testing, enabling, and disabling channels.
+- Fetching upstream model lists.
+- Editing model mappings, priority, weight, timeout, and channel concurrency.
+- Reviewing channel health and recent errors.
+- Filtering usage analytics by date, user, model, and channel.
+- Managing all public assets.
+
+Remove or hide regular-user channel configuration. Administrator channel settings should not be mixed with personal generation preferences.
+
+## Implementation stages
+
+1. Add the Fastify service, PostgreSQL, Drizzle, authentication, first-login password changes, route guards, and administrator authorization.
+2. Add MinIO and move canvas snapshots, private assets, public assets, and image files to server APIs.
+3. Move OpenAI/Gemini image calls to the server; add pg-boss jobs, concurrency, routing, failover, MinIO ingestion, and price snapshots.
+4. Move text calls and conversations to the server and restore them across devices.
+5. Build user, model, channel, public-asset, and analytics administration pages.
+6. Update Docker Compose and 1Panel deployment, configure coordinated PostgreSQL/MinIO backups, and hide video, audio, WebDAV, regular-user channel settings, and browser-side custom scripts.
+
+## MVP acceptance criteria
+
+- Administrators can create, disable, and reset accounts; first login requires a password change.
+- Users generate with published image and text models without configuring API keys.
+- Canvas projects, assets, generation history, and conversations restore on another device using the HTTPS domain.
+- Multi-image requests run as independent durable jobs with controlled routing and billing.
+- Jobs continue when the browser closes and results are visible after login.
+- Uploaded and generated images are stored in MinIO.
+- Published models support strict primary/backup routing and same-priority weighting.
+- Administrators can filter calls, images, estimated cost, latency, and both success-rate definitions.
+- Regular users cannot access secrets, routing settings, prices, administration analytics, or another user's private data.
+- Public assets follow creator/administrator permissions and deletion does not break existing canvas references.
+- Only the 1Panel HTTPS entry point is publicly accessible; source ports, PostgreSQL, and MinIO remain private.

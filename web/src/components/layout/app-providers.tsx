@@ -13,6 +13,7 @@ import { ClientRootInit } from "@/components/layout/client-root-init";
 import type { AppLocale } from "@/i18n";
 import { getAntThemeConfig } from "@/lib/app-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -22,6 +23,12 @@ const queryClient = new QueryClient({
             refetchOnWindowFocus: false,
         },
     },
+});
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    void queryClient.cancelQueries();
+    queryClient.clear();
 });
 
 export function AppProviders({ children }: { children: ReactNode }) {

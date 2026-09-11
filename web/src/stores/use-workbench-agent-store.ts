@@ -1,14 +1,16 @@
 import { create } from "zustand";
+import { useUserStore } from "@/stores/use-user-store";
 
 // The Agent panel dispatches commands through this store to set workbench prompts and optionally start generation.
-// The panel writes model, quality, size, count, and other options to use-config-store, which workbench pages read directly.
-// Prompt and run are sent here; pages identify new commands by nonce and call clear after consuming them.
+// Explicit generation settings travel with the command so page preference hydration cannot replace them.
+// Pages identify new commands by nonce and call clear after consuming them.
 
 export type WorkbenchCommand = {
     nonce: number;
     taskId?: string;
     prompt?: string;
     run: boolean;
+    config?: { model?: string; quality?: string; size?: string; count?: string };
 };
 
 export type WorkbenchGenerationTask = {
@@ -57,6 +59,10 @@ export const useWorkbenchAgentStore = create<WorkbenchAgentStore>((set) => ({
     clearImageCommand: () => set({ imageCommand: null }),
     clearVideoCommand: () => set({ videoCommand: null }),
 }));
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion !== previous.sessionVersion) useWorkbenchAgentStore.setState({ imageCommand: null, videoCommand: null, tasks: [] });
+});
 
 function createTask(kind: "image" | "video", commandNonce: number, prompt?: string): WorkbenchGenerationTask {
     const now = new Date().toISOString();

@@ -12,8 +12,8 @@ export function CanvasDeleteProjectsDialog() {
     const removeSelectedIds = useCanvasUiStore((state) => state.removeSelectedProjectIds);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
-    const confirm = () => {
-        deleteProjects(ids);
+    const confirm = async () => {
+        await deleteProjects(ids);
         cleanupImages();
         removeSelectedIds(ids);
         setDeleteIds([]);
@@ -28,7 +28,7 @@ export function CanvasDeleteProjectsDialog() {
             footer={
                 <>
                     <Button onClick={() => setDeleteIds([])}>{t("common.cancel")}</Button>
-                    <Button danger type="primary" onClick={confirm}>
+                    <Button danger type="primary" onClick={() => void confirm()}>
                         {t("common.delete")}
                     </Button>
                 </>

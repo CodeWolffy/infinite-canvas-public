@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import i18n from "@/i18n";
+import { useUserStore } from "@/stores/use-user-store";
 
 import type { CanvasAgentOp, CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -42,6 +43,21 @@ export type AgentPanelTab = "chat" | "setup" | "history" | "skills" | "log";
 const CONNECT_TIMEOUT_MS = 6000;
 let agentSource: EventSource | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function agentSettingKey(name: string) {
+    return `${name}:${useUserStore.getState().user?.id || "anonymous"}`;
+}
+
+function savedAgentSettings(): Pick<AgentStore, "url" | "token" | "permissionMode" | "model" | "reasoningEffort"> {
+    const read = (name: string) => typeof window === "undefined" ? "" : localStorage.getItem(agentSettingKey(name)) || "";
+    return {
+        url: read("canvas-agent-url") || "http://127.0.0.1:17371",
+        token: read("canvas-agent-token"),
+        permissionMode: (read("canvas-agent-permission-mode") as AgentPermissionMode) || "request",
+        model: read("canvas-agent-model"),
+        reasoningEffort: (read("canvas-agent-reasoning-effort") as AgentReasoningEffort) || "",
+    };
+}
 
 type AgentStore = {
     width: number;
@@ -101,8 +117,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     panelMounted: true,
     panelClosing: false,
     canvasContext: null,
-    url: typeof window === "undefined" ? "http://127.0.0.1:17371" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17371",
-    token: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-token") || "",
+    ...savedAgentSettings(),
     connected: false,
     enabled: false,
     silentConnect: false,
@@ -122,10 +137,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     loadingThreads: false,
     activeTab: "setup",
     confirmTools: false,
-    permissionMode: typeof window === "undefined" ? "request" : (localStorage.getItem("canvas-agent-permission-mode") as AgentPermissionMode) || "request",
     models: [],
-    model: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-model") || "",
-    reasoningEffort: typeof window === "undefined" ? "" : (localStorage.getItem("canvas-agent-reasoning-effort") as AgentReasoningEffort) || "",
     activity: i18n.t("agent.state.ready"),
     conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} },
     bootstrapStatus: null,
@@ -155,8 +167,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         } catch {
             return set({ connectError: silent ? "" : i18n.t("agent.state.invalidUrl") });
         }
-        localStorage.setItem("canvas-agent-url", endpoint);
-        localStorage.setItem("canvas-agent-token", token);
+        localStorage.setItem(agentSettingKey("canvas-agent-url"), endpoint);
+        localStorage.setItem(agentSettingKey("canvas-agent-token"), token);
         // Only set enabled here; LocalAgentPanel's effect owns SSE initialization.
         set({ url: endpoint, token, enabled: true, silentConnect: silent, fragmentBootstrap: false, activity: i18n.t("agent.status.connecting"), connectError: "" });
     },
@@ -171,3 +183,13 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     addEventLog: (item) => set((state) => ({ eventLogs: [...state.eventLogs.slice(-160), item] })),
     clearEventLogs: () => set({ eventLogs: [] }),
 }));
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    const agent = useAgentStore.getState();
+    agent.disconnectAgent();
+    for (const attachment of agent.attachments) {
+        if (attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
+    }
+    useAgentStore.setState({ ...useAgentStore.getInitialState(), ...savedAgentSettings(), width: agent.width, panelOpen: false });
+});

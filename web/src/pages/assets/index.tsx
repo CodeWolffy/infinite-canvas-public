@@ -9,11 +9,12 @@ import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
-import { useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
+import { useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
 type AssetFormValues = {
     kind: AssetKind;
+    scope: AssetScope;
     title: string;
     coverUrl: string;
     tags: string[];
@@ -24,7 +25,7 @@ type AssetFormValues = {
 
 type ImageDraft = ImageAsset["data"] | null;
 
-const kindOptions = ["all", "text", "image", "video"] as const;
+const kindOptions = ["all", "text", "image", "video", "audio"] as const;
 
 export default function AssetsPage() {
     const { message } = App.useApp();
@@ -52,7 +53,7 @@ export default function AssetsPage() {
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
     const content = Form.useWatch("content", form) || "";
-    const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video"), [assets]);
+    const validAssets = assets;
 
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
@@ -77,7 +78,7 @@ export default function AssetsPage() {
         setEditingAsset(null);
         setImageDraft(null);
         setFormKind("text");
-        form.setFieldsValue({ kind: "text", title: "", coverUrl: "", tags: [], source: t("assets.manual"), note: "", content: "" });
+        form.setFieldsValue({ kind: "text", scope: "private", title: "", coverUrl: "", tags: [], source: t("assets.manual"), note: "", content: "" });
         setIsAssetOpen(true);
     };
 
@@ -87,6 +88,7 @@ export default function AssetsPage() {
         setImageDraft(asset.kind === "image" ? asset.data : null);
         form.setFieldsValue({
             kind: asset.kind,
+            scope: asset.scope || "private",
             title: asset.title,
             coverUrl: asset.coverUrl,
             tags: asset.tags || [],
@@ -101,6 +103,7 @@ export default function AssetsPage() {
         const values = await form.validateFields();
         const base = {
             title: values.title.trim(),
+            scope: values.scope,
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
             tags: values.tags || [],
             source: values.source?.trim(),
@@ -145,7 +148,7 @@ export default function AssetsPage() {
     };
 
     const downloadImage = async (asset: Asset) => {
-        if (asset.kind !== "image" && asset.kind !== "video") return;
+        if (asset.kind === "text") return;
         try {
             const blob = await readAssetMediaBlob(asset);
             if (!blob) {
@@ -171,7 +174,7 @@ export default function AssetsPage() {
         if (!file) return;
         try {
             const importedAssets = await readAssetPackage(file);
-            importedAssets.forEach((asset) => {
+            importedAssets.filter((asset) => asset.kind === "text" || asset.kind === "image").forEach((asset) => {
                 const payload = { ...asset } as Record<string, unknown>;
                 delete payload.id;
                 delete payload.createdAt;
@@ -295,7 +298,7 @@ export default function AssetsPage() {
 
             <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => setIsAssetOpen(false)} onOk={() => void saveAsset()} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
                 <div className="grid gap-6 pt-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-                    <Form form={form} layout="vertical" requiredMark={false} initialValues={{ kind: "text", tags: [] }}>
+                    <Form form={form} layout="vertical" requiredMark={false} initialValues={{ kind: "text", scope: "private", tags: [] }}>
                         <Form.Item name="kind" label={t("assets.type")}>
                             <Select
                                 options={[
@@ -304,6 +307,9 @@ export default function AssetsPage() {
                                 ]}
                                 onChange={(value) => setFormKind(value)}
                             />
+                        </Form.Item>
+                        <Form.Item name="scope" label="可见范围">
+                            <Select options={[{ label: "私人素材", value: "private" }, { label: "公共素材", value: "public" }]} />
                         </Form.Item>
                         <Form.Item name="title" label={t("assets.fields.title")} rules={[{ required: true, message: t("assets.fields.titleRequired") }]}>
                             <Input size="large" placeholder={t("assets.fields.titlePlaceholder")} />
@@ -457,7 +463,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                 <Button size="small" onClick={onOpen}>
                     {t("common.view")}
                 </Button>
-                {asset.kind !== "video" ? (
+                {asset.kind !== "video" && asset.kind !== "audio" && asset.editable !== false ? (
                     <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
                         {t("common.edit")}
                     </Button>
@@ -467,14 +473,12 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                         {t("common.copy")}
                     </Button>
                 ) : null}
-                {asset.kind === "image" || asset.kind === "video" ? (
+                {asset.kind !== "text" ? (
                     <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(asset)}>
                         {t("common.download")}
                     </Button>
                 ) : null}
-                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>
-                    {t("common.delete")}
-                </Button>
+                {asset.editable !== false ? <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>{t("common.delete")}</Button> : null}
             </div>
         </Card>
     );
@@ -509,7 +513,7 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                         </Typography.Text>
                         {asset.kind === "text" ? (
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
-                        ) : asset.kind === "video" ? (
+                        ) : asset.kind === "audio" ? <audio src={asset.data.url} controls className="mt-3 w-full" /> : asset.kind === "video" ? (
                             <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
                         ) : (
                             <Typography.Text className="mt-2 block">
@@ -529,9 +533,9 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                                 {t("assets.copyText")}
                             </Button>
                         ) : null}
-                        {asset.kind === "image" || asset.kind === "video" ? (
+                        {asset.kind !== "text" ? (
                             <Button type="primary" icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
-                                {asset.kind === "video" ? t("assets.downloadVideo") : t("assets.downloadImage")}
+                                {asset.kind === "audio" ? "下载音频" : asset.kind === "video" ? t("assets.downloadVideo") : t("assets.downloadImage")}
                             </Button>
                         ) : null}
                     </Space>
@@ -541,13 +545,13 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
     );
 }
 
-async function readAssetMediaBlob(asset: Extract<Asset, { kind: "image" | "video" }>) {
+async function readAssetMediaBlob(asset: Exclude<Asset, { kind: "text" }>) {
     const storageKey = asset.data.storageKey;
     if (storageKey) {
         const stored = asset.kind === "image" ? await getImageBlob(storageKey) : await getMediaBlob(storageKey);
         if (stored) return stored;
     }
-    const url = asset.kind === "video" ? asset.data.url : asset.data.dataUrl || asset.coverUrl;
+    const url = asset.kind !== "image" ? asset.data.url : asset.data.dataUrl || asset.coverUrl;
     if (!url) return null;
     const response = await fetch(url);
     return response.ok ? response.blob() : null;
@@ -555,6 +559,7 @@ async function readAssetMediaBlob(asset: Extract<Asset, { kind: "image" | "video
 
 function assetSummary(asset: Asset) {
     if (asset.kind === "text") return asset.data.content;
+    if (asset.kind === "audio") return `${formatBytes(asset.data.bytes)} · ${asset.data.mimeType}`;
     return `${asset.data.width}x${asset.data.height} · ${formatBytes(asset.data.bytes)} · ${asset.data.mimeType}`;
 }
 

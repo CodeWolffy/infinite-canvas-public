@@ -1,62 +1,50 @@
 ---
-title: Docker Deployment
-description: Deploy Infinite Canvas with Docker Compose
+title: Docker 部署
+description: 使用 Go、PostgreSQL、Redis 和 MinIO 部署公益创作平台
 ---
 
-# Docker Deployment
+# Docker 部署
 
-## Use the published image
+本页适用于当前 Go 公益分支。后端入口为 `server/Dockerfile`，原 `api/` 不参与部署。生产镜像构建、静态资源路径与目标环境吞吐量仍需验收。
 
-```bash
-git clone git@github.com:basketikun/infinite-canvas.git
-cd infinite-canvas
-docker compose up -d
+## 配置与启动
+
+Copy the repository `.env.example` to the production `.env`, replace every `change-me` password and encryption key, and set the real HTTPS `PUBLIC_URL` and `CORS_ORIGIN`. For local runs, use a separate `.env.local` with `--env-file .env.local`; do not use the company project's `.env` or database configuration for this platform.
+
+Production updates use the renamed directory and the following three commands:
+
+```sh
+cd /opt/infinite-canvas-public
+git pull origin main
+docker compose up -d --build app api
 ```
 
-Open `http://localhost:3000`.
+Before the first deployment, save the production configuration as `/opt/infinite-canvas-public/.env` and keep it out of Git.
 
-## Build locally
+For local HTTP, use the separate configuration; it binds `127.0.0.1:3301` by default, while port `3300` remains reserved for the company project:
 
-```bash
-docker compose -f docker-compose.local.yml up -d --build
+```sh
+docker compose --env-file .env.local -f docker-compose.local.yml up -d --build
 ```
 
-## Documentation image
+The local entry is `http://localhost:3301`. Set `PUBLIC_WEB_PORT` in `.env.local` to choose another host port; the container still listens on 3000. After the first login, change the bootstrap administrator password, then create upstream channels, publish models, configure pricing, check-in, and invitations. Real payments require merchant configuration and public HTTPS callback integration.
 
-The documentation in `docs/` is a separate Next.js standalone application with server capabilities.
+## 服务与网络
 
-```bash
-cd docs
-docker compose up -d
-```
+- `app`: Nginx serves the static frontend; production binds host `127.0.0.1:3000`, while local Compose defaults to `127.0.0.1:3301`.
+- `api`: Go service on container port 3001 for authentication, tasks, and billing.
+- `postgres`: authoritative business database.
+- `redis`: AOF-backed cross-instance rate limiting and channel slots.
+- `minio`: private media storage served through the authenticated API.
 
-To build it from the current source:
+公网按 `1Panel -> Web Nginx -> Go API` 配置，生产保持 `TRUST_PROXY=true`、`COOKIE_SECURE=true`。不要直接公开 API、数据库、Redis 或 MinIO 端口。
 
-```bash
-cd docs
-docker compose -f docker-compose.local.yml up -d --build
-```
+The Compose project is named `infinite-canvas-public`, so containers appear as `infinite-canvas-public-app-1`, `infinite-canvas-public-api-1`, and so on. Its database, Redis, MinIO volumes, and network are separate from the company project `infinite-canvas`. Avoid adding fixed `container_name` values, so API replicas can be added without name conflicts. Worker concurrency defaults to 20; actual replica counts and channel quotas should be validated with load tests and provider limits.
 
-The main application container only runs Next.js. Canvases, My Assets, generation history, and API keys are stored in the browser by default, while prompt repositories are fetched directly by the frontend. No persistent data volume is required for this data.
+## 数据与支付
 
-## Optional analytics
+Go 服务只初始化独立空库；发现公司版旧表或未知版本时拒绝覆盖。数据库、对象数据、Redis AOF 以及 `CHANNEL_ENCRYPTION_KEY` 都需要纳入备份，并实际演练恢复。
 
-No analytics are enabled by default. A deployment can enable GA4, Baidu Analytics, or both at runtime:
+支付支持易支付经典接口、支付宝当面付、微信 Native API v3。浏览器回跳不会入账；只有服务端验签和查单确认才能更新余额。经典易支付缺少统一远端关单协议，过期后关闭本站入口，迟到的真实付款仍按幂等规则入账。
 
-| Variable | Description |
-| --- | --- |
-| `ANALYTICS_GA4_ID` | Google Analytics 4 measurement ID (`G-XXXX`) |
-| `ANALYTICS_BAIDU_ID` | Baidu site ID, the hash after `hm.js?` |
-
-```yaml
-services:
-  app:
-    image: ghcr.io/basketikun/infinite-canvas:latest
-    ports:
-      - "3000:3000"
-    environment:
-      ANALYTICS_GA4_ID: G-XXXXXXXXXX
-      ANALYTICS_BAIDU_ID: e8263761cc5c32f5f7a855b8203b965a
-```
-
-SPA route changes automatically report page views to enabled providers. Only configure analytics IDs on sites you control, and do not commit them to the repository.
+完整说明见仓库 `docs/public-platform.md`。本次实现的逐项验收见[待测试清单](/docs/progress/pending-test)。

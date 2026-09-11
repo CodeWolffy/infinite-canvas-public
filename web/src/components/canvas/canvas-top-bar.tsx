@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, TriangleAlert, Undo2, Upload } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
 
@@ -25,7 +26,7 @@ export function CanvasTopBar({
     onDeleteProject,
     onExportProject,
     onImportImage,
-    onOpenPlugins,
+    onOpenHistory,
     onUndo,
     onRedo,
     agentOpen,
@@ -47,7 +48,7 @@ export function CanvasTopBar({
     onDeleteProject: () => void;
     onExportProject: () => void;
     onImportImage: () => void;
-    onOpenPlugins: () => void;
+    onOpenHistory?: () => void;
     onUndo: () => void;
     onRedo: () => void;
     agentOpen: boolean;
@@ -99,6 +100,7 @@ export function CanvasTopBar({
                                 { type: "divider" },
                                 { key: "import", icon: <Upload className="size-4" />, label: t("canvas.importAsset"), onClick: onImportImage },
                                 { key: "export", icon: <Download className="size-4" />, label: t("canvas.exportCurrent"), onClick: onExportProject },
+                                { key: "history", icon: <History className="size-4" />, label: t("canvas.versionHistory", "版本历史"), onClick: onOpenHistory },
                                 { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text={t("canvas.undo")} shortcut="⌘ Z" />, onClick: onUndo },
                                 { key: "redo", disabled: !canRedo, icon: <Redo2 className="size-4" />, label: <MenuLabel text={t("canvas.redo")} shortcut="⌘ ⇧ Z / ⌘ Y" />, onClick: onRedo },
@@ -136,20 +138,13 @@ export function CanvasTopBar({
                         )}
                     </div>
                     <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
+                    <CanvasSaveStatus />
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1.5">
-                    <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} onOpenPlugins={onOpenPlugins} />
+                    <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} />
                     <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                    <Button
-                        type="text"
-                        className="!h-10 !rounded-xl !px-3 !font-medium"
-                        style={{ background: agentOpen ? theme.toolbar.activeBg : theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                        icon={<Bot className="size-4" />}
-                        onClick={onToggleAgent}
-                    >
-                        Agent
-                    </Button>
+                    <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ background: agentOpen ? theme.toolbar.activeBg : "transparent", color: theme.node.text }} icon={<Bot className="size-4" />} onClick={onToggleAgent}>Agent</Button>
                 </div>
             </div>
             <Modal title={t("canvas.shortcuts")} open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
@@ -190,11 +185,26 @@ function CompactAgentStatus({ status, onClick }: { status: { connected: boolean;
     const { t } = useTranslation();
     const label = status.connected ? t("canvas.agentConnected") : status.enabled ? t("canvas.agentConnecting", { activity: status.activity || t("canvas.connecting") }) : t("canvas.agentDisconnected");
     const dotColor = status.connected ? "#22c55e" : status.enabled ? "#f59e0b" : theme.node.muted;
+    return <button type="button" className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75" style={{ color: status.connected ? "#16a34a" : status.enabled ? "#d97706" : theme.node.muted }} onClick={onClick} title={t("canvas.openAgent")}><span className="size-2 rounded-full" style={{ background: dotColor }} /><span className="max-w-[140px] truncate">{label}</span></button>;
+}
+
+function CanvasSaveStatus() {
+    const { t } = useTranslation();
+    const saveError = useCanvasStore((state) => state.saveError);
+    const retrySave = useCanvasStore((state) => state.retrySave);
+    if (!saveError) return null;
     return (
-        <button type="button" className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75" style={{ color: status.connected ? "#16a34a" : status.enabled ? "#d97706" : theme.node.muted }} onClick={onClick} title={t("canvas.openAgent")}>
-            <span className="size-2 rounded-full" style={{ background: dotColor }} />
-            <span className="max-w-[140px] truncate">{label}</span>
-        </button>
+        <Tooltip title={t("canvas.save.retryTip", { message: saveError.message })}>
+            <button
+                type="button"
+                className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75"
+                style={{ color: "#dc2626" }}
+                onClick={() => void retrySave(saveError.projectId)}
+            >
+                <TriangleAlert className="size-3.5" />
+                <span className="max-w-[160px] truncate">{saveError.permanent ? t("canvas.save.blocked") : t("canvas.save.retrying")}</span>
+            </button>
+        </Tooltip>
     );
 }
 

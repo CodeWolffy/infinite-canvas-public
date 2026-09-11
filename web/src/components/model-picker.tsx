@@ -56,7 +56,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 onPointerDown={(event) => event.stopPropagation()}
                 title={current ? modelOptionLabel(config, current) : pickerPlaceholder}
             >
-                <ModelIcon model={current} />
+                <ModelIcon config={config} model={current} />
                 <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : pickerPlaceholder}</span>
             </SelectTrigger>
             <SelectContent
@@ -94,21 +94,21 @@ function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
-            <ModelIcon model={model} />
+            <ModelIcon config={config} model={model} />
             <span className="truncate">{modelOptionLabel(config, model)}</span>
         </span>
     );
 }
 
-function ModelIcon({ model }: { model: string }) {
-    const icon = resolveModelIcon(modelOptionName(model));
+function ModelIcon({ config, model }: { config: AiConfig; model: string }) {
+    const icon = resolveModelIcon(`${modelOptionName(model)} ${modelOptionLabel(config, model)}`);
     return icon ? <img src={icon} alt="" className="size-4 shrink-0 dark:invert" /> : <Cpu className="size-4 shrink-0 opacity-70" />;
 }
 
 function resolveModelIcon(model: string) {
     const name = model.toLowerCase();
     if (name.includes("claude") || name.includes("anthropic")) return "/icons/claude.svg";
-    if (name.includes("gemini") || name.includes("google")) return "/icons/gemini.svg";
+    if (name.includes("gemini") || name.includes("google") || name.includes("banana") || name.includes("imagen")) return "/icons/gemini.svg";
     if (name.includes("gpt") || name.includes("openai")) return "/icons/openai.svg";
     if (name.includes("grok") || name.includes("grok")) return "/icons/grok.svg";
     if (name.includes("deepseek") || name.includes("deepseek")) return "/icons/deepseek.svg";

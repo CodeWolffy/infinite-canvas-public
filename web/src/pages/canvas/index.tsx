@@ -5,13 +5,15 @@ import { Download, FileUp, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { readZip } from "@/lib/zip";
-import { setMediaBlob } from "@/services/file-storage";
-import { setImageBlob } from "@/services/image-storage";
+import { uploadMediaFile } from "@/services/file-storage";
+import { uploadImage } from "@/services/image-storage";
+import { mediaUrl } from "@/services/api/media";
 import { CanvasDeleteProjectsDialog } from "@/components/canvas/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
 import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { hasAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 
@@ -26,6 +28,7 @@ export default function CanvasPage() {
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
+    const loadProjects = useCanvasStore((state) => state.loadProjects);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
@@ -36,27 +39,49 @@ export default function CanvasPage() {
         const agentHash = hasAgentUrlBootstrap(window.location.hash) ? window.location.hash : "";
         navigate(`/canvas/${id}${agentQuery}${agentHash}`, { replace: Boolean(agentHash) });
     };
-    const createAndEnter = () => enterProject(createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+    const createAndEnter = async () => enterProject(await createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+    // 列表只有元数据，导出前先把选中项目的完整快照拉回来。
+    const exportSelected = async () => exportCanvasProjects(await loadProjects(selectedIds), `${t("canvas.title")}-${selectedIds.length}`);
     const importCanvas = async (file?: File) => {
         if (!file) return;
+        const sessionVersion = useUserStore.getState().sessionVersion;
         try {
             const zip = await readZip(file);
             const projectFile = zip.get("projects.json");
             if (!projectFile) throw new Error("missing projects.json");
             const data = JSON.parse(await projectFile.text()) as CanvasExportFile;
+            assertCurrentSession(sessionVersion);
+            const storageKeys = new Map<string, string>();
             await Promise.all(
                 data.projects.flatMap((project) =>
                     project.files.map(async (item) => {
                         const blob = zip.get(item.path);
                         if (!blob) return;
                         const typedBlob = blob.type ? blob : blob.slice(0, blob.size, item.mimeType);
-                        await (item.storageKey.startsWith("image:") ? setImageBlob(item.storageKey, typedBlob) : setMediaBlob(item.storageKey, typedBlob));
+                        if (typedBlob.type.startsWith("image/")) {
+                            const image = await uploadImage(typedBlob);
+                            storageKeys.set(item.storageKey, image.storageKey);
+                            storageKeys.set(mediaUrl(item.storageKey), image.url);
+                        } else {
+                            const media = await uploadMediaFile(typedBlob);
+                            storageKeys.set(item.storageKey, media.storageKey);
+                            storageKeys.set(mediaUrl(item.storageKey), media.url);
+                        }
                     }),
                 ),
             );
-            data.projects.forEach((item) => importProject(item.project));
+            assertCurrentSession(sessionVersion);
+            const replaceStorageKeys = (value: unknown): unknown => {
+                if (typeof value === "string") return storageKeys.get(value) || value;
+                if (Array.isArray(value)) return value.map(replaceStorageKeys);
+                if (!value || typeof value !== "object") return value;
+                return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceStorageKeys(item)]));
+            };
+            await Promise.all(data.projects.map((item) => importProject(replaceStorageKeys(item.project) as typeof item.project)));
+            assertCurrentSession(sessionVersion);
             message.success(t("canvas.imported", { count: data.projects.length }));
         } catch {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(t("canvas.importFailed"));
         } finally {
             if (inputRef.current) inputRef.current.value = "";
@@ -66,7 +91,7 @@ export default function CanvasPage() {
     useEffect(() => {
         if (!hydrated || autoOpenRef.current || (mode !== "new" && mode !== "recent")) return;
         autoOpenRef.current = true;
-        enterProject(mode === "new" ? createProject(t("canvas.defaultTitle", { count: projects.length + 1 })) : projects[0]?.id || createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+        void (async () => enterProject(mode === "new" ? await createProject(t("canvas.defaultTitle", { count: projects.length + 1 })) : projects[0]?.id || (await createProject(t("canvas.defaultTitle", { count: projects.length + 1 })))))();
     }, [createProject, hydrated, mode, projects, t]);
 
     if (hydrated && (mode === "new" || mode === "recent")) return <main className="flex h-full items-center justify-center bg-background text-sm text-stone-500">{t("canvas.opening")}</main>;
@@ -82,7 +107,7 @@ export default function CanvasPage() {
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${t("canvas.title")}-${selectedIds.length}`)}>
+                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportSelected()}>
                                     {t("canvas.exportSelected")}
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
@@ -98,7 +123,7 @@ export default function CanvasPage() {
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             {t("canvas.import")}
                         </Button>
-                        <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
+                        <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={() => void createAndEnter()}>
                             {t("canvas.create")}
                         </Button>
                     </div>
@@ -116,7 +141,7 @@ export default function CanvasPage() {
                     <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-stone-200 text-center dark:border-stone-800">
                         <h2 className="text-xl font-medium">{t("canvas.empty")}</h2>
                         <p className="mt-3 text-sm text-stone-500">{t("canvas.emptyDescription")}</p>
-                        <Button type="primary" className="mt-6" icon={<Plus className="size-4" />} onClick={createAndEnter}>
+                        <Button type="primary" className="mt-6" icon={<Plus className="size-4" />} onClick={() => void createAndEnter()}>
                             {t("canvas.create")}
                         </Button>
                     </section>
