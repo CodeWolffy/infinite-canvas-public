@@ -321,7 +321,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT b.*,c.name AS channel_name,c.status AS channel_status FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 ORDER BY b.priority DESC, b.created_at ASC", id)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT b.*,c.name AS channel_name,c.status AS channel_status FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 AND c.deleted_at IS NULL ORDER BY b.priority DESC, b.created_at ASC", id)
 		return gin.H{"bindings": items}, err
 	}))
 	admin.PUT("/models/:id/channels/:channelId", respond(func(c *gin.Context) (any, error) {
@@ -464,7 +464,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 
 func (a *App) channelRoutes(admin *gin.RouterGroup) {
 	admin.GET("/channels", respond(func(c *gin.Context) (any, error) {
-		items, err := rows(c.Request.Context(), a.DB, `SELECT c.*,row_to_json(latest) AS last_attempt FROM channels c LEFT JOIN LATERAL (SELECT status,duration_ms AS "durationMs",http_status AS "httpStatus",error_category AS "errorCategory",error_message AS "errorMessage",upstream_model AS "upstreamModel",started_at AS "startedAt",finished_at AS "finishedAt" FROM request_logs WHERE channel_id=c.id ORDER BY started_at DESC,id DESC LIMIT 1) latest ON true ORDER BY c.created_at DESC`)
+		items, err := rows(c.Request.Context(), a.DB, `SELECT c.*,row_to_json(latest) AS last_attempt FROM channels c LEFT JOIN LATERAL (SELECT status,duration_ms AS "durationMs",http_status AS "httpStatus",error_category AS "errorCategory",error_message AS "errorMessage",upstream_model AS "upstreamModel",started_at AS "startedAt",finished_at AS "finishedAt" FROM request_logs WHERE channel_id=c.id ORDER BY started_at DESC,id DESC LIMIT 1) latest ON true WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`)
 		for _, row := range items {
 			publicChannel(row)
 		}
@@ -503,7 +503,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			var sealed, hint string
 			if !create {
-				old, err := one(ctx, tx, "SELECT * FROM channels WHERE id=$1 FOR UPDATE", id)
+				old, err := one(ctx, tx, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
 				if err != nil {
 					return err
 				}
@@ -545,8 +545,14 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 			if _, err := tx.Exec(ctx, "DELETE FROM model_channels WHERE channel_id=$1", id); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, "DELETE FROM channels WHERE id=$1", id)
-			return err
+			result, err := tx.Exec(ctx, "UPDATE channels SET status='disabled',deleted_at=now(),updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id)
+			if err != nil {
+				return err
+			}
+			if result.RowsAffected() == 0 {
+				return problem(404, "not_found", "渠道不存在")
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "channel.delete", id, nil)
 		})
 		return nil, err
 	}))
@@ -555,7 +561,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		row, err := one(c.Request.Context(), a.DB, "SELECT * FROM channels WHERE id=$1", id)
+		row, err := one(c.Request.Context(), a.DB, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL", id)
 		if err != nil {
 			return nil, err
 		}
@@ -703,7 +709,15 @@ func (a *App) adminStats(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	channels, err := rows(ctx, a.DB, "SELECT ch.id,ch.name,count(*)::int AS attempt_count,count(*) FILTER(WHERE l.status='succeeded')::int AS succeeded_attempt_count,coalesce(avg(l.duration_ms),0)::float8 AS average_duration_ms,coalesce(percentile_cont(.5) WITHIN GROUP(ORDER BY l.duration_ms),0) AS p50_duration_ms,coalesce(percentile_cont(.95) WITHIN GROUP(ORDER BY l.duration_ms),0) AS p95_duration_ms FROM request_logs l JOIN channels ch ON ch.id=l.channel_id WHERE "+where+" GROUP BY ch.id ORDER BY attempt_count DESC", args...)
-	return gin.H{"range": gin.H{"from": c.Query("from"), "to": c.Query("to")}, "filters": gin.H{}, "storage": storage, "queue": queue, "textTotals": textTotals, "totals": totals, "byUsers": users, "byModels": models, "byChannels": channels}, err
+	if err != nil {
+		return nil, err
+	}
+	byDates, err := rows(ctx, a.DB, "SELECT to_char(date_trunc('day', l.started_at), 'YYYY-MM-DD') AS date, count(DISTINCT l.task_id)::int AS request_count, count(DISTINCT l.task_id) FILTER(WHERE l.status='succeeded')::int AS succeeded_count, count(DISTINCT l.task_id) FILTER(WHERE l.status='failed')::int AS failed_count, count(*) FILTER(WHERE l.type='image' AND l.status='succeeded')::int AS success_image_count, coalesce(sum(l.billed_amount),0)::text AS estimated_cost FROM request_logs l WHERE "+where+" GROUP BY 1 ORDER BY 1 ASC", args...)
+	if err != nil {
+		return nil, err
+	}
+	byCapabilities, err := rows(ctx, a.DB, "SELECT coalesce(l.type, 'unknown') AS capability, count(DISTINCT l.task_id)::int AS request_count, count(DISTINCT l.task_id) FILTER(WHERE l.status='succeeded')::int AS succeeded_count, coalesce(sum(l.billed_amount),0)::text AS estimated_cost FROM request_logs l WHERE "+where+" GROUP BY 1 ORDER BY request_count DESC", args...)
+	return gin.H{"range": gin.H{"from": c.Query("from"), "to": c.Query("to")}, "filters": gin.H{}, "storage": storage, "queue": queue, "textTotals": textTotals, "totals": totals, "byUsers": users, "byModels": models, "byChannels": channels, "byDates": byDates, "byCapabilities": byCapabilities}, err
 }
 
 // 保留 JSON 配置类型，数据库会返回已解析对象，不向用户暴露渠道细节。

@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, modelOptionPrice, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -24,7 +24,9 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     const [open, setOpen] = useState(false);
     const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" && !capability ? [value] : []), ...selectableModelsByCapability(config, capability)].filter((model): model is string => Boolean(model)))), [capability, config, value]);
     const current = value || "";
+    const currentPrice = current ? modelOptionPrice(config, current) : null;
     const pickerPlaceholder = placeholder || t("settingsPanels.model.select");
+    const currentTitle = current ? `${modelOptionLabel(config, current)}${currentPrice ? ` · ${currentPrice}` : ""}` : pickerPlaceholder;
 
     useEffect(() => {
         const closeOtherPicker = (event: Event) => {
@@ -54,14 +56,15 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current ? modelOptionLabel(config, current) : pickerPlaceholder}
+                title={currentTitle}
             >
                 <ModelIcon config={config} model={current} />
                 <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : pickerPlaceholder}</span>
+                {currentPrice ? <span className="shrink-0 font-mono text-xs text-muted-foreground/80">{currentPrice}</span> : null}
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
-                className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="z-[1200] min-w-[20rem] max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
@@ -92,10 +95,18 @@ function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
 }
 
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+    const price = modelOptionPrice(config, model);
     return (
-        <span className="flex min-w-0 items-center gap-2">
-            <ModelIcon config={config} model={model} />
-            <span className="truncate">{modelOptionLabel(config, model)}</span>
+        <span className="flex w-full min-w-0 items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2">
+                <ModelIcon config={config} model={model} />
+                <span className="truncate">{modelOptionLabel(config, model)}</span>
+            </span>
+            {price ? (
+                <span className="shrink-0 rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+                    {price}
+                </span>
+            ) : null}
         </span>
     );
 }

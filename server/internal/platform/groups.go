@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -243,6 +244,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 			Note      string     `json:"note"`
 			Amount    string     `json:"amount" binding:"required"`
 			MaxUses   int        `json:"maxUses" binding:"required,min=1"`
+			Count     int        `json:"count"`
 			ExpiresAt *time.Time `json:"expiresAt"`
 		}](c)
 		if err != nil {
@@ -258,25 +260,44 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		if amount <= 0 {
 			return nil, problem(400, "invalid_amount", "兑换码金额必须大于 0")
 		}
-		codeBytes := make([]byte, 24)
-		if _, err = rand.Read(codeBytes); err != nil {
-			return nil, err
+		count := input.Count
+		if count <= 0 {
+			count = 1
 		}
-		code := "CD-" + base64.RawURLEncoding.EncodeToString(codeBytes)
+		if count > 100 {
+			return nil, problem(400, "invalid_count", "单次最多批量生成 100 张兑换码")
+		}
 		ctx := c.Request.Context()
-		var created Row
+		secrets := make([]string, 0, count)
+		items := make([]Row, 0, count)
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			var err error
-			created, err = one(ctx, tx, "INSERT INTO redeem_codes(code_hash,code_hint,created_by,note,amount_micros,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, amount, input.MaxUses, input.ExpiresAt)
-			if err != nil {
-				return err
+			for i := 0; i < count; i++ {
+				codeBytes := make([]byte, 24)
+				if _, err := rand.Read(codeBytes); err != nil {
+					return err
+				}
+				code := "CD-" + base64.RawURLEncoding.EncodeToString(codeBytes)
+				created, err := one(ctx, tx, "INSERT INTO redeem_codes(code_hash,code_hint,created_by,note,amount_micros,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, amount, input.MaxUses, input.ExpiresAt)
+				if err != nil {
+					return err
+				}
+				secrets = append(secrets, code)
+				items = append(items, created)
 			}
-			return a.audit(ctx, tx, currentUser(c).ID, "redeem.create", str(created["id"]), gin.H{"amount": money(amount), "maxUses": input.MaxUses})
+			return a.audit(ctx, tx, currentUser(c).ID, "redeem.create", fmt.Sprintf("count:%d", count), gin.H{"amount": money(amount), "maxUses": input.MaxUses, "count": count})
 		})
 		if err != nil {
 			return nil, err
 		}
-		return gin.H{"code": created, "secret": code}, err
+		secret := ""
+		if len(secrets) > 0 {
+			secret = secrets[0]
+		}
+		var firstCode Row
+		if len(items) > 0 {
+			firstCode = items[0]
+		}
+		return gin.H{"code": firstCode, "secret": secret, "codes": items, "secrets": secrets}, nil
 	}))
 	admin.PATCH("/redeem-codes/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
@@ -348,7 +369,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
-		row, err := one(ctx, a.DB, "SELECT * FROM channels WHERE id=$1", id)
+		row, err := one(ctx, a.DB, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL", id)
 		if err != nil {
 			return nil, err
 		}

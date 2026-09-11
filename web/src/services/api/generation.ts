@@ -8,6 +8,7 @@ export type PublicModel = {
     displayName: string;
     capability: "image" | "text" | "video" | "audio";
     price?: string;
+    pricePerImage?: string | null;
     inputPricePerMillion?: string | null;
     cachedPricePerMillion?: string | null;
     outputPricePerMillion?: string | null;

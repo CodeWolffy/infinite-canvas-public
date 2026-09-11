@@ -43,7 +43,7 @@ export const updateUserGroup = (id: string, body: { name: string; discount: stri
 export const deleteUserGroup = (id: string) => apiRequest<void>(`/api/admin/user-groups/${id}`, { method: "DELETE" });
 export const setUserGroup = (id: string, groupId: string | null) => apiRequest<void>(`/api/admin/users/${id}/group`, { method: "PATCH", body: { groupId } });
 export const getRedeemCodes = (offset = 0) => apiRequest<{ codes: RedeemCode[] }>(`/api/admin/redeem-codes?limit=50&offset=${offset}`);
-export const createRedeemCode = (body: { note: string; amount: string; maxUses: number; expiresAt?: string }) => apiRequest<{ code: RedeemCode; secret: string }>("/api/admin/redeem-codes", { method: "POST", body });
+export const createRedeemCode = (body: { note: string; amount: string; maxUses: number; count?: number; expiresAt?: string }) => apiRequest<{ code: RedeemCode; secret: string; codes?: RedeemCode[]; secrets?: string[] }>("/api/admin/redeem-codes", { method: "POST", body });
 export const setRedeemCodeDisabled = (id: string, disabled: boolean) => apiRequest<void>(`/api/admin/redeem-codes/${id}`, { method: "PATCH", body: { disabled } });
 export const getSensitiveWords = () => apiRequest<{ words: SensitiveWord[] }>("/api/admin/sensitive-words");
 export const saveSensitiveWord = (body: { pattern: string; action: "block" | "review" }) => apiRequest<{ word: SensitiveWord }>("/api/admin/sensitive-words", { method: "POST", body });

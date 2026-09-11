@@ -36,9 +36,15 @@ type upstreamError struct {
 	Category  string
 	Status    int
 	Retryable bool
+	Message   string
 }
 
-func (e *upstreamError) Error() string { return upstreamMessage(e.Category) }
+func (e *upstreamError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return upstreamMessage(e.Category)
+}
 
 func nullableInt(n int64) any {
 	if n == 0 {
@@ -138,7 +144,7 @@ func (a *App) channelFromRow(row Row) (channel, error) {
 	return c, err
 }
 func (a *App) candidates(ctx context.Context, modelID string) ([]channel, error) {
-	items, err := rows(ctx, a.DB, "SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()) ORDER BY b.priority DESC", modelID)
+	items, err := rows(ctx, a.DB, "SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()) ORDER BY b.priority DESC", modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +304,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 	}
 	if len(candidates) == 0 {
 		var configured bool
-		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL)", task["modelId"]).Scan(&configured)
+		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL)", task["modelId"]).Scan(&configured)
 		if err != nil {
 			return
 		}
@@ -338,9 +344,9 @@ func (a *App) executeTask(root context.Context, task Row) {
 			if !resuming {
 				var eligible bool
 				if candidate.BindingID != "" {
-					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
 				} else {
-					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.status='active' AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
 				}
 				if err != nil || !eligible {
 					return

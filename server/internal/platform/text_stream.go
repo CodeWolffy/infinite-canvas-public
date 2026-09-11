@@ -148,9 +148,10 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 	defer response.Body.Close()
 	reader := io.LimitReader(response.Body, a.Config.MaxGenerated*2+1)
 	if response.StatusCode >= 300 {
+		raw, _ := io.ReadAll(reader)
 		var payload map[string]any
-		_ = json.NewDecoder(reader).Decode(&payload)
-		return generationResult{}, responseError(response.StatusCode, payload)
+		_ = json.Unmarshal(raw, &payload)
+		return generationResult{}, responseError(response.StatusCode, payload, string(raw))
 	}
 	result := generationResult{}
 	var content, pending strings.Builder

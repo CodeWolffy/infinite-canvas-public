@@ -66,10 +66,10 @@ CREATE TABLE channels (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, protocol text NOT NULL CHECK (protocol IN ('openai','gemini')),
     base_url text NOT NULL, encrypted_api_key text, api_key_hint text,
     status text NOT NULL DEFAULT 'disabled' CHECK (status IN ('active','disabled','needs_attention')),
-    timeout_ms integer NOT NULL DEFAULT 480000 CHECK (timeout_ms > 0), max_concurrency integer NOT NULL DEFAULT 1 CHECK (max_concurrency > 0),
+    timeout_ms integer NOT NULL DEFAULT 300000 CHECK (timeout_ms > 0), max_concurrency integer NOT NULL DEFAULT 20 CHECK (max_concurrency > 0),
     cooldown_seconds integer NOT NULL DEFAULT 120 CHECK (cooldown_seconds >= 0), cooldown_until timestamptz,
     last_success_at timestamptz, last_failure_at timestamptz, last_error_code text,
-    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz
 );
 CREATE TABLE model_channels (
     model_id uuid NOT NULL REFERENCES models(id), channel_id uuid NOT NULL REFERENCES channels(id), upstream_model varchar(160) NOT NULL,

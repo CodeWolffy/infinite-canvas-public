@@ -11,6 +11,15 @@ description: Implemented changes that still need manual verification
 
 ### Backend capabilities implemented in this iteration
 
+- Frontend page layout and column allocation optimizations:
+  - Redemption page: converted to a full-width card layout with 4 top summary metric cards (total, active, used/disabled, total loaded amount); column widths proportionally rebalanced (code hint 220px with one-click prefix copy, amount right-aligned, usage progress bar, centered status tags, expiration & creation timestamps, ellipsis notes); expanded batch result modal to 720px with 2-column responsive card chips.
+  - Usage analytics dashboard: structured metric cards into a balanced 12-slot 2-row grid without orphaned cards; optimized the channel attempts table with proportional column widths, adaptive whitespace, colorful micro-progress bars for success rates, and CSV export.
+  - Channel playground: upgraded to fill full viewport height on desktop without outer scrollbars, aligning left and right panels with independent internal scrolling and clean responsive layout.
+  - Notification center: expanded Popover width to 380px ~ 440px and list max-height to 380px with subtle rounded item hover states.
+- Lightweight notification system: removed the 2.5s polling storm from `NotificationCenter`, replaced the drawer with a lightweight Popover adhering to canvas themes, integrated system notices and announcements in dual tabs, and introduced `POST /user/notifications/read-all` for one-click read.
+- Multi-dimensional analytics dashboard: expanded `GET /api/admin/stats` with `byDates` time-series aggregation and `byCapabilities` breakdown; added daily request & cost trend bars and capability distribution ratios to the admin stats dashboard.
+- Batch redemption code generator & exporter: supported `count` parameter in `POST /api/admin/redeem-codes` for batch generation (up to 100 codes); added batch result modal, one-click copy all, and TXT/CSV file downloads in the admin UI.
+- Online channel playground: added `POST /api/admin/playground/test` admin debugging endpoint and an interactive `/admin/playground` page to test text/image upstream routing, measuring latencies, first token delay, HTTP status, and raw response without user balance deduction.
 - 后端审查修复（待人工验证）：
   - 空结果扣费：图片/视频/音频任务上游返回 HTTP 200 但结果为空时，按上游失败处理并退回冻结余额，不再出现“已扣费但无输出文件”；结算前有最终防护。
   - 视频时长一致性：提交 `seconds` 与 `durationSeconds` 两个不同值会被拒绝（400 `invalid_duration`）；创建任务时统一规范化时长，Gemini 视频上游请求、冻结额、完成计费使用同一时长。
@@ -21,6 +30,10 @@ description: Implemented changes that still need manual verification
   - 代码复用：管理端“获取模型”“查询余额”复用主动检测的统一实现，行为与主动检测一致（去重、无额度时报错）。
   - 测试编译：修复 `capabilities_test.go` 对 map 元素取地址导致的整包测试无法编译。
 
+- Upstream error propagation and safety policy handling: detailed upstream error messages (e.g. `status_code=400, 您的请求无法用于生成图像。该请求可能因安全政策被拦截，或不适合进行图像生成。`) are extracted, correctly categorized as non-retryable content policy errors, persisted to task error messages, and displayed directly to users on both canvas and workbench instead of being masked by generic static strings.
+- Channel creation default parameters: the admin create-channel modal defaults to 300s timeout (300,000ms) and concurrency 20, matching the database schema defaults.
+- Channel soft deletion and model unbinding: deleting a channel that already has tasks or logs marks it with `deleted_at = now()` and unbinds associated `model_channels` instead of failing with a foreign key constraint violation. All operational queries exclude soft-deleted channels.
+- Model pricing display on canvas and workbench: `ModelPicker` displays price badges in dropdown items and trigger summary; `use-config-store` preserves `pricePerImage` and matches models by both `name` and `displayName`; image workbench model select appends unit price `(¥0.008/张)`.
 - Multi-upstream model binding decoupling and batch binding: multiple upstream models from the same channel can be bound to a single platform model without overwriting; batch binding modal supported in channels drawer; independent priority, weight, enabled status, and cost configurations per binding row in models drawer; scheduler eligibility check targets specific binding ID.
 - GPT Image 2.5 adaptation: supports `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`; image settings panel supports `xhigh` (Ultra High) and `max` (Maximum) quality modes; requests omit `response_format` and pass `quality` to upstream properly.
 - Billing: settle the hold and any additional charge once, preserve zero cache prices, distinguish calculated fees from actual charges, save per-second prices, handle string/numeric duration consistently, preserve group pricing on retries, and allow different redeem codes for one account.

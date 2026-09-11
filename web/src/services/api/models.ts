@@ -6,6 +6,7 @@ export type PublicModel = {
     displayName: string;
     capability: "image" | "text" | "video" | "audio";
     price?: string;
+    pricePerImage?: string | null;
     sortOrder: number;
     description: string | null;
 };

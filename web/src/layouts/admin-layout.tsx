@@ -1,6 +1,6 @@
 import { Suspense, useState } from "react";
 import { Button, Spin } from "antd";
-import { BarChart3, Cable, History, Images, LayoutDashboard, LogOut, Megaphone, Shapes, UsersRound, CreditCard, ListChecks, SlidersHorizontal, Ticket, Users, ShieldAlert, Gift, Activity } from "lucide-react";
+import { BarChart3, Cable, History, Images, LayoutDashboard, LogOut, Megaphone, Shapes, UsersRound, CreditCard, ListChecks, SlidersHorizontal, Ticket, Users, ShieldAlert, Gift, Activity, TerminalSquare } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
@@ -16,6 +16,7 @@ const adminLinks = [
     { to: "/admin/tasks", label: "任务与审计", icon: ListChecks },
     { to: "/admin/models", label: "模型管理", icon: Shapes },
     { to: "/admin/channels", label: "渠道管理", icon: Cable },
+    { to: "/admin/playground", label: "渠道调试", icon: TerminalSquare },
     { to: "/admin/logs", label: "请求日志", icon: History },
     { to: "/admin/assets", label: "公共素材", icon: Images },
     { to: "/admin/users", label: "用户管理", icon: UsersRound },

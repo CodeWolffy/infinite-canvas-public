@@ -64,47 +64,79 @@ func (a *App) upstreamJSON(req *http.Request) (map[string]any, error) {
 	}
 	var result map[string]any
 	decodeErr := json.Unmarshal(raw, &result)
+	rawText := string(raw)
 	if response.StatusCode >= 300 {
-		return nil, responseError(response.StatusCode, result)
+		return nil, responseError(response.StatusCode, result, rawText)
 	}
 	if decodeErr != nil {
 		return nil, &upstreamError{Category: "upstream_error"}
 	}
 	if result["error"] != nil {
-		return nil, responseError(400, result)
+		return nil, responseError(400, result, rawText)
 	}
 	if feedback := object(result["promptFeedback"]); str(feedback["blockReason"]) != "" {
-		return nil, &upstreamError{Category: "content_policy"}
+		return nil, &upstreamError{Category: "content_policy", Message: "上游拒绝了此内容，请调整提示词"}
 	}
 	if envelope, ok := result["data"].(map[string]any); ok {
 		if code, exists := result["code"]; exists && str(code) != "0" && str(code) != "200" {
-			return nil, responseError(400, result)
+			return nil, responseError(400, result, rawText)
 		}
 		result = envelope
 	}
 	return result, nil
 }
-func responseError(status int, payload map[string]any) *upstreamError {
+func responseError(status int, payload map[string]any, raw ...string) *upstreamError {
 	e := object(payload["error"])
 	code := strings.ToLower(str(e["code"]))
 	kind := strings.ToLower(str(e["type"]))
-	for _, value := range []string{code, kind} {
-		switch value {
-		case "content_policy_violation", "content_filter", "safety", "prohibited_content":
-			return &upstreamError{Category: "content_policy", Status: status}
+	msg := str(e["message"])
+	if msg == "" {
+		msg = str(payload["message"])
+	}
+	if msg == "" {
+		msg = str(payload["msg"])
+	}
+	if msg == "" && str(payload["error"]) != "" {
+		msg = str(payload["error"])
+	}
+	if msg == "" && len(raw) > 0 {
+		msg = strings.TrimSpace(raw[0])
+	}
+	if len(msg) > 1000 {
+		msg = msg[:1000]
+	}
+
+	lower := strings.ToLower(msg)
+	isContentPolicy := false
+	for _, value := range []string{code, kind, lower} {
+		if strings.Contains(value, "content_policy") ||
+			strings.Contains(value, "content_filter") ||
+			strings.Contains(value, "prohibited_content") ||
+			strings.Contains(value, "safety") ||
+			strings.Contains(value, "安全政策") ||
+			strings.Contains(value, "安全审核") ||
+			strings.Contains(value, "不适合进行图像生成") ||
+			strings.Contains(value, "被拦截") ||
+			strings.Contains(value, "违规") {
+			isContentPolicy = true
+			break
 		}
+	}
+
+	if isContentPolicy || status == 451 {
+		return &upstreamError{Category: "content_policy", Status: status, Message: msg}
 	}
 	switch {
 	case status == 429:
-		return &upstreamError{Category: "rate_limit", Status: status, Retryable: true}
+		return &upstreamError{Category: "rate_limit", Status: status, Retryable: true, Message: msg}
 	case status == 401 || status == 403:
-		return &upstreamError{Category: "authentication", Status: status, Retryable: true}
+		return &upstreamError{Category: "authentication", Status: status, Retryable: true, Message: msg}
 	case status >= 500:
-		return &upstreamError{Category: "upstream_error", Status: status, Retryable: true}
+		return &upstreamError{Category: "upstream_error", Status: status, Retryable: true, Message: msg}
 	case status == 400 || status == 422:
-		return &upstreamError{Category: "invalid_request", Status: status}
+		return &upstreamError{Category: "invalid_request", Status: status, Message: msg}
 	default:
-		return &upstreamError{Category: "upstream_error", Status: status}
+		return &upstreamError{Category: "upstream_error", Status: status, Message: msg}
 	}
 }
 func (a *App) binaryRequest(req *http.Request) ([]byte, error) {
@@ -113,12 +145,14 @@ func (a *App) binaryRequest(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 300 {
-		return nil, responseError(response.StatusCode, nil)
-	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, a.Config.MaxGenerated+1))
 	if err != nil {
 		return nil, err
+	}
+	if response.StatusCode >= 300 {
+		var payload map[string]any
+		_ = json.Unmarshal(data, &payload)
+		return nil, responseError(response.StatusCode, payload, string(data))
 	}
 	if int64(len(data)) > a.Config.MaxGenerated {
 		return nil, &upstreamError{Category: "upstream_error"}

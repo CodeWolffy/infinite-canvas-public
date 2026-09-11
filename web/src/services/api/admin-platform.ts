@@ -41,6 +41,7 @@ export type AdminChannel = {
     monitorToken?: string | null;
     nextCheckAt?: string | null;
     modelChanges?: { added: string[]; removed: string[] } | null;
+    upstreamModels?: string[];
     upstreamBalance?: string | null;
     balanceStatus?: string | null;
     lastAttempt?: {
@@ -146,6 +147,8 @@ export type AdminStats = {
     byUsers: Array<{ id: string; username: string; displayName: string; requestCount: number; successImageCount: number; estimatedCost: string }>;
     byModels: Array<{ id: string; name: string; displayName: string; requestCount: number; successImageCount: number; estimatedCost: string }>;
     byChannels: Array<{ id: string; name: string; attemptCount: number; succeededAttemptCount: number; averageDurationMs: number; p50DurationMs: number; p95DurationMs: number }>;
+    byDates?: Array<{ date: string; requestCount: number; succeededCount: number; failedCount: number; successImageCount: number; estimatedCost: string }>;
+    byCapabilities?: Array<{ capability: string; requestCount: number; succeededCount: number; estimatedCost: string }>;
 };
 
 export async function getAdminStats(params: { from?: string; to?: string; userId?: string; modelId?: string; channelId?: string }) {
@@ -184,4 +187,28 @@ export async function getAdminRequestLogs(params: { from?: string; to?: string; 
 
 export async function clearAdminRequestLogs() {
     return (await apiRequest<{ deleted: number }>("/api/admin/request-logs", { method: "DELETE" })).deleted;
+}
+
+export type PlaygroundTestParams = {
+    channelId: string;
+    model: string;
+    capability?: "text" | "image";
+    prompt: string;
+    parameters?: Record<string, unknown>;
+};
+
+export type PlaygroundTestResult = {
+    ok: boolean;
+    durationMs: number;
+    capability?: string;
+    upstreamModel?: string;
+    text?: string;
+    outputTokens?: number;
+    firstTokenMs?: number;
+    error?: string;
+    category?: string;
+};
+
+export async function testChannelPlayground(body: PlaygroundTestParams) {
+    return await apiRequest<PlaygroundTestResult>("/api/admin/playground/test", { method: "POST", body });
 }

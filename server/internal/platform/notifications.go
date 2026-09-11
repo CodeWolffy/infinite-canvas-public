@@ -103,6 +103,11 @@ func (a *App) notificationRoutes(api, admin *gin.RouterGroup) {
 		_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO notification_reads(notification_id,user_id) SELECT id,$2 FROM notifications WHERE id=$1 AND (user_id=$2 OR (user_id IS NULL AND $3)) ON CONFLICT DO NOTHING", id, u.ID, u.Role == "admin")
 		return nil, err
 	}))
+	api.POST("/user/notifications/read-all", respond(func(c *gin.Context) (any, error) {
+		u := currentUser(c)
+		_, err := a.DB.Exec(c.Request.Context(), "INSERT INTO notification_reads(notification_id,user_id) SELECT n.id,$1 FROM notifications n LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=$1 WHERE r.user_id IS NULL AND (n.user_id=$1 OR (n.user_id IS NULL AND $2)) ON CONFLICT DO NOTHING", u.ID, u.Role == "admin")
+		return nil, err
+	}))
 	admin.GET("/mail-settings", respond(func(c *gin.Context) (any, error) {
 		config, err := a.mailConfig(c.Request.Context(), a.DB)
 		configured := config.Password != ""

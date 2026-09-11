@@ -22,6 +22,7 @@ export const getMailDeliveries = () => apiRequest<{ deliveries: Array<{ id: stri
 export type PlatformNotification = { id: string; kind: string; title: string; content: string; createdAt: string; read: boolean };
 export const getNotifications = () => apiRequest<{ notifications: PlatformNotification[] }>("/api/user/notifications");
 export const readNotification = (id: string) => apiRequest<void>(`/api/user/notifications/${id}/read`, { method: "POST" });
+export const readAllNotifications = () => apiRequest<void>("/api/user/notifications/read-all", { method: "POST" });
 
 export type GroupPolicy = { modelIds: string[] | null; grantAmount: string; grantPeriod: "day" | "week" | "month"; spendLimit: string; spendPeriod: "day" | "week" | "month"; storageQuotaBytes: number };
 export const saveGroupPolicy = (id: string, body: GroupPolicy) => apiRequest<void>(`/api/admin/user-groups/${id}/policy`, { method: "PUT", body });

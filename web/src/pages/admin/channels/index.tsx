@@ -94,7 +94,7 @@ export default function AdminChannelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         form.resetFields();
-        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 480, maxConcurrency: 1, cooldownSeconds: 120 });
+        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 300, maxConcurrency: 20, cooldownSeconds: 120 });
     }, [editing, form]);
 
     const columns: TableColumnsType<AdminChannel> = [

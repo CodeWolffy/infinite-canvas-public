@@ -21,6 +21,7 @@ const AdminAssetsPage = lazy(() => import("@/pages/admin/assets"));
 const AdminChannelsPage = lazy(() => import("@/pages/admin/channels"));
 const AdminLogsPage = lazy(() => import("@/pages/admin/logs"));
 const AdminModelsPage = lazy(() => import("@/pages/admin/models"));
+const AdminPlaygroundPage = lazy(() => import("@/pages/admin/playground"));
 const AdminStatsPage = lazy(() => import("@/pages/admin/stats"));
 const AdminUsersPage = lazy(() => import("@/pages/admin/users"));
 const UserGenerationsPage = lazy(() => import("@/pages/user/generations"));
@@ -95,6 +96,7 @@ export const router = createBrowserRouter([
                     { path: "users", element: <AdminUsersPage /> },
                     { path: "models", element: <AdminModelsPage /> },
                     { path: "channels", element: <AdminChannelsPage /> },
+                    { path: "playground", element: <AdminPlaygroundPage /> },
                     { path: "logs", element: <AdminLogsPage /> },
                     { path: "assets", element: <AdminAssetsPage /> },
                     { path: "stats", element: <AdminStatsPage /> },

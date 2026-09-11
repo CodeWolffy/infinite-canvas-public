@@ -698,7 +698,17 @@ function GenerationSettings({ config, models, modelId, onModelChange, updateConf
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
                 {models.length ? (
-                    <Select value={modelId || undefined} onChange={onModelChange} placeholder={t("imageWorkbench.noModelHint")} className="w-full" options={models.map((model) => ({ value: model.id, label: model.displayName }))} />
+                    <Select
+                        value={modelId || undefined}
+                        onChange={onModelChange}
+                        placeholder={t("imageWorkbench.noModelHint")}
+                        className="w-full"
+                        options={models.map((model) => {
+                            const num = model.pricePerImage ? Number(model.pricePerImage) : null;
+                            const price = num !== null && !isNaN(num) ? ` (¥${Number.isInteger(num * 100) ? num.toFixed(2) : num}/张)` : "";
+                            return { value: model.id, label: `${model.displayName}${price}` };
+                        })}
+                    />
                 ) : (
                     <Typography.Text type="warning" className="block text-xs leading-5">
                         {t("imageWorkbench.noModelHint")}

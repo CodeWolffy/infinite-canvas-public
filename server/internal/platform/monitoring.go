@@ -128,7 +128,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 					return problem(400, "invalid_probe", "请先将检测模型绑定到此渠道")
 				}
 			}
-			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1", id, jsonBytes(input), input.IntervalMinutes)
+			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id, jsonBytes(input), input.IntervalMinutes)
 			if err != nil {
 				return err
 			}
@@ -146,7 +146,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			row, err := one(ctx, tx, "SELECT status,monitoring FROM channels WHERE id=$1 FOR UPDATE", id)
+			row, err := one(ctx, tx, "SELECT status,monitoring FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
 			if err != nil {
 				return err
 			}
@@ -181,6 +181,73 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		}
 		_, err = a.DB.Exec(c.Request.Context(), "UPDATE channels SET model_changes=NULL WHERE id=$1", id)
 		return nil, err
+	}))
+	admin.POST("/playground/test", respond(func(c *gin.Context) (any, error) {
+		input, err := body[struct {
+			ChannelID  string         `json:"channelId" binding:"required"`
+			Model      string         `json:"model" binding:"required"`
+			Capability string         `json:"capability"`
+			Prompt     string         `json:"prompt" binding:"required"`
+			Parameters map[string]any `json:"parameters"`
+		}](c)
+		if err != nil {
+			return nil, err
+		}
+		if !validID(input.ChannelID) {
+			return nil, problem(400, "invalid_channel", "渠道编号不正确")
+		}
+		ctx := c.Request.Context()
+		row, err := one(ctx, a.DB, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL", input.ChannelID)
+		if err != nil {
+			return nil, problem(404, "channel_not_found", "渠道不存在或已被删除")
+		}
+		ch, err := a.channelFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		ch.UpstreamModel = strings.TrimSpace(input.Model)
+		cap := strings.TrimSpace(input.Capability)
+		if cap == "" {
+			cap = "text"
+		}
+		params := input.Parameters
+		if params == nil {
+			params = map[string]any{}
+		}
+		task := Row{
+			"id":         uuid.NewString(),
+			"run":        1,
+			"probe":      true,
+			"capability": cap,
+			"prompt":     strings.TrimSpace(input.Prompt),
+			"parameters": params,
+		}
+		timeout := time.Duration(ch.TimeoutMS) * time.Millisecond
+		if timeout <= 0 || timeout > 60*time.Second {
+			timeout = 60 * time.Second
+		}
+		testCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		started := time.Now()
+		res, err := a.generate(testCtx, ch, task)
+		durationMs := time.Since(started).Milliseconds()
+		if err != nil {
+			return gin.H{
+				"ok":         false,
+				"durationMs": durationMs,
+				"error":      err.Error(),
+				"category":   classify(err).Category,
+			}, nil
+		}
+		return gin.H{
+			"ok":            true,
+			"durationMs":    durationMs,
+			"capability":    cap,
+			"upstreamModel": ch.UpstreamModel,
+			"text":          res.Text,
+			"outputTokens":  res.CompletionTokens,
+		}, nil
 	}))
 }
 
@@ -384,7 +451,7 @@ func (a *App) startMonitoring(ctx context.Context) {
 				return
 			case <-ticker.C:
 				a.recoverMonitoring(ctx)
-				row, err := one(ctx, a.DB, "UPDATE channels SET monitor_token=$1,monitor_deadline=now()+(timeout_ms*interval '1 millisecond'),next_check_at=CASE WHEN coalesce((monitoring->>'intervalMinutes')::int,0)>0 THEN now()+((monitoring->>'intervalMinutes')::int*interval '1 minute') ELSE NULL END WHERE id=(SELECT id FROM channels WHERE status='active' AND next_check_at<=now() AND monitor_token IS NULL AND (cooldown_until IS NULL OR cooldown_until<=now()) ORDER BY next_check_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", uuid.NewString())
+				row, err := one(ctx, a.DB, "UPDATE channels SET monitor_token=$1,monitor_deadline=now()+(timeout_ms*interval '1 millisecond'),next_check_at=CASE WHEN coalesce((monitoring->>'intervalMinutes')::int,0)>0 THEN now()+((monitoring->>'intervalMinutes')::int*interval '1 minute') ELSE NULL END WHERE id=(SELECT id FROM channels WHERE status='active' AND deleted_at IS NULL AND next_check_at<=now() AND monitor_token IS NULL AND (cooldown_until IS NULL OR cooldown_until<=now()) ORDER BY next_check_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", uuid.NewString())
 				if err == nil {
 					a.runMonitor(ctx, row)
 				}
