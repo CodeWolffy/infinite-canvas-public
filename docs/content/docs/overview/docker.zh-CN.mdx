@@ -11,7 +11,18 @@ description: 使用 Go、PostgreSQL、Redis 和 MinIO 部署公益创作平台
 
 复制仓库根目录 `.env.example` 为生产配置 `.env`，替换全部 `change-me` 密码和加密密钥，并设置实际 HTTPS 域名的 `PUBLIC_URL`、`CORS_ORIGIN`。仅本机运行时，复制为单独的 `.env.local` 并使用下方 `--env-file .env.local`，不要把公司项目的 `.env` 或数据库配置用于本平台。
 
-生产服务器更新使用新的目录名和三步命令：
+首次部署使用你的仓库：
+
+```sh
+cd /opt
+git clone https://github.com/CodeWolffy/infinite-canvas-public.git
+cd /opt/infinite-canvas-public
+cp .env.example .env
+# 编辑 .env 后启动
+docker compose up -d --build app api
+```
+
+后续更新：
 
 ```sh
 cd /opt/infinite-canvas-public
@@ -19,7 +30,7 @@ git pull origin main
 docker compose up -d --build app api
 ```
 
-首次部署前，将生产配置保存为 `/opt/infinite-canvas-public/.env`，不要提交该文件。
+生产配置保存为 `/opt/infinite-canvas-public/.env`，不要提交到 Git。
 
 本地 HTTP 使用单独配置，默认绑定 `127.0.0.1:3301`；公司项目的 `3300` 端口不属于本平台：
 

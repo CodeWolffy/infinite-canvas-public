@@ -23,7 +23,26 @@ docker compose --env-file .env.local -f docker-compose.local.yml up -d --build
 
 打开 [本机平台](http://localhost:3301)，使用初始化管理员登录并修改初始密码，然后配置渠道、模型、签到与邀请码。若 `3301` 已被占用，可在 `.env.local` 中设置 `PUBLIC_WEB_PORT`，例如 `3302`。
 
-公网部署更新姿势：`cd /opt/infinite-canvas-public`、`git pull origin main`、`docker compose up -d --build app api`。生产配置固定保存在服务器项目根目录 `.env`，不提交 Git。Go 平台使用独立空数据库，不覆盖公司版数据。支付实际可用性取决于商户配置和联调结果，生产静态资源路径及吞吐量仍需验收。
+公网首次部署：
+
+```sh
+cd /opt
+git clone https://github.com/CodeWolffy/infinite-canvas-public.git
+cd /opt/infinite-canvas-public
+cp .env.example .env
+# 编辑 .env，填写公网域名、数据库密码、MinIO 密码、加密密钥和管理员密码
+docker compose up -d --build app api
+```
+
+公网后续更新：
+
+```sh
+cd /opt/infinite-canvas-public
+git pull origin main
+docker compose up -d --build app api
+```
+
+生产配置固定保存在服务器项目根目录 `.env`，不提交 Git。Go 平台使用独立空数据库，不覆盖公司版数据。支付实际可用性取决于商户配置和联调结果，生产静态资源路径及吞吐量仍需验收。
 
 ## 文档
 

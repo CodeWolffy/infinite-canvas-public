@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-+ [新增] 提供独立的公网服务器 `.env` 部署配置说明，使用 `infinite-canvas-public` 数据库、对象桶、会话 Cookie 和加密密钥，禁止复用公司项目配置。
++ [调整] 补充公益平台首次 `git clone`、配置 `.env` 与后续 `git pull` 的服务器部署流程。
 + [调整] 当前公益平台的包名、Go 模块、构建服务名和 Render 服务名统一为 `infinite-canvas-public`；保留 Infinite Canvas 产品名、插件/MCP 标识、导入格式和本地存储数据库名，并为公益平台使用独立会话 Cookie。
 + [调整] Docker Compose 本地公益平台改用 `infinite-canvas-public` 项目名和 `3301` 宿主机端口，与公司项目的 `infinite-canvas` 和 `3300` 端口、数据库、Redis、MinIO 数据卷分开。
 + [新增] 分组可配置每用户存储配额，默认关闭；超限拒绝上传，生成结果无法保存时失败并退回冻结余额。

@@ -93,8 +93,18 @@ Web Nginx 已关闭 `/api` 响应缓冲。生产环境的 1Panel 外层反代也
 
 ## 部署
 
-1. 首次部署时进入 `/opt/infinite-canvas-public`，将生产配置保存为该目录下的 `.env`（不提交 Git），设置实际站点的 `PUBLIC_URL`、`CORS_ORIGIN`。
-2. 更新部署执行：
+1. 首次部署：
+
+   ```sh
+   cd /opt
+   git clone https://github.com/CodeWolffy/infinite-canvas-public.git
+   cd /opt/infinite-canvas-public
+   cp .env.example .env
+   # 编辑 .env，填写公网域名和所有生产密钥
+   docker compose up -d --build app api
+   ```
+
+2. 后续更新：
 
    ```sh
    cd /opt/infinite-canvas-public

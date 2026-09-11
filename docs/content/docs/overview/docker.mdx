@@ -11,7 +11,18 @@ description: 使用 Go、PostgreSQL、Redis 和 MinIO 部署公益创作平台
 
 Copy the repository `.env.example` to the production `.env`, replace every `change-me` password and encryption key, and set the real HTTPS `PUBLIC_URL` and `CORS_ORIGIN`. For local runs, use a separate `.env.local` with `--env-file .env.local`; do not use the company project's `.env` or database configuration for this platform.
 
-Production updates use the renamed directory and the following three commands:
+For the first deployment, clone your repository:
+
+```sh
+cd /opt
+git clone https://github.com/CodeWolffy/infinite-canvas-public.git
+cd /opt/infinite-canvas-public
+cp .env.example .env
+# Edit .env, then start the services
+docker compose up -d --build app api
+```
+
+For later updates:
 
 ```sh
 cd /opt/infinite-canvas-public
@@ -19,7 +30,7 @@ git pull origin main
 docker compose up -d --build app api
 ```
 
-Before the first deployment, save the production configuration as `/opt/infinite-canvas-public/.env` and keep it out of Git.
+Keep production configuration in `/opt/infinite-canvas-public/.env` and out of Git.
 
 For local HTTP, use the separate configuration; it binds `127.0.0.1:3301` by default, while port `3300` remains reserved for the company project:
 
