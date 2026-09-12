@@ -519,10 +519,10 @@ func (a *App) Router() *gin.Engine {
 		return gin.H{"status": "ok"}, nil
 	}))
 	a.authRoutes(r)
-	r.GET("/api/status/models", respond(a.publicStatus))
 	a.authSecurityRoutes(r)
 	a.paymentCallbacks(r)
 	api := r.Group("/api", a.authenticate())
+	api.GET("/status/models", respond(a.publicStatus))
 	a.userRoutes(api)
 	a.contentRoutes(api)
 	a.generationRoutes(api)

@@ -46,7 +46,6 @@ const ReferralsPage = lazy(() => import("@/pages/user/referrals"));
 
 export const router = createBrowserRouter([
     { path: "/login", element: <LoginPage /> },
-    { path: "/status", element: <Suspense fallback={<Spin />}><StatusPage /></Suspense> },
     { path: "/forgot-password", element: <AccountRecoveryPage /> },
     { path: "/reset-password", element: <AccountRecoveryPage /> },
     { path: "/verify-email", element: <AccountRecoveryPage /> },
@@ -58,6 +57,7 @@ export const router = createBrowserRouter([
         ),
         children: [
             { path: "/change-password", element: <ChangePasswordPage /> },
+            { path: "/status", element: <Suspense fallback={<Spin />}><StatusPage /></Suspense> },
             {
                 element: (
                     <UserLayout>

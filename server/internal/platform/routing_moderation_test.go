@@ -200,9 +200,10 @@ func TestModerationRefundAndRejectedContext(t *testing.T) {
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM moderation_reviews WHERE user_id=$1 AND status='canceled'", user).Scan(&canceledReviews); err != nil || canceledReviews != 1 { t.Fatalf("canceled reviews=%d: %v", canceledReviews, err) }
 }
 
-func TestMonitorAutoRecoveryAndAnonymousStatus(t *testing.T) {
+func TestMonitorAutoRecoveryAndStatusAuth(t *testing.T) {
 	a := routingApp(t)
 	ctx := context.Background()
+	_, userCookie := testUser(t, a, 0)
 	var healthy atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !healthy.Load() { w.WriteHeader(503); fmt.Fprint(w, `{"error":{"message":"unavailable"}}`); return }
@@ -227,7 +228,8 @@ func TestMonitorAutoRecoveryAndAnonymousStatus(t *testing.T) {
 	healthy.Store(true)
 	probe()
 	if err = a.DB.QueryRow(ctx, "SELECT auto_disabled_at IS NOT NULL FROM channels WHERE id=$1", channelID).Scan(&disabled); err != nil || disabled { t.Fatal("channel did not recover", err) }
-	response := testRequest(a.Router(), "GET", "/api/status/models", nil, nil)
+	if anonymous := testRequest(a.Router(), "GET", "/api/status/models", nil, nil); anonymous.Code != 401 { t.Fatal(anonymous.Body.String()) }
+	response := testRequest(a.Router(), "GET", "/api/status/models", nil, userCookie)
 	if response.Code != 200 { t.Fatal(response.Body.String()) }
 	models := responseRow(t, response)["models"].([]any)
 	if len(models) != 1 || object(models[0])["status"] != "available" || strings.Contains(response.Body.String(), "test-key") || strings.Contains(response.Body.String(), upstream.URL) { t.Fatal("public health is wrong or contains private routing data", response.Body.String()) }

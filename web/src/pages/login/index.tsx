@@ -61,7 +61,7 @@ export default function LoginPage() {
                 <div className="relative max-w-xl">
                     <p className="mb-5 text-xs font-semibold uppercase tracking-[0.28em] text-stone-400">开放灵感，自由创作</p>
                     <h1 className="text-5xl font-semibold leading-[1.08] tracking-[-0.045em]">把灵感、生成与画布，收进同一个工作空间。</h1>
-                    <p className="mt-7 max-w-lg text-base leading-7 text-stone-400">图片、视频、文本与声音，在这里一起生长。签到领取创作余额，选择模型即可开始。</p>
+                    <p className="mt-7 max-w-lg text-base leading-7 text-stone-400">图片、视频、文本与声音，在这里一起生长。</p>
                 </div>
             </section>
 
@@ -93,7 +93,6 @@ export default function LoginPage() {
                             {!registering ? <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground">忘记密码</Link> : null}
                         </div>
                     )}
-                    <div className="mt-5 text-center text-xs"><Link to="/status" className="text-muted-foreground hover:text-foreground">查看模型运行状态</Link></div>
                 </div>
             </section>
         </main>
