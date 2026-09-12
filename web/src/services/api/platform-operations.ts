@@ -30,12 +30,12 @@ export const getGroupGrant = () => apiRequest<{ grant: { groupId: string; groupN
 export const claimGroupGrant = () => apiRequest<{ amount: string; alreadyClaimed: boolean }>("/api/user/group-grant/claim", { method: "POST" });
 export const getSensitiveEvents = () => apiRequest<{ events: Array<{ id: string; username: string; detail: { pattern: string; action: "block" | "review" }; createdAt: string }> }>("/api/admin/sensitive-events");
 
-export type MonitoringConfig = { intervalMinutes: number; modelId: string; modelIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
+export type MonitoringConfig = { intervalMinutes: number; bindingIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
 export const saveMonitoring = (id: string, body: MonitoringConfig) => apiRequest<void>(`/api/admin/channels/${id}/monitoring`, { method: "PUT", body });
 export const checkChannel = (id: string) => apiRequest<{ queued: boolean }>(`/api/admin/channels/${id}/check`, { method: "POST" });
 export const checkAllChannels = () => apiRequest<{ queued: number }>("/api/admin/channels/check-all", { method: "POST" });
 export const getChannelChecks = (id: string) => apiRequest<{ checks: Array<{ id: string; status: string; detail: Record<string, unknown>; durationMs: number; createdAt: string }> }>(`/api/admin/channels/${id}/checks`);
-export const getChannelBindings = (id: string) => apiRequest<{ models: Array<{ id: string; displayName: string; capability: string; upstreamModel: string }> }>(`/api/admin/channels/${id}/bindings`);
+export const getChannelBindings = (id: string) => apiRequest<{ models: Array<{ id: string; modelId: string; displayName: string; capability: string; upstreamModel: string }> }>(`/api/admin/channels/${id}/bindings`);
 export const acknowledgeModelChanges = (id: string) => apiRequest<void>(`/api/admin/channels/${id}/model-changes/ack`, { method: "POST" });
 
 export type CostConfig = Partial<Record<"fixed" | "input" | "cached" | "output" | "second", string>>;

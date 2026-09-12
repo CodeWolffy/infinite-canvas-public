@@ -141,14 +141,24 @@ func (a *App) textEvents(c *gin.Context) {
 }
 
 func (a *App) streamText(ctx context.Context, req *http.Request, channel channel, task Row) (generationResult, error) {
+	trace := traceFrom(ctx)
+	if trace != nil {
+		trace.started = time.Now()
+	}
 	response, err := safeClient(a.Config.AllowPrivateHosts).Do(req)
 	if err != nil {
 		return generationResult{}, err
 	}
 	defer response.Body.Close()
+	if trace != nil {
+		trace.status = response.StatusCode
+	}
 	reader := io.LimitReader(response.Body, a.Config.MaxGenerated*2+1)
 	if response.StatusCode >= 300 {
 		raw, _ := io.ReadAll(reader)
+		if trace != nil {
+			trace.rawResponse = trace.payload(string(raw))
+		}
 		var payload map[string]any
 		_ = json.Unmarshal(raw, &payload)
 		return generationResult{}, responseError(response.StatusCode, payload, string(raw))
@@ -221,6 +231,10 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 		if int64(content.Len()+len(delta)) > a.Config.MaxGenerated*2 {
 			return errors.New("文本结果超过现有大小限制")
 		}
+		if trace != nil && trace.firstTokenMS == nil && delta != "" {
+			elapsed := time.Since(trace.started).Milliseconds()
+			trace.firstTokenMS = &elapsed
+		}
 		content.WriteString(delta)
 		pending.WriteString(delta)
 		// 首段立即保存；后续沿用任务轮询节奏合并写入，避免逐 token 更新大字段。
@@ -230,9 +244,15 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 		return nil
 	}
 	if strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
+		if trace != nil {
+			trace.rawResponse = []any{}
+		}
 		for event, err := range sse.Read(reader, &sse.ReadConfig{MaxEventSize: int(a.Config.MaxGenerated * 2)}) {
 			if err != nil {
 				return generationResult{}, err
+			}
+			if trace != nil && event.Data != "" {
+				trace.rawResponse = append(trace.rawResponse.([]any), trace.payload(event.Data))
 			}
 			if event.Data == "[DONE]" {
 				finished = true
@@ -257,6 +277,9 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 		decoder.UseNumber()
 		if err = decoder.Decode(&payload); err != nil {
 			return generationResult{}, err
+		}
+		if trace != nil {
+			trace.rawResponse = trace.payload(string(jsonBytes(payload)))
 		}
 		if err = consume(payload, false); err != nil {
 			return generationResult{}, err

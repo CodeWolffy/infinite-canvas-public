@@ -70,7 +70,7 @@ func (a *App) enforceStorageQuota(ctx context.Context, q querier, userID string,
 		return err
 	}
 	var used int64
-	if err = q.QueryRow(ctx, "SELECT coalesce(sum(byte_size),0) FROM media_objects WHERE owner_id=$1 AND status IN ('ready','deleting')", userID).Scan(&used); err != nil {
+	if err = q.QueryRow(ctx, "SELECT coalesce(sum(byte_size),0) FROM media_objects WHERE owner_id=$1 AND status IN ('ready','uploading')", userID).Scan(&used); err != nil {
 		return err
 	}
 	if used+extra > integer(row["storageQuotaBytes"]) {
@@ -171,7 +171,7 @@ func (a *App) opsRoutes(admin *gin.RouterGroup) {
 	}))
 	admin.POST("/channels/check-all", respond(func(c *gin.Context) (any, error) {
 		result, err := a.DB.Exec(c.Request.Context(), `UPDATE channels SET next_check_at=now() WHERE status='active' AND (
-			coalesce(monitoring->>'modelId','')<>'' OR (jsonb_typeof(monitoring->'modelIds')='array' AND jsonb_array_length(monitoring->'modelIds')>0)
+			(jsonb_typeof(monitoring->'bindingIds')='array' AND jsonb_array_length(monitoring->'bindingIds')>0)
 			OR coalesce((monitoring->>'checkModels')::boolean,false)
 			OR (monitoring ? 'balanceThreshold' AND monitoring->>'balanceThreshold' NOT IN ('','null')))`)
 		if err != nil {
@@ -182,19 +182,6 @@ func (a *App) opsRoutes(admin *gin.RouterGroup) {
 		}
 		return gin.H{"queued": result.RowsAffected()}, nil
 	}))
-}
-
-func (m Monitoring) probeIDs() []string {
-	ids := append([]string{}, m.ModelIDs...)
-	if m.ModelID == "" {
-		return ids
-	}
-	for _, id := range ids {
-		if id == m.ModelID {
-			return ids
-		}
-	}
-	return append([]string{m.ModelID}, ids...)
 }
 
 func walletSummary(ctx context.Context, q querier, userID string, from, to *time.Time) (Row, error) {

@@ -10,6 +10,7 @@ import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
 type AssetFormValues = {
@@ -39,6 +40,10 @@ export default function AssetsPage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
+    const isAdmin = useUserStore((state) => state.user?.role === "admin");
+    const [saving, setSaving] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [importing, setImporting] = useState(false);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [page, setPage] = useState(1);
@@ -100,46 +105,68 @@ export default function AssetsPage() {
     };
 
     const saveAsset = async () => {
-        const values = await form.validateFields();
-        const base = {
-            title: values.title.trim(),
-            scope: values.scope,
-            coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
-            tags: values.tags || [],
-            source: values.source?.trim(),
-            note: values.note?.trim(),
-            metadata: editingAsset?.metadata || { source: "manual" },
-        };
-
-        if (values.kind === "text") {
-            const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
-        } else {
-            if (!imageDraft) {
-                message.error(t("assets.selectImage"));
-                return;
+        if (saving) return;
+        const session = useUserStore.getState().sessionVersion;
+        setSaving(true);
+        try {
+            const values = await form.validateFields();
+            assertCurrentSession(session);
+            const base = {
+                title: values.title.trim(),
+                scope: values.scope,
+                coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
+                tags: values.tags || [],
+                source: values.source?.trim(),
+                note: values.note?.trim(),
+                metadata: editingAsset?.metadata || { source: "manual" },
+            };
+            if (values.kind === "text") {
+                const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
+                await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
+            } else {
+                if (!imageDraft) {
+                    message.error(t("assets.selectImage"));
+                    return;
+                }
+                const asset = { ...base, kind: "image" as const, data: imageDraft };
+                await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
             }
-            const asset = { ...base, kind: "image" as const, data: imageDraft };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            assertCurrentSession(session);
+            message.success(editingAsset ? t("assets.updated") : t("assets.saved"));
+            setIsAssetOpen(false);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion !== session || (error && typeof error === "object" && "errorFields" in error)) return;
+            message.error(error instanceof Error ? error.message : "素材保存失败");
+        } finally {
+            if (useUserStore.getState().sessionVersion === session) setSaving(false);
         }
-
-        message.success(editingAsset ? t("assets.updated") : t("assets.saved"));
-        setIsAssetOpen(false);
     };
 
     const readCoverFile = async (file?: File) => {
         if (!file) return;
-        const dataUrl = await readFileAsDataUrl(file);
-        form.setFieldValue("coverUrl", dataUrl);
+        const session = useUserStore.getState().sessionVersion;
+        try {
+            const dataUrl = await readFileAsDataUrl(file);
+            assertCurrentSession(session);
+            form.setFieldValue("coverUrl", dataUrl);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "封面读取失败");
+        }
     };
 
     const readImageFile = async (file?: File) => {
         if (!file || !file.type.startsWith("image/")) return;
-        const image = await uploadImage(file);
-        const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
-        setImageDraft(draft);
-        if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);
-        if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+        const session = useUserStore.getState().sessionVersion;
+        try {
+            const image = await uploadImage(file);
+            assertCurrentSession(session);
+            const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
+            setImageDraft(draft);
+            if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);
+            if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "图片上传失败");
+        }
     };
 
     const copyAssetText = async (asset: Asset) => {
@@ -171,29 +198,40 @@ export default function AssetsPage() {
     };
 
     const importAssetZip = async (file?: File) => {
-        if (!file) return;
+        if (!file || importing) return;
+        const session = useUserStore.getState().sessionVersion;
+        setImporting(true);
         try {
             const importedAssets = await readAssetPackage(file);
-            importedAssets.filter((asset) => asset.kind === "text" || asset.kind === "image").forEach((asset) => {
-                const payload = { ...asset } as Record<string, unknown>;
-                delete payload.id;
-                delete payload.createdAt;
-                delete payload.updatedAt;
-                addAsset(payload as Parameters<typeof addAsset>[0]);
-            });
-            message.success(t("assets.imported", { count: importedAssets.length }));
-        } catch {
-            message.error(t("assets.importFailed"));
+            assertCurrentSession(session);
+            const results = await Promise.allSettled(importedAssets.map((asset) => addAsset({ ...asset, scope: "private" })));
+            assertCurrentSession(session);
+            const failed = results.filter((result) => result.status === "rejected");
+            const count = results.length - failed.length;
+            if (!failed.length) message.success(t("assets.imported", { count }));
+            else message.error(`已导入 ${count} 项，${failed.length} 项失败：${failed[0].reason instanceof Error ? failed[0].reason.message : t("assets.importFailed")}`);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : t("assets.importFailed"));
         } finally {
+            if (useUserStore.getState().sessionVersion === session) setImporting(false);
             if (assetInputRef.current) assetInputRef.current.value = "";
         }
     };
 
-    const confirmDelete = () => {
-        if (!deletingAsset) return;
-        removeAsset(deletingAsset.id);
-        message.success(t("assets.deleted"));
-        setDeletingAsset(null);
+    const confirmDelete = async () => {
+        if (!deletingAsset || deleting) return;
+        const session = useUserStore.getState().sessionVersion;
+        setDeleting(true);
+        try {
+            await removeAsset(deletingAsset.id);
+            assertCurrentSession(session);
+            message.success(t("assets.deleted"));
+            setDeletingAsset(null);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "素材删除失败");
+        } finally {
+            if (useUserStore.getState().sessionVersion === session) setDeleting(false);
+        }
     };
 
     return (
@@ -256,8 +294,10 @@ export default function AssetsPage() {
                                     type="button"
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
+                                    disabled={importing}
+                                    aria-busy={importing}
                                 >
-                                    {t("assets.import")}
+                                    {importing ? "导入中…" : t("assets.import")}
                                 </button>
                                 <button
                                     type="button"
@@ -296,9 +336,9 @@ export default function AssetsPage() {
                 </div>
             </main>
 
-            <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => setIsAssetOpen(false)} onOk={() => void saveAsset()} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
+            <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => { if (!saving) setIsAssetOpen(false); }} onOk={() => void saveAsset()} confirmLoading={saving} cancelButtonProps={{ disabled: saving }} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
                 <div className="grid gap-6 pt-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-                    <Form form={form} layout="vertical" requiredMark={false} initialValues={{ kind: "text", scope: "private", tags: [] }}>
+                    <Form form={form} layout="vertical" disabled={saving} requiredMark={false} initialValues={{ kind: "text", scope: "private", tags: [] }}>
                         <Form.Item name="kind" label={t("assets.type")}>
                             <Select
                                 options={[
@@ -309,7 +349,7 @@ export default function AssetsPage() {
                             />
                         </Form.Item>
                         <Form.Item name="scope" label="可见范围">
-                            <Select options={[{ label: "私人素材", value: "private" }, { label: "公共素材", value: "public" }]} />
+                            <Select options={[{ label: "私人素材", value: "private" }, ...(isAdmin ? [{ label: "公共素材", value: "public" }] : [])]} />
                         </Form.Item>
                         <Form.Item name="title" label={t("assets.fields.title")} rules={[{ required: true, message: t("assets.fields.titleRequired") }]}>
                             <Input size="large" placeholder={t("assets.fields.titlePlaceholder")} />
@@ -409,7 +449,7 @@ export default function AssetsPage() {
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
-            <Modal title={t("assets.deleteTitle")} open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={confirmDelete} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
+            <Modal title={t("assets.deleteTitle")} open={Boolean(deletingAsset)} onCancel={() => { if (!deleting) setDeletingAsset(null); }} onOk={confirmDelete} confirmLoading={deleting} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelButtonProps={{ disabled: deleting }} cancelText={t("common.cancel")}>
                 {t("assets.deleteConfirm", { name: deletingAsset?.title })}
             </Modal>
         </div>

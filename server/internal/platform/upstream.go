@@ -55,7 +55,14 @@ func (a *App) upstreamJSON(req *http.Request) (map[string]any, error) {
 		return nil, err
 	}
 	defer response.Body.Close()
+	trace := traceFrom(req.Context())
+	if trace != nil {
+		trace.status = response.StatusCode
+	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, a.Config.MaxGenerated*2+1))
+	if trace != nil {
+		trace.rawResponse = trace.payload(string(raw))
+	}
 	if err != nil {
 		return nil, err
 	}

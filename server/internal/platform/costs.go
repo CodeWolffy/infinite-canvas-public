@@ -199,7 +199,7 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 		}
 		// 实付与成本使用同一筛选范围归集，按任务去重避免故障转移的多条成本记录重复计入实付。
 		var paid int64
-		if err = a.DB.QueryRow(ctx, `SELECT coalesce(-sum(t.billed_micros),0)::bigint FROM generation_tasks t
+		if err = a.DB.QueryRow(ctx, `SELECT coalesce(sum(t.billed_micros),0)::bigint FROM generation_tasks t
 			WHERE ($1::timestamptz IS NULL OR t.finished_at>=$1) AND ($2::timestamptz IS NULL OR t.finished_at<=$2)
 			AND ($4='' OR t.model_id::text=$4) AND ($5='' OR t.channel_id::text=$5)
 			AND ($3='' OR EXISTS(SELECT 1 FROM upstream_cost_entries e2 WHERE e2.task_id=t.id AND e2.source=$3))

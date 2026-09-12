@@ -1,10 +1,12 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"sort"
 	"strings"
@@ -18,8 +20,7 @@ import (
 
 type Monitoring struct {
 	IntervalMinutes  int            `json:"intervalMinutes" binding:"min=0"`
-	ModelID          string         `json:"modelId" binding:"omitempty,uuid"`
-	ModelIDs         []string       `json:"modelIds,omitempty" binding:"omitempty,dive,uuid"`
+	BindingIDs       []string       `json:"bindingIds,omitempty" binding:"omitempty,dive,uuid"`
 	Prompt           string         `json:"prompt"`
 	Parameters       map[string]any `json:"parameters"`
 	CheckModels      bool           `json:"checkModels"`
@@ -105,7 +106,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		if len(input.probeIDs()) > 0 && strings.TrimSpace(input.Prompt) == "" {
+		if len(input.BindingIDs) > 0 && strings.TrimSpace(input.Prompt) == "" {
 			return nil, problem(400, "invalid_probe", "请填写生成检测的提示词")
 		}
 		if input.BalanceThreshold != nil {
@@ -114,17 +115,17 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 				return nil, problem(400, "invalid_balance", "余额提醒阈值必须为非负数")
 			}
 		}
-		if input.IntervalMinutes > 0 && len(input.probeIDs()) == 0 && !input.CheckModels && input.BalanceThreshold == nil {
+		if input.IntervalMinutes > 0 && len(input.BindingIDs) == 0 && !input.CheckModels && input.BalanceThreshold == nil {
 			return nil, problem(400, "invalid_probe", "请至少选择一个检测项目")
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if len(input.probeIDs()) > 0 {
+			if len(input.BindingIDs) > 0 {
 				var count int
-				if err := tx.QueryRow(ctx, "SELECT count(DISTINCT model_id) FROM model_channels WHERE channel_id=$1 AND model_id=ANY($2::text[]::uuid[])", id, input.probeIDs()).Scan(&count); err != nil {
+				if err := tx.QueryRow(ctx, "SELECT count(*) FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.id=ANY($2::text[]::uuid[]) AND m.deleted_at IS NULL", id, input.BindingIDs).Scan(&count); err != nil {
 					return err
 				}
-				if count != len(input.probeIDs()) {
+				if count != len(input.BindingIDs) {
 					return problem(400, "invalid_probe", "请先将检测模型绑定到此渠道")
 				}
 			}
@@ -155,7 +156,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 			}
 			var config Monitoring
 			_ = json.Unmarshal(jsonBytes(row["monitoring"]), &config)
-			if len(config.probeIDs()) == 0 && !config.CheckModels && config.BalanceThreshold == nil {
+			if len(config.BindingIDs) == 0 && !config.CheckModels && config.BalanceThreshold == nil {
 				return problem(400, "invalid_probe", "请先配置检测项目")
 			}
 			if _, err = tx.Exec(ctx, "UPDATE channels SET next_check_at=now() WHERE id=$1", id); err != nil {
@@ -182,73 +183,55 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		_, err = a.DB.Exec(c.Request.Context(), "UPDATE channels SET model_changes=NULL WHERE id=$1", id)
 		return nil, err
 	}))
-	admin.POST("/playground/test", respond(func(c *gin.Context) (any, error) {
-		input, err := body[struct {
-			ChannelID  string         `json:"channelId" binding:"required"`
-			Model      string         `json:"model" binding:"required"`
-			Capability string         `json:"capability"`
-			Prompt     string         `json:"prompt" binding:"required"`
-			Parameters map[string]any `json:"parameters"`
-		}](c)
-		if err != nil {
-			return nil, err
-		}
-		if !validID(input.ChannelID) {
-			return nil, problem(400, "invalid_channel", "渠道编号不正确")
-		}
-		ctx := c.Request.Context()
-		row, err := one(ctx, a.DB, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL", input.ChannelID)
-		if err != nil {
-			return nil, problem(404, "channel_not_found", "渠道不存在或已被删除")
-		}
-		ch, err := a.channelFromRow(row)
-		if err != nil {
-			return nil, err
-		}
-		ch.UpstreamModel = strings.TrimSpace(input.Model)
-		cap := strings.TrimSpace(input.Capability)
-		if cap == "" {
-			cap = "text"
-		}
-		params := input.Parameters
-		if params == nil {
-			params = map[string]any{}
-		}
-		task := Row{
-			"id":         uuid.NewString(),
-			"run":        1,
-			"probe":      true,
-			"capability": cap,
-			"prompt":     strings.TrimSpace(input.Prompt),
-			"parameters": params,
-		}
-		timeout := time.Duration(ch.TimeoutMS) * time.Millisecond
-		if timeout <= 0 || timeout > 60*time.Second {
-			timeout = 60 * time.Second
-		}
-		testCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
+	admin.POST("/playground/test", respond(a.playgroundTest))
+}
 
-		started := time.Now()
-		res, err := a.generate(testCtx, ch, task)
-		durationMs := time.Since(started).Milliseconds()
+func (a *App) runProbe(ctx context.Context, ch channel, task Row) (result generationResult, err error) {
+	id := str(task["id"])
+	deadline, _ := ctx.Deadline()
+	if _, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,user_id,model_id,channel_id,capability,cost_config,note,monitor_token,deadline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", id, task["userId"], task["modelId"], ch.ID, task["capability"], jsonBytes(ch.CostConfig), task["note"], task["monitorToken"], deadline); err != nil {
+		return result, err
+	}
+	defer func() {
+		status := "succeeded"
 		if err != nil {
-			return gin.H{
-				"ok":         false,
-				"durationMs": durationMs,
-				"error":      err.Error(),
-				"category":   classify(err).Category,
-			}, nil
+			status = "failed"
 		}
-		return gin.H{
-			"ok":            true,
-			"durationMs":    durationMs,
-			"capability":    cap,
-			"upstreamModel": ch.UpstreamModel,
-			"text":          res.Text,
-			"outputTokens":  res.CompletionTokens,
-		}, nil
-	}))
+		_, saveErr := a.DB.Exec(context.WithoutCancel(ctx), "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE id=$1 AND status='running'", id, status)
+		if err == nil {
+			err = saveErr
+		}
+	}()
+	result, err = a.generate(ctx, ch, task)
+	for err == nil && result.Pending {
+		task["upstreamTaskId"] = result.UpstreamID
+		timer := time.NewTimer(queuePoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+		case <-timer.C:
+			result, err = a.generate(ctx, ch, task)
+		}
+	}
+	if err != nil {
+		return result, err
+	}
+	if task["capability"] == "audio" && ch.CostConfig["second"] != nil {
+		result.DurationSeconds, _ = audioDuration(ctx, result.Data)
+	}
+	if err = a.recordCost(context.WithoutCancel(ctx), id, result, object(task["parameters"])["seconds"], ch.CostConfig); err != nil {
+		return result, err
+	}
+	if task["capability"] != "text" && len(result.Data) == 0 {
+		return result, &upstreamError{Category: "invalid_result", Message: "上游未返回媒体结果"}
+	}
+	if task["capability"] == "image" {
+		if _, _, err = image.DecodeConfig(bytes.NewReader(result.Data)); err != nil {
+			return result, &upstreamError{Category: "invalid_result", Message: "上游未返回可解码的图片"}
+		}
+	}
+	return result, ctx.Err()
 }
 
 func modelChanges(previous any, current []string) Row {
@@ -303,10 +286,10 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	var balance any
 	balanceStatus := str(row["balanceStatus"])
 	var failure *upstreamError
-	if probes := config.probeIDs(); len(probes) > 0 {
+	if probes := config.BindingIDs; len(probes) > 0 {
 		details := []string{}
-		for i, modelID := range probes {
-			binding, err := one(ctx, a.DB, "SELECT m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL ORDER BY b.priority DESC, b.created_at ASC LIMIT 1", modelID, id)
+		for i, bindingID := range probes {
+			binding, err := one(ctx, a.DB, "SELECT b.model_id,m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL", bindingID, id)
 			if err != nil {
 				status = "failed"
 				details = append(details, "检测模型绑定已失效")
@@ -319,29 +302,8 @@ func (a *App) runMonitor(root context.Context, row Row) {
 			if i > 0 {
 				costID = uuid.NewString()
 			}
-			task := Row{"id": costID, "run": 1, "probe": true, "capability": binding["capability"], "prompt": config.Prompt, "parameters": config.Parameters}
-			_, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,model_id,channel_id,capability,cost_config,note,monitor_token) VALUES($1,$2,$3,$4,$5,'渠道生成检测',$6)", costID, modelID, id, binding["capability"], jsonBytes(ch.CostConfig), token)
-			var result generationResult
-			if err == nil {
-				result, err = a.generate(ctx, ch, task)
-			}
-			for err == nil && result.Pending {
-				task["upstreamTaskId"] = result.UpstreamID
-				timer := time.NewTimer(queuePoll)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					err = ctx.Err()
-				case <-timer.C:
-					result, err = a.generate(ctx, ch, task)
-				}
-			}
-			if err == nil && binding["capability"] == "audio" && ch.CostConfig["second"] != nil {
-				result.DurationSeconds, _ = audioDuration(ctx, result.Data)
-			}
-			if err == nil {
-				err = a.recordCost(ctx, costID, result, config.Parameters["seconds"], ch.CostConfig)
-			}
+			task := Row{"id": costID, "run": 1, "probe": true, "modelId": binding["modelId"], "monitorToken": token, "note": "渠道生成检测", "capability": binding["capability"], "prompt": config.Prompt, "parameters": config.Parameters}
+			_, err = a.runProbe(ctx, ch, task)
 			if err != nil {
 				status = "failed"
 				failure = classify(err)
@@ -349,7 +311,6 @@ func (a *App) runMonitor(root context.Context, row Row) {
 			} else {
 				details = append(details, str(binding["upstreamModel"])+" 生成成功")
 			}
-			_, _ = a.DB.Exec(root, "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE id=$1", costID, map[bool]string{true: "succeeded", false: "failed"}[err == nil])
 		}
 		if len(details) > 0 {
 			detail["generation"] = strings.Join(details, "；")
@@ -417,7 +378,7 @@ func (a *App) runMonitor(root context.Context, row Row) {
 				return err
 			}
 		}
-		if status == "healthy" && len(config.probeIDs()) > 0 {
+		if status == "healthy" && len(config.BindingIDs) > 0 {
 			if _, err = tx.Exec(root, "UPDATE channels SET last_success_at=now(),last_error_code=NULL,cooldown_until=NULL WHERE id=$1 AND (last_failure_at IS NULL OR last_failure_at<$2)", id, started); err != nil {
 				return err
 			}

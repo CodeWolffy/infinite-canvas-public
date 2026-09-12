@@ -79,7 +79,7 @@ CREATE TABLE model_channels (
 CREATE TABLE media_objects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), owner_id uuid NOT NULL REFERENCES users(id), object_key text NOT NULL UNIQUE,
     original_name varchar(255) NOT NULL, mime_type varchar(80) NOT NULL, byte_size bigint NOT NULL,
-    width integer, height integer, sha256 text NOT NULL, status text NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','deleting')),
+    width integer, height integer, sha256 text NOT NULL, status text NOT NULL DEFAULT 'ready' CHECK (status IN ('uploading','ready','deleting')),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX media_owner_idx ON media_objects(owner_id,created_at DESC);

@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-import { randomId } from "@/lib/utils";
 import * as assetApi from "@/services/api/assets";
 import { mediaId, mediaUrl } from "@/services/api/media";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
@@ -37,8 +36,8 @@ type AssetStore = {
     assets: Asset[];
     hydrateAssets: (userId: string, force?: boolean) => Promise<void>;
     addAsset: (asset: AssetDraft) => Promise<string>;
-    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
-    removeAsset: (id: string) => void;
+    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => Promise<void>;
+    removeAsset: (id: string) => Promise<void>;
     replaceAssets: (assets: Asset[]) => void;
     cleanupImages: (extra?: unknown) => void;
 };
@@ -87,7 +86,7 @@ function normalizeAsset(record: assetApi.AssetRecord): Asset {
         coverUrl: url,
         data: {
             dataUrl: url,
-            storageKey: mediaId(record.mediaId || ""),
+            storageKey: `image:${record.mediaId}`,
             width: numberMetadata(metadata, "width"),
             height: numberMetadata(metadata, "height"),
             bytes: numberMetadata(metadata, "bytes"),
@@ -139,39 +138,24 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
     },
     addAsset: async (draft) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
-        const temporaryId = `pending-${randomId()}`;
-        const now = new Date().toISOString();
-        set((state) => ({ assets: [{ ...draft, id: temporaryId, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
-        try {
-            const record = await assetApi.createAsset(assetInput(draft));
-            assertCurrentSession(sessionVersion);
-            set((state) => ({ assets: state.assets.map((asset) => (asset.id === temporaryId ? normalizeAsset(record) : asset)) }));
-            return record.id;
-        } catch (error) {
-            if (useUserStore.getState().sessionVersion === sessionVersion) set((state) => ({ assets: state.assets.filter((asset) => asset.id !== temporaryId) }));
-            throw error;
-        }
+        const record = await assetApi.createAsset(assetInput(draft));
+        assertCurrentSession(sessionVersion);
+        set((state) => ({ assets: [normalizeAsset(record), ...state.assets] }));
+        return record.id;
     },
-    updateAsset: (id, patch) => {
+    updateAsset: async (id, patch) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
         const current = get().assets.find((asset) => asset.id === id);
-        if (!current || current.editable === false) return;
-        const next = { ...current, ...patch, updatedAt: new Date().toISOString() } as Asset;
-        set((state) => ({ assets: state.assets.map((asset) => (asset.id === id ? next : asset)) }));
-        if (!id.startsWith("pending-")) void assetApi.updateAsset(id, assetInput(next)).then((record) => {
-            if (useUserStore.getState().sessionVersion === sessionVersion) set((state) => ({ assets: state.assets.map((asset) => (asset.id === id ? normalizeAsset(record) : asset)) }));
-        }).catch(() => {
-            if (useUserStore.getState().sessionVersion === sessionVersion) set((state) => ({ assets: state.assets.map((asset) => (asset.id === id ? current : asset)) }));
-        });
+        if (!current || current.editable === false) throw new Error("素材不存在或无权编辑");
+        const record = await assetApi.updateAsset(id, assetInput({ ...current, ...patch } as Asset));
+        assertCurrentSession(sessionVersion);
+        set((state) => ({ assets: state.assets.map((asset) => (asset.id === id ? normalizeAsset(record) : asset)) }));
     },
-    removeAsset: (id) => {
+    removeAsset: async (id) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
-        const current = get().assets.find((asset) => asset.id === id);
-        if (!current || current.editable === false) return;
+        await assetApi.deleteAsset(id);
+        assertCurrentSession(sessionVersion);
         set((state) => ({ assets: state.assets.filter((asset) => asset.id !== id) }));
-        if (!id.startsWith("pending-")) void assetApi.deleteAsset(id).catch(() => {
-            if (useUserStore.getState().sessionVersion === sessionVersion) set((state) => ({ assets: [current, ...state.assets] }));
-        });
     },
     replaceAssets: (assets) => set({ assets }),
     cleanupImages: () => {},

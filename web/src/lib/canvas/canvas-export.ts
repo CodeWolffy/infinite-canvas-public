@@ -7,8 +7,10 @@ import { getImageBlob } from "@/services/image-storage";
 import type { CanvasExportAsset, CanvasExportFile } from "@/types/canvas-export";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export async function exportCanvasProjects(projects: CanvasProject[], fileName = i18n.t("canvas.export.defaultProjectName")) {
+    const session = useUserStore.getState().sessionVersion;
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {
@@ -27,11 +29,14 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
     );
 
     const data: CanvasExportFile = { app: "infinite-canvas", version: 3, exportedAt: new Date().toISOString(), projects: exportedProjects };
+    assertCurrentSession(session);
     const zip = await createZip([{ name: "projects.json", data: JSON.stringify(data, null, 2) }, ...zipFiles]);
+    assertCurrentSession(session);
     saveAs(zip, `${safeFileName(fileName)}.zip`);
 }
 
 export async function exportCanvasNodes(nodes: CanvasNodeData[], fileName = i18n.t("canvas.export.defaultNodesName")) {
+    const session = useUserStore.getState().sessionVersion;
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const used = new Set<string>();
     const uniqueName = (base: string, ext: string) => {
@@ -60,13 +65,15 @@ export async function exportCanvasNodes(nodes: CanvasNodeData[], fileName = i18n
         }),
     );
 
+    assertCurrentSession(session);
     const zip = await createZip(zipFiles);
+    assertCurrentSession(session);
     saveAs(zip, `${safeFileName(fileName)}.zip`);
 }
 
 function collectStorageKeys(value: unknown, keys = new Set<string>()) {
     if (!value || typeof value !== "object") return [...keys];
-    if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.includes(":")) keys.add(value.storageKey);
+    if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey) keys.add(value.storageKey);
     Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectStorageKeys(child, keys)) : collectStorageKeys(item, keys)));
     return [...keys];
 }

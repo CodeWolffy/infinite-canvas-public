@@ -11,6 +11,7 @@ import (
 
 	"github.com/alexedwards/argon2id"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
@@ -89,7 +90,10 @@ func (a *App) secondFactor(ctx context.Context, tx pgx.Tx, userID, code string, 
 		if _, err = tx.Exec(ctx, "UPDATE sessions SET revoked_at=now() WHERE user_id=$1", userID); err != nil {
 			return err
 		}
-		return a.audit(ctx, tx, userID, "auth.mfa_recovery", userID, Row{})
+		if err = a.audit(ctx, tx, userID, "auth.mfa_recovery", userID, Row{}); err != nil {
+			return err
+		}
+		return a.notifySecurity(ctx, tx, userID, uuid.NewString(), "恢复码已使用，两步验证已关闭", "账号已通过恢复码登录，其他设备会话已撤销。请前往账号安全重新绑定验证器；如果不是本人操作，请立即修改密码。")
 	}
 	secret, err := a.unseal(str(row["encryptedTotpSecret"]))
 	if err != nil {

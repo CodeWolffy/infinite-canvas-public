@@ -644,6 +644,7 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 	return err
 }
 func (a *App) recoverTasks(ctx context.Context) {
+	_, _ = a.DB.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE task_id IS NULL AND status='running' AND deadline<now()")
 	tasks, err := rows(ctx, a.DB, "SELECT * FROM generation_tasks WHERE status='running' AND deadline<now() ORDER BY deadline LIMIT 100")
 	if err != nil {
 		return
@@ -678,7 +679,7 @@ func (a *App) cleanup(ctx context.Context) {
 	_, _ = a.DB.Exec(ctx, "DELETE FROM channel_checks WHERE created_at<now()-($1*interval '1 day')", checkRetentionDays)
 	_, _ = a.DB.Exec(ctx, "DELETE FROM notifications WHERE created_at<now()-($1*interval '1 day')", notificationRetentionDays)
 	_, _ = a.DB.Exec(ctx, "DELETE FROM audit_logs WHERE created_at<now()-($1*interval '1 day') AND action<>'cost.reconciled'", auditRetentionDays)
-	items, err := rows(ctx, a.DB, "SELECT id FROM media_objects WHERE created_at<now()-($1*interval '1 day') AND NOT EXISTS(SELECT 1 FROM media_references WHERE media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM assets WHERE media_id=media_objects.id)", a.Config.OrphanDays)
+	items, err := rows(ctx, a.DB, "SELECT id FROM media_objects WHERE (status='deleting' OR created_at<now()-($1*interval '1 day')) AND NOT EXISTS(SELECT 1 FROM media_references WHERE media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM assets WHERE media_id=media_objects.id)", a.Config.OrphanDays)
 	if err != nil {
 		return
 	}

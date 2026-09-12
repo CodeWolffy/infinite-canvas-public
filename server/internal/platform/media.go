@@ -12,6 +12,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -138,15 +139,20 @@ func (a *App) storeMedia(ctx context.Context, userID string, data []byte, name s
 			return err
 		}
 		var err error
-		row, err = one(ctx, tx, "INSERT INTO media_objects(id,owner_id,object_key,original_name,mime_type,byte_size,width,height,sha256,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'deleting') RETURNING *", id, userID, key, name, mediaType, len(data), width, height, hex.EncodeToString(sum[:]))
+		row, err = one(ctx, tx, "INSERT INTO media_objects(id,owner_id,object_key,original_name,mime_type,byte_size,width,height,sha256,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uploading') RETURNING *", id, userID, key, name, mediaType, len(data), width, height, hex.EncodeToString(sum[:]))
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if row["status"] != "ready" {
+			if err := a.discardMedia(context.WithoutCancel(ctx), id, key); err != nil {
+				slog.Warn("上传残留文件等待清理", "media", id)
+			}
+		}
+	}()
 	if _, err = a.S3.PutObject(ctx, a.Config.Bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: mediaType}); err != nil {
-		// 上传明确失败时立即回收占位记录，避免长期占用存储配额。
-		_, _ = a.DB.Exec(ctx, "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", id)
 		return nil, err
 	}
 	if _, err = a.DB.Exec(ctx, "UPDATE media_objects SET status='ready' WHERE id=$1", id); err != nil {
@@ -155,6 +161,19 @@ func (a *App) storeMedia(ctx context.Context, userID string, data []byte, name s
 	row["status"] = "ready"
 	return row, nil
 }
+
+func (a *App) discardMedia(ctx context.Context, id, key string) error {
+	// 先释放配额；对象删除失败时保留记录，由现有清理任务继续回收。
+	if _, err := a.DB.Exec(ctx, "UPDATE media_objects SET status='deleting' WHERE id=$1", id); err != nil {
+		return err
+	}
+	if err := a.S3.RemoveObject(ctx, a.Config.Bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return err
+	}
+	_, err := a.DB.Exec(ctx, "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", id)
+	return err
+}
+
 func publicMedia(row Row) Row {
 	return Row{"id": row["id"], "url": "/api/media/" + str(row["id"]), "mimeType": row["mimeType"], "byteSize": row["byteSize"], "bytes": row["byteSize"], "width": row["width"], "height": row["height"], "originalName": row["originalName"], "createdAt": row["createdAt"]}
 }

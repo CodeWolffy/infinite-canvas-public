@@ -414,7 +414,11 @@ func TestMonitoringChangesNotificationsAndCostReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	threshold := "2"
-	config := Monitoring{ModelID: model, Prompt: "health", CheckModels: true, BalanceThreshold: &threshold}
+	var bindingID string
+	if err := a.DB.QueryRow(ctx, "SELECT id FROM model_channels WHERE model_id=$1 AND channel_id=$2", model, channel).Scan(&bindingID); err != nil {
+		t.Fatal(err)
+	}
+	config := Monitoring{BindingIDs: []string{bindingID}, Prompt: "health", CheckModels: true, BalanceThreshold: &threshold}
 	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2 WHERE id=$1", channel, jsonBytes(config)); err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +640,7 @@ func TestMetadataMonitoringRespectsChannelSlot(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); fmt.Fprint(w, `{"data":[]}`) }))
 	defer upstream.Close()
 	_, id := capabilityModel(t, a, "text", upstream.URL, 0)
-	row, err := one(ctx, a.DB, "UPDATE channels SET monitoring=$2,monitor_token=$3,monitor_deadline=now()+interval '480 seconds' WHERE id=$1 RETURNING *", id, jsonBytes(Monitoring{CheckModels: true}), uuid.NewString())
+	row, err := one(ctx, a.DB, "UPDATE channels SET max_concurrency=1,monitoring=$2,monitor_token=$3,monitor_deadline=now()+interval '480 seconds' WHERE id=$1 RETURNING *", id, jsonBytes(Monitoring{CheckModels: true}), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +732,14 @@ func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
 		t.Fatalf("check-all: %d %s", queued.Code, queued.Body.String())
 	}
 
-	config := Monitoring{ModelIDs: []string{model, other}, Prompt: "probe"}
+	probeBindings, err := rows(ctx, a.DB, "SELECT id FROM model_channels WHERE channel_id=$1 AND model_id=ANY($2::text[]::uuid[])", channel, []string{model, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Monitoring{Prompt: "probe"}
+	for _, binding := range probeBindings {
+		config.BindingIDs = append(config.BindingIDs, str(binding["id"]))
+	}
 	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2 WHERE id=$1", channel, jsonBytes(config)); err != nil {
 		t.Fatal(err)
 	}
@@ -849,8 +860,10 @@ func TestStorageQuotaRejectsUploadAndGeneration(t *testing.T) {
 func TestMultiUpstreamModelBindings(t *testing.T) {
 	ctx := context.Background()
 	a := testApp(t)
-	admin, adminCookie := testAdmin(t, a)
-	_ = admin
+	admin, adminCookie := testUser(t, a, 0)
+	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
+		t.Fatal(err)
+	}
 	model, channel := capabilityModel(t, a, "image", "https://example.invalid", moneyScale)
 	router := a.Router()
 
@@ -870,13 +883,14 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 	if listResp.Code != 200 {
 		t.Fatalf("list bindings failed: %d %s", listResp.Code, listResp.Body.String())
 	}
-	bindings := responseRows(t, listResp, "bindings")
+	bindings, _ := responseRow(t, listResp)["bindings"].([]any)
 	if len(bindings) < 2 {
 		t.Fatalf("expected at least 2 bindings, got %d", len(bindings))
 	}
 
 	var flareBinding, sunburstBinding Row
-	for _, b := range bindings {
+	for _, item := range bindings {
+		b := object(item)
 		if str(b["upstreamModel"]) == "gpt-image-2.5-flare" {
 			flareBinding = b
 		} else if str(b["upstreamModel"]) == "gpt-image-2.5-sunburst" {
@@ -889,18 +903,22 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 	if str(flareBinding["id"]) == "" || str(sunburstBinding["id"]) == "" || str(flareBinding["id"]) == str(sunburstBinding["id"]) {
 		t.Fatalf("binding ids should be unique: flare=%s, sunburst=%s", str(flareBinding["id"]), str(sunburstBinding["id"]))
 	}
+	monitor := testRequest(router, "PUT", "/api/admin/channels/"+channel+"/monitoring", Row{"bindingIds": []string{str(flareBinding["id"]), str(sunburstBinding["id"])}, "prompt": "probe"}, adminCookie)
+	if monitor.Code != http.StatusNoContent {
+		t.Fatalf("monitor binding ids: %d %s", monitor.Code, monitor.Body.String())
+	}
 
 	// 3. 独立配置上游成本
 	flareCost := testRequest(router, "PUT", "/api/admin/models/"+model+"/bindings/"+str(flareBinding["id"])+"/cost", map[string]string{
 		"fixed": "0.05",
 	}, adminCookie)
-	if flareCost.Code != 200 {
+	if flareCost.Code != http.StatusNoContent {
 		t.Fatalf("set flare cost: %d %s", flareCost.Code, flareCost.Body.String())
 	}
 	sunburstCost := testRequest(router, "PUT", "/api/admin/models/"+model+"/bindings/"+str(sunburstBinding["id"])+"/cost", map[string]string{
 		"fixed": "0.20",
 	}, adminCookie)
-	if sunburstCost.Code != 200 {
+	if sunburstCost.Code != http.StatusNoContent {
 		t.Fatalf("set sunburst cost: %d %s", sunburstCost.Code, sunburstCost.Body.String())
 	}
 
@@ -931,14 +949,15 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 
 	// 5. 精确删除单条绑定（例如移除 flare），验证 sunburst 依然保留
 	delResp := testRequest(router, "DELETE", "/api/admin/models/"+model+"/bindings/"+str(flareBinding["id"]), nil, adminCookie)
-	if delResp.Code != 200 {
+	if delResp.Code != http.StatusNoContent {
 		t.Fatalf("delete binding: %d %s", delResp.Code, delResp.Body.String())
 	}
 	remainingList := testRequest(router, "GET", "/api/admin/models/"+model+"/channels", nil, adminCookie)
-	remaining := responseRows(t, remainingList, "bindings")
+	remaining, _ := responseRow(t, remainingList)["bindings"].([]any)
 	hasFlare := false
 	hasSunburst := false
-	for _, b := range remaining {
+	for _, item := range remaining {
+		b := object(item)
 		if str(b["upstreamModel"]) == "gpt-image-2.5-flare" {
 			hasFlare = true
 		}

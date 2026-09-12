@@ -76,11 +76,12 @@ test("private canvas details and failed asset deletion cannot cross accounts", a
     assetApi.deleteAsset = () => deletion.promise;
     assets.getState().replaceAssets([{ id: "A-asset", title: "private A text", editable: true }]);
     const loading = canvas.getState().loadProject("A-project");
-    assets.getState().removeAsset("A-asset");
+    const removing = assert.rejects(assets.getState().removeAsset("A-asset"), /network failure/);
     await login("B");
     assets.getState().replaceAssets([{ id: "B-asset" }]);
     detail.resolve(record("A-project", "private A canvas"));
     deletion.reject(new Error("network failure"));
+    await removing;
     assert.equal(await loading, null);
     await tick();
     assert.equal(canvas.getState().projects.length, 0);

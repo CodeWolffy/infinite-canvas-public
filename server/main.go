@@ -36,6 +36,15 @@ var monitorCostLink string
 //go:embed migrations/008_multi_upstream_models.sql
 var multiUpstreamModels string
 
+//go:embed migrations/009_soft_delete_channels.sql
+var softDeleteChannels string
+
+//go:embed migrations/010_media_upload_state.sql
+var mediaUploadState string
+
+//go:embed migrations/011_probe_deadlines.sql
+var probeDeadlines string
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
 		response, err := http.Get("http://127.0.0.1:3001/health")
@@ -50,7 +59,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels})
+	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines})
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)

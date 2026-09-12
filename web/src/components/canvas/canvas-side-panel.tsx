@@ -332,6 +332,17 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
 
     const groups = useMemo(() => ASSET_GROUPS.map((group) => ({ ...group, items: filtered.filter((asset) => asset.kind === group.kind) })).filter((group) => group.items.length > 0), [filtered]);
 
+    const handleRemove = async (id: string) => {
+        const session = useUserStore.getState().sessionVersion;
+        try {
+            await removeAsset(id);
+            assertCurrentSession(session);
+            message.success(t("canvas.sidePanel.assetRemoved"));
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "素材删除失败");
+        }
+    };
+
     const handleFiles = async (fileList: FileList | null) => {
         const session = useUserStore.getState().sessionVersion;
         const files = Array.from(fileList || []);
@@ -418,7 +429,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                                     {isCollapsed ? null : (
                                         <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
                                             {group.items.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => (removeAsset(asset.id), message.success(t("canvas.sidePanel.assetRemoved")))} />
+                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => handleRemove(asset.id)} />
                                             ))}
                                         </div>
                                     )}
@@ -434,7 +445,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     );
 });
 
-function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
+function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => Promise<void> }) {
     const { t } = useTranslation();
     return (
         <div title={asset.title} className="group relative aspect-square overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>

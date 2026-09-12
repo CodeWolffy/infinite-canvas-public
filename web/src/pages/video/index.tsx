@@ -16,7 +16,7 @@ import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
-import { useAssetStore } from "@/stores/use-asset-store";
+import { useSaveToAssets } from "@/hooks/use-save-to-assets";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -77,7 +77,7 @@ export default function VideoPage() {
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
-    const addAsset = useAssetStore((state) => state.addAsset);
+    const addAsset = useSaveToAssets();
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -249,7 +249,6 @@ export default function VideoPage() {
             data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
             metadata: { source: "video-page", prompt },
         });
-        message.success(t("common.addedToAssets"));
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {

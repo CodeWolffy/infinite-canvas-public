@@ -203,12 +203,15 @@ export type PlaygroundTestResult = {
     capability?: string;
     upstreamModel?: string;
     text?: string;
+    image?: string;
     outputTokens?: number;
-    firstTokenMs?: number;
+    firstTokenMs?: number | null;
+    httpStatus?: number;
+    rawResponse?: unknown;
     error?: string;
     category?: string;
 };
 
-export async function testChannelPlayground(body: PlaygroundTestParams) {
-    return await apiRequest<PlaygroundTestResult>("/api/admin/playground/test", { method: "POST", body });
+export async function testChannelPlayground(body: PlaygroundTestParams, signal?: AbortSignal) {
+    return await apiRequest<PlaygroundTestResult>("/api/admin/playground/test", { method: "POST", body, signal });
 }

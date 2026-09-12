@@ -66,7 +66,7 @@ func testApp(t *testing.T) *App {
 	if _, err = db.Exec(ctx, string(ddl)); err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql"} {
+	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql"} {
 		extra, err := os.ReadFile(migration)
 		if err != nil {
 			t.Fatal(err)

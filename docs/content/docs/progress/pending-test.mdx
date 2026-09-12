@@ -9,6 +9,24 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+### Code review fixes awaiting acceptance
+
+- Startup migrations now include channel soft deletion, the distinct uploading state, and probe deadlines (`009`–`011`). Verify both an empty database and an existing Go database, including channel/model access after startup.
+- Cost totals must show positive user payments: a known upstream cost of ¥1 and payment of ¥0.6 should produce a ¥0.4 subsidy.
+- Canceling an upload or failing to mark it ready must release its quota using a live cleanup context. If object deletion fails, retain a deleting record for the existing cleanup job; active uploads must remain reserved and untouched by that job.
+- Active monitoring now selects and stores `bindingIds`. Re-select and save existing monitoring configurations. Verify two upstream bindings of the same platform model are probed independently with their own cost settings, and foreign-channel bindings are rejected.
+- Playground requests share channel slots and wait through congestion or cooldown; execution uses the configured channel timeout without the former 60-second cap. Canceling or leaving the page stops the request without replaying it. Completed, failed, and interrupted calls must retain separate cost records without changing the user's balance; ambiguous/unconfigured costs remain unknown. After a restart, unfinished probe records expire at their original deadline.
+- Playground results must show the actual HTTP status and native response JSON or SSE event payloads; text includes first visible text latency and images include a preview. Channel credentials must be redacted, and large raw responses should be formatted only when expanded or copied.
+- Asset creation, editing, deletion, and import must wait for server success; failures retain inputs and show an error. Prompt-library and video saves, plus canvas-side deletion, follow the same rule. ZIP imports keep text, image, video, and audio assets as private copies and report the actual successful count.
+- Images inserted from the asset library must be included in exported canvas ZIPs and survive import into another account. Account changes during file preparation, saving, or export must discard stale callbacks.
+- Recovery-code login must persist a specific MFA-disabled/rebind notice and queue email when enabled, in the same transaction as consuming the code and revoking sessions.
+
+Local Docker validation passed: both production images build successfully, all 36 backend test groups (39 cases including subtests) and 52 frontend regression tests pass with no skips. The existing local database upgraded from version 8 to 11 while preserving its volumes and credentials; PostgreSQL, MinIO, Redis, and local configuration were backed up first.
+
+Seven API scenarios passed against isolated dependencies and mock upstreams, covering authentication/password change, multiple bindings, text/image diagnostics, native responses and redaction, queue cancellation, media/asset operations, and cost accounting. Browser checks confirmed text output, the HTTP 201 image preview, and redaction; asset inputs survived a simulated API outage, then saved successfully and remained after reload.
+
+Validation also fixed an unsupported native-button `loading` prop, missing test helpers, the concurrency fixture, and 204 assertions for empty responses. Nginx no longer treats the `/assets` page as a static directory or redirects it to internal port 3000; direct page access, reload, and static bundles work. Real upstreams, merchant payments, SMTP, production HTTPS proxies, backup restoration, and sustained load remain pending.
+
 ### Backend capabilities implemented in this iteration
 
 - Frontend page layout and column allocation optimizations:

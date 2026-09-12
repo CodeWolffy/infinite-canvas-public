@@ -1,14 +1,20 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Tag, Tooltip } from "antd";
+import { Alert, App, Button, Collapse, Form, Image, Input, InputNumber, Radio, Select, Tag, Tooltip } from "antd";
 import { CheckCircle2, Clock, Copy, Play, RotateCcw, Sparkles, TerminalSquare, Trash2, XCircle, Zap } from "lucide-react";
 
-import { getAdminChannels, testChannelPlayground, type PlaygroundTestResult } from "@/services/api/admin-platform";
+import { useCopyText } from "@/hooks/use-copy-text";
+import { getAdminChannels, testChannelPlayground, type PlaygroundTestParams, type PlaygroundTestResult } from "@/services/api/admin-platform";
 
 export default function AdminPlaygroundPage() {
     const { message } = App.useApp();
     const [form] = Form.useForm();
     const [result, setResult] = useState<PlaygroundTestResult | null>(null);
+    const [rawOpen, setRawOpen] = useState(false);
+    const request = useRef<AbortController | null>(null);
+    const copyText = useCopyText();
+
+    useEffect(() => () => request.current?.abort(), []);
 
     const channelsQuery = useQuery({
         queryKey: ["admin", "channels"],
@@ -18,7 +24,10 @@ export default function AdminPlaygroundPage() {
     const activeChannels = (channelsQuery.data || []).filter((ch) => ch.status !== "disabled");
 
     const testMutation = useMutation({
-        mutationFn: testChannelPlayground,
+        mutationFn: (body: PlaygroundTestParams) => {
+            request.current = new AbortController();
+            return testChannelPlayground(body, request.current.signal);
+        },
         onSuccess: (data) => {
             setResult(data);
             if (data.ok) {
@@ -28,8 +37,9 @@ export default function AdminPlaygroundPage() {
             }
         },
         onError: (err: Error) => {
-            message.error(err.message);
+            if (err.name !== "AbortError") message.error(err.message);
         },
+        onSettled: () => { request.current = null; },
     });
 
     const handleChannelChange = (channelId: string) => {
@@ -41,9 +51,12 @@ export default function AdminPlaygroundPage() {
     };
 
     const handleRun = (values: { channelId: string; model: string; capability: "text" | "image"; prompt: string; temperature?: number; maxTokens?: number }) => {
+        if (testMutation.isPending) return;
+        setResult(null);
+        setRawOpen(false);
         const parameters: Record<string, unknown> = {};
         if (values.temperature !== undefined) parameters.temperature = values.temperature;
-        if (values.maxTokens !== undefined) parameters.max_tokens = values.maxTokens;
+        if (values.maxTokens !== undefined) parameters[activeChannels.find((channel) => channel.id === values.channelId)?.protocol === "gemini" ? "maxOutputTokens" : "max_tokens"] = values.maxTokens;
 
         testMutation.mutate({
             channelId: values.channelId,
@@ -68,7 +81,7 @@ export default function AdminPlaygroundPage() {
                     </div>
                     <h1 className="text-xl font-bold tracking-tight text-stone-950 sm:text-2xl dark:text-stone-100">渠道在线调试台</h1>
                     <p className="mt-0.5 text-xs text-stone-500">
-                        无需创建正式任务与扣费，直接向指定渠道发送调试请求，实时测试连通性、响应延迟与原始输出。
+                        沿用渠道超时、并发和冷却配置，测试文本与图片输出。真实上游费用计入成本账，不扣用户余额。
                     </p>
                 </div>
                 {result ? (
@@ -226,6 +239,7 @@ export default function AdminPlaygroundPage() {
                             >
                                 发送测试请求
                             </Button>
+                            {testMutation.isPending ? <Button type="text" className="mt-2 w-full" onClick={() => request.current?.abort()}>取消本次请求</Button> : null}
                         </div>
                     </Form>
                 </div>
@@ -249,7 +263,7 @@ export default function AdminPlaygroundPage() {
                             <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-stone-400 space-y-3">
                                 <Zap className="size-10 animate-bounce text-blue-500" />
                                 <div className="text-sm font-medium text-stone-700 dark:text-stone-300">正在与上游建立连接并发送测试...</div>
-                                <div className="text-xs text-stone-400">正在测量真实网络往返与上游处理延迟</div>
+                                <div className="text-xs text-stone-400">渠道繁忙或冷却时排队，执行超时沿用渠道配置；取消后不会重发请求</div>
                             </div>
                         ) : result ? (
                             <div className="space-y-4">
@@ -264,7 +278,7 @@ export default function AdminPlaygroundPage() {
                                             <>
                                                 <CheckCircle2 className="size-5 text-emerald-600 dark:text-emerald-400" />
                                                 <div>
-                                                    <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">HTTP 200 OK · 连通正常</div>
+                                                    <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">HTTP {result.httpStatus || "—"} · 连通正常</div>
                                                     <div className="text-xs text-emerald-700 dark:text-emerald-400">上游渠道认证成功并返回有效结果</div>
                                                 </div>
                                             </>
@@ -281,9 +295,10 @@ export default function AdminPlaygroundPage() {
                                     <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
                                         <div className="flex items-center gap-1.5 text-stone-600 dark:text-stone-300">
                                             <Clock className="size-3.5 text-stone-400" />
-                                            <span>总耗时: <strong>{result.durationMs}ms</strong></span>
+                                            <span>执行耗时: <strong>{result.durationMs}ms</strong></span>
                                         </div>
-                                        {result.firstTokenMs ? (
+                                        {result.httpStatus ? <span>HTTP {result.httpStatus}</span> : null}
+                                        {result.firstTokenMs != null ? (
                                             <div className="text-stone-500">首字: {result.firstTokenMs}ms</div>
                                         ) : null}
                                         {result.outputTokens ? (
@@ -304,6 +319,12 @@ export default function AdminPlaygroundPage() {
                                 ) : null}
 
                                 {/* 格式化正文展示 */}
+                                {result.ok && result.image ? (
+                                    <div className="rounded-xl border border-border p-4">
+                                        <div className="mb-3 text-xs font-medium text-muted-foreground">图像输出</div>
+                                        <Image src={result.image} alt="渠道调试生成的图片" style={{ maxHeight: 420, objectFit: "contain" }} />
+                                    </div>
+                                ) : null}
                                 {result.ok && result.text ? (
                                     <div className="rounded-xl border border-stone-200 bg-stone-50/40 p-4 dark:border-stone-800 dark:bg-stone-900/30">
                                         <div className="mb-2 flex items-center justify-between">
@@ -312,10 +333,7 @@ export default function AdminPlaygroundPage() {
                                                 type="text"
                                                 size="small"
                                                 icon={<Copy className="size-3.5" />}
-                                                onClick={() => {
-                                                    void navigator.clipboard.writeText(result.text || "");
-                                                    message.success("已复制响应文本");
-                                                }}
+                                                onClick={() => copyText(result.text || "", "已复制响应文本")}
                                                 className="text-xs text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
                                             >
                                                 复制内容
@@ -330,30 +348,32 @@ export default function AdminPlaygroundPage() {
                                 {/* 原始响应 JSON 折叠卡片 */}
                                 <Collapse
                                     ghost
+                                    activeKey={rawOpen ? ["raw"] : []}
+                                    onChange={(keys) => setRawOpen(keys.includes("raw"))}
                                     className="border border-stone-200 rounded-xl dark:border-stone-800 bg-stone-50/30 dark:bg-stone-900/10"
                                     items={[
                                         {
                                             key: "raw",
-                                            label: <span className="text-xs text-stone-500 font-medium">原始调试数据 (Raw JSON)</span>,
+                                            label: <span className="text-xs text-stone-500 font-medium">上游原始响应（流式响应按事件展示）</span>,
                                             extra: (
                                                 <Button
                                                     type="text"
                                                     size="small"
                                                     icon={<Copy className="size-3" />}
+                                                    disabled={result.rawResponse == null}
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        void navigator.clipboard.writeText(JSON.stringify(result, null, 2));
-                                                        message.success("已复制 JSON 数据");
+                                                        copyText(JSON.stringify(result.rawResponse, null, 2), "已复制原始响应");
                                                     }}
                                                 >
                                                     复制 JSON
                                                 </Button>
                                             ),
-                                            children: (
+                                            children: rawOpen ? (
                                                 <pre className="max-h-72 overflow-auto rounded-lg border border-stone-200 bg-stone-900 p-3 font-mono text-[11px] text-stone-100 dark:border-stone-800">
-                                                    {JSON.stringify(result, null, 2)}
+                                                    {result.rawResponse == null ? "上游未返回响应正文" : JSON.stringify(result.rawResponse, null, 2)}
                                                 </pre>
-                                            ),
+                                            ) : null,
                                         },
                                     ]}
                                 />
