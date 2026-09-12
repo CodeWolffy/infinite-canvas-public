@@ -207,7 +207,7 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		var grants int64
-		if err = a.DB.QueryRow(ctx, "SELECT coalesce(sum(delta_balance) FILTER(WHERE kind IN('grant','checkin')),0)::bigint FROM wallet_entries WHERE ($1::timestamptz IS NULL OR created_at>=$1) AND ($2::timestamptz IS NULL OR created_at<=$2)", from, to).Scan(&grants); err != nil {
+		if err = a.DB.QueryRow(ctx, "SELECT coalesce(sum(delta_balance) FILTER(WHERE kind IN('grant','checkin','referral')),0)::bigint FROM wallet_entries WHERE ($1::timestamptz IS NULL OR created_at>=$1) AND ($2::timestamptz IS NULL OR created_at<=$2)", from, to).Scan(&grants); err != nil {
 			return nil, err
 		}
 		known := integer(totals["knownCost"])

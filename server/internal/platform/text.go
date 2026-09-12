@@ -60,13 +60,18 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		latest, err := one(ctx, a.DB, "SELECT id,status,error_code,response_message_id,partial_text,stream_sequence,run,billed_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE conversation_id=$1 ORDER BY queued_at DESC LIMIT 1", id)
+		latest, err := one(ctx, a.DB, "SELECT id,conversation_id,model_id,parameters,status,error_code,error_message,response_message_id,partial_text,stream_sequence,run,attempt_count,max_attempts,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE conversation_id=$1 ORDER BY queued_at DESC LIMIT 1", id)
 		if errors.Is(err, notFound) {
 			err = nil
 		}
 		if latest != nil {
+			conversation["modelId"], conversation["parameters"] = latest["modelId"], latest["parameters"]
+			delete(latest, "modelId")
+			delete(latest, "parameters")
 			latest["billed"] = money(integer(latest["billedMicros"]))
+			latest["price"] = money(integer(latest["priceMicros"]))
 			delete(latest, "billedMicros")
+			delete(latest, "priceMicros")
 		}
 		return gin.H{"conversation": conversation, "messages": messages, "latestRequest": latest}, err
 	}))
@@ -101,6 +106,9 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if !errors.Is(err, notFound) {
 			return nil, err
 		}
+		if err = a.validateTextParameters(ctx, input.ModelID, input.Parameters); err != nil {
+			return nil, err
+		}
 		settings, err := a.settings(ctx, a.DB)
 		if err != nil {
 			return nil, err
@@ -108,9 +116,10 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if err = a.generationAdmission(c, settings); err != nil {
 			return nil, err
 		}
-		if word, err := a.checkSensitive(ctx, input.Content+"\n"+input.SystemPrompt, u.ID); err != nil {
+		decision, err := a.checkSensitive(ctx, sensitiveInput(input.Content+"\n"+input.SystemPrompt, input.Parameters), u.ID)
+		if err != nil {
 			return nil, err
-		} else if word != "" {
+		} else if decision.Action == "block" {
 			return nil, problem(400, "sensitive_prompt", "输入内容包含平台不允许的内容，请修改后重试")
 		}
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
@@ -159,7 +168,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 				}
 			}
 			var active bool
-			if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM generation_tasks WHERE conversation_id=$1 AND status IN('queued','running'))", conversationID).Scan(&active); err != nil {
+			if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM generation_tasks WHERE conversation_id=$1 AND status IN('reviewing','queued','running'))", conversationID).Scan(&active); err != nil {
 				return err
 			}
 			if active {
@@ -187,15 +196,16 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			}
 			price := integer(pricing["priceMicros"])
 			pricingKind, inputPrice, cachedPrice, outputPrice := pricing["pricingKind"], pricing["inputPricePerMillion"], pricing["cachedPricePerMillion"], pricing["outputPricePerMillion"]
-			if err = a.enforceSpendLimit(ctx, tx, u.ID, price); err != nil {
-				return err
-			}
 			if _, err = changeWallet(ctx, tx, u.ID, "hold", input.RequestID+":1", -price, price, "文本生成预冻结"); err != nil {
 				return err
 			}
 			parameters := input.Parameters
 			parameters["systemPrompt"] = input.SystemPrompt
-			if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,user_id,model_id,capability,prompt,parameters,price_micros,pricing_kind,input_price_per_million,cached_price_per_million,output_price_per_million,group_discount,request_hash,conversation_id,request_message_id,model_name,model_display_name) VALUES($1,$2,$3,'text',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)", input.RequestID, u.ID, input.ModelID, input.Content, jsonBytes(parameters), price, pricingKind, inputPrice, cachedPrice, outputPrice, discount.String(), digest, conversationID, messageID, model["name"], model["displayName"]); err != nil {
+			moderationID, status, err := a.newModeration(ctx, tx, u.ID, decision, Row{"prompt": input.Content, "parameters": parameters, "capability": "text", "modelDisplayName": model["displayName"], "taskCount": 1})
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,user_id,model_id,capability,prompt,parameters,price_micros,pricing_kind,input_price_per_million,cached_price_per_million,output_price_per_million,group_discount,request_hash,conversation_id,request_message_id,model_name,model_display_name,moderation_id,status,max_attempts) VALUES($1,$2,$3,'text',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)", input.RequestID, u.ID, input.ModelID, input.Content, jsonBytes(parameters), price, pricingKind, inputPrice, cachedPrice, outputPrice, discount.String(), digest, conversationID, messageID, model["name"], model["displayName"], moderationID, status, settings.MaxAttempts); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, "UPDATE conversations SET updated_at=now() WHERE id=$1", conversationID)
@@ -210,7 +220,7 @@ func (a *App) textRequestDetail(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	ctx := c.Request.Context()
-	task, err := one(ctx, a.DB, "SELECT id,conversation_id,response_message_id,status,error_code,error_message,partial_text,stream_sequence,run,prompt_tokens,cached_tokens,completion_tokens,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE id=$1 AND user_id=$2 AND capability='text'", id, currentUser(c).ID)
+	task, err := one(ctx, a.DB, "SELECT id,conversation_id,response_message_id,status,error_code,error_message,partial_text,stream_sequence,run,attempt_count,max_attempts,prompt_tokens,cached_tokens,completion_tokens,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE id=$1 AND user_id=$2 AND capability='text'", id, currentUser(c).ID)
 	if err != nil {
 		return nil, err
 	}

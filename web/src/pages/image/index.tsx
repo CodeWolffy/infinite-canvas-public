@@ -38,7 +38,7 @@ type GeneratedImage = {
 
 type GenerationResult = {
     id: string;
-    status: "queued" | "running" | "success" | "failed";
+    status: "reviewing" | "queued" | "running" | "success" | "failed";
     image?: GeneratedImage;
     error?: string;
 };
@@ -640,7 +640,7 @@ export default function ImagePage() {
                                 {results.map((result, index) =>
                                     result.status === "success" && result.image ? (
                                         <ResultImageCard key={result.id} image={result.image} index={index} onEdit={addResultToReferences} onDownload={downloadImage} onSaveAsset={saveResultToAssets} />
-                                    ) : result.status === "queued" || result.status === "running" ? (
+                                    ) : result.status === "reviewing" || result.status === "queued" || result.status === "running" ? (
                                         <PendingImageCard key={result.id} status={result.status} />
                                     ) : (
                                         <FailedImageCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => void retryResults([index])} />
@@ -767,7 +767,7 @@ function ResultImageCard({
     );
 }
 
-function PendingImageCard({ status }: { status: "queued" | "running" }) {
+function PendingImageCard({ status }: { status: "reviewing" | "queued" | "running" }) {
     const { t } = useTranslation();
     return (
         <div className="relative aspect-square overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
@@ -780,7 +780,7 @@ function PendingImageCard({ status }: { status: "queued" | "running" }) {
             />
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
-                <span>{status === "queued" ? "排队中" : t("workbench.generating")}</span>
+                <span>{status === "reviewing" ? "待内容审核" : status === "queued" ? "排队中" : t("workbench.generating")}</span>
             </div>
         </div>
     );
@@ -955,7 +955,7 @@ function generationParameters(config: AiConfig) {
 }
 
 function isActiveTask(task: GenerationTask) {
-    return task.status === "queued" || task.status === "running";
+    return task.status === "reviewing" || task.status === "queued" || task.status === "running";
 }
 
 function taskToResult(task: GenerationTask): GenerationResult {
@@ -963,7 +963,7 @@ function taskToResult(task: GenerationTask): GenerationResult {
         return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: taskDuration(task), width: 0, height: 0, bytes: 0 } };
     }
     if (task.status === "failed" || task.status === "canceled") return { id: task.id, status: "failed", error: task.errorMessage || task.errorCode || i18n.t("workbench.generationFailed") };
-    return { id: task.id, status: task.status === "running" ? "running" : "queued" };
+    return { id: task.id, status: task.status === "reviewing" ? "reviewing" : task.status === "running" ? "running" : "queued" };
 }
 
 function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): GenerationLog {

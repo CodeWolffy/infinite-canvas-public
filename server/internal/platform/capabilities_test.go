@@ -39,7 +39,8 @@ func capabilityModel(t *testing.T, a *App, capability, endpoint string, price in
 		args []any
 	}{
 		{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'capability','capability',$2,'published',$3)", []any{model, capability, price}},
-		{"INSERT INTO channels(id,name,protocol,base_url,encrypted_api_key,status) VALUES($1,'test','openai',$2,$3,'active')", []any{channel, endpoint, sealed}},
+		{"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'test','openai',$2,'active')", []any{channel, endpoint}},
+		{"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channel, sealed}},
 		{"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'test')", []any{model, channel}},
 	} {
 		if _, err := a.DB.Exec(ctx, q.sql, q.args...); err != nil {
@@ -67,7 +68,7 @@ func capabilityTask(t *testing.T, a *App, user string) Row {
 	return row
 }
 
-func TestGroupPermissionsQuoteAndGrant(t *testing.T) {
+func TestGroupPermissionsQuoteAndPermanentBalance(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
 	user, cookie := testUser(t, a, 10*moneyScale)
@@ -85,7 +86,7 @@ func TestGroupPermissionsQuoteAndGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := a.Router()
-	policy := testRequest(router, "PUT", "/api/admin/user-groups/"+group+"/policy", map[string]any{"modelIds": []string{model}, "grantAmount": "2", "grantPeriod": "month"}, adminCookie)
+	policy := testRequest(router, "PUT", "/api/admin/user-groups/"+group+"/policy", map[string]any{"modelIds": []string{model}}, adminCookie)
 	if policy.Code != 204 {
 		t.Fatalf("policy: %d %s", policy.Code, policy.Body.String())
 	}
@@ -101,24 +102,11 @@ func TestGroupPermissionsQuoteAndGrant(t *testing.T) {
 	if denied.Code != 403 {
 		t.Fatalf("direct request bypassed group: %d", denied.Code)
 	}
-	var wg sync.WaitGroup
-	for range 5 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			response := testRequest(router, "POST", "/api/user/group-grant/claim", nil, cookie)
-			if response.Code != 200 {
-				t.Errorf("claim status %d", response.Code)
-			}
-		}()
+	testBalance(t, a, user, 10*moneyScale, 0)
+	if response := testRequest(router, "POST", "/api/user/group-grant/claim", nil, cookie); response.Code != 404 {
+		t.Fatalf("periodic grant endpoint still enabled: %d", response.Code)
 	}
-	wg.Wait()
-	testBalance(t, a, user, 12*moneyScale, 0)
-	var claims int
-	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM group_grant_claims WHERE user_id=$1", user).Scan(&claims); err != nil || claims != 1 {
-		t.Fatalf("claims %d: %v", claims, err)
-	}
-	if _, err := a.DB.Exec(ctx, "INSERT INTO sensitive_words(pattern,action) VALUES('review-me','review')"); err != nil {
+	if _, err := a.DB.Exec(ctx, "INSERT INTO sensitive_words(pattern,action) VALUES('review-me','log')"); err != nil {
 		t.Fatal(err)
 	}
 	allowed := testRequest(router, "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": model, "count": 1, "prompt": "review-me with private content"}, cookie)
@@ -664,7 +652,7 @@ func TestMetadataMonitoringRespectsChannelSlot(t *testing.T) {
 	}
 }
 
-func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
+func TestOpsRetentionPermanentBalanceAlertsAndCostFilters(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
 	user, cookie := testUser(t, a, 10*moneyScale)
@@ -672,13 +660,19 @@ func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
 	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
 		t.Fatal(err)
 	}
-	model, channel := capabilityModel(t, a, "image", "https://example.invalid", 2*moneyScale)
-	other, _ := capabilityModel(t, a, "image", "https://example.invalid", 2*moneyScale)
+	// 此用例检查多绑定成本归属，不依赖外部 DNS 在共享检测截止前失败。
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"error":{"message":"isolated probe failure"}}`)
+	}))
+	defer upstream.Close()
+	model, channel := capabilityModel(t, a, "image", upstream.URL, 2*moneyScale)
+	other, _ := capabilityModel(t, a, "image", upstream.URL, 2*moneyScale)
 	if _, err := a.DB.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'other')", other, channel); err != nil {
 		t.Fatal(err)
 	}
 	group := uuid.NewString()
-	if _, err := a.DB.Exec(ctx, "INSERT INTO user_groups(id,name,discount,spend_limit_micros,spend_period) VALUES($1,'capped',1,$2,'month')", group, 2*moneyScale); err != nil {
+	if _, err := a.DB.Exec(ctx, "INSERT INTO user_groups(id,name,discount) VALUES($1,'members',1)", group); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.DB.Exec(ctx, "UPDATE users SET group_id=$2 WHERE id=$1", user, group); err != nil {
@@ -690,10 +684,10 @@ func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
 		t.Fatalf("first hold: %d %s", first.Code, first.Body.String())
 	}
 	over := testRequest(router, "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": model, "count": 1, "prompt": "two"}, cookie)
-	if over.Code != 429 {
-		t.Fatalf("spend limit: %d %s", over.Code, over.Body.String())
+	if over.Code != 200 {
+		t.Fatalf("permanent balance blocked by a period: %d %s", over.Code, over.Body.String())
 	}
-	testBalance(t, a, user, 8*moneyScale, 2*moneyScale)
+	testBalance(t, a, user, 6*moneyScale, 4*moneyScale)
 
 	old := time.Now().Add(-400 * 24 * time.Hour)
 	for _, query := range []struct {
@@ -757,16 +751,18 @@ func TestOpsRetentionBudgetAlertsAndCostFilters(t *testing.T) {
 		t.Fatalf("cost filter: %d %s", filtered.Code, filtered.Body.String())
 	}
 
-	if _, err = a.DB.Exec(ctx, "UPDATE user_groups SET spend_limit_micros=0,grant_amount_micros=$2 WHERE id=$1", group, moneyScale); err != nil {
+	settings := defaultSettings
+	settings.CheckinEnabled, settings.RewardMin, settings.RewardMax = true, "1", "1"
+	if _, err = a.DB.Exec(ctx, "INSERT INTO app_settings(key,value) VALUES('platform',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", jsonBytes(settings)); err != nil {
 		t.Fatal(err)
 	}
-	claimed := testRequest(router, "POST", "/api/user/group-grant/claim", nil, cookie)
+	claimed := testRequest(router, "POST", "/api/user/checkin", nil, cookie)
 	if claimed.Code != 200 {
-		t.Fatalf("grant: %d %s", claimed.Code, claimed.Body.String())
+		t.Fatalf("checkin: %d %s", claimed.Code, claimed.Body.String())
 	}
 	notes := responseRow(t, testRequest(router, "GET", "/api/user/notifications", nil, cookie))["notifications"].([]any)
 	if len(notes) == 0 {
-		t.Fatal("user did not receive grant notice")
+		t.Fatal("user did not receive checkin notice")
 	}
 	a.notifyNoChannel(ctx, model)
 	a.notifyNoChannel(ctx, model)
@@ -923,7 +919,7 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 	}
 
 	// 4. 验证 candidates 调度候选集中能独立获取这两个上游模型及其成本
-	candidates, err := a.candidates(ctx, model)
+	candidates, err := a.candidates(ctx, model, nil, nil)
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}

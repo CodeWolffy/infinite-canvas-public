@@ -134,7 +134,7 @@ export default function UserStatsPage() {
             )}
 
             {stats ? <><div className="grid grid-cols-1 gap-6 sm:grid-cols-2">{[{ label: "视频生成", data: stats.video }, { label: "音频生成", data: stats.audio }].map(({ label, data }) => <Card key={label}><p className="text-sm text-muted-foreground">{label}</p><p className="my-2 font-mono text-2xl">{data.total}</p><p className="text-xs text-muted-foreground">成功 {data.succeeded} · 失败 {data.failed} · 进行中 {data.active}</p></Card>)}</div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">{[["本月实付", stats.spent], ["本月充值", stats.recharge], ["本月公益额度", stats.grants], ["本月签到", stats.checkin]].map(([label, value]) => <Card key={label}><p className="text-sm text-muted-foreground">{label}</p><p className="mt-2 font-mono text-2xl">¥{value || "0.000000"}</p></Card>)}</div></> : null}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">{[["本月实付", stats.spent], ["本月充值", stats.recharge], ["本月公益 / 邀请", stats.grants], ["本月签到", stats.checkin]].map(([label, value]) => <Card key={label}><p className="text-sm text-muted-foreground">{label}</p><p className="mt-2 font-mono text-2xl">¥{value || "0.000000"}</p></Card>)}</div></> : null}
             {stats && (
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <Card title={t("userCenter.storageComposition")} className="border-stone-200 dark:border-stone-800">

@@ -7,11 +7,11 @@ import { useTranslation } from "react-i18next";
 import { reasoningEffortLabel, TextSettingsPanel } from "@/components/text-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
-import type { AiConfig, ReasoningEffort } from "@/stores/use-config-store";
+import type { AiConfig } from "@/stores/use-config-store";
 
 type CanvasTextSettingsPopoverProps = {
     config: AiConfig;
-    onConfigChange: (key: "reasoningEffort", value: ReasoningEffort) => void;
+    onConfigChange: (changes: Partial<Pick<AiConfig, "reasoningEffort" | "textMaxTokens">>) => void;
     count?: number;
     onCountChange?: (count: number) => void;
     buttonClassName?: string;

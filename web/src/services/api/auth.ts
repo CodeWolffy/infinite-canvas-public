@@ -19,7 +19,7 @@ export type AuthUser = {
 type UserResponse = { user: AuthUser };
 export type MfaChallenge = { mfaRequired: true; challenge: string };
 
-export async function register(input: { username: string; displayName: string; password: string; invitationCode: string }) {
+export async function register(input: { username: string; displayName: string; password: string; invitationCode: string; referralCode?: string }) {
     return (await apiRequest<UserResponse>("/api/auth/register", { method: "POST", body: input })).user;
 }
 

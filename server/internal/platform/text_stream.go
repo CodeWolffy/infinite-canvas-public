@@ -118,7 +118,7 @@ func (a *App) textEvents(c *gin.Context) {
 		}
 		detail := value.(gin.H)
 		request := detail["request"].(Row)
-		key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"])
+		key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"])
 		if key != last {
 			c.SSEvent("snapshot", value)
 			last = key
@@ -126,7 +126,7 @@ func (a *App) textEvents(c *gin.Context) {
 			_, _ = c.Writer.Write([]byte(": heartbeat\n\n"))
 		}
 		c.Writer.Flush()
-		if request["status"] != "running" && request["status"] != "queued" {
+		if request["status"] != "reviewing" && request["status"] != "running" && request["status"] != "queued" {
 			return
 		}
 		select {
@@ -208,6 +208,14 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 				result.CachedTokens = integer(usage["cachedContentTokenCount"])
 				result.CompletionTokens = integer(usage["candidatesTokenCount"]) + integer(usage["thoughtsTokenCount"])
 			}
+		} else if channel.Protocol == "anthropic" {
+			var done bool
+			var err error
+			delta, done, err = anthropicEvent(payload, stream, &result)
+			if err != nil {
+				return err
+			}
+			finished = finished || done
 		} else {
 			choices, _ := payload["choices"].([]any)
 			if len(choices) > 0 {
@@ -288,7 +296,7 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 	}
 	result.Text = content.String()
 	if !finished || strings.TrimSpace(result.Text) == "" {
-		return generationResult{}, &upstreamError{Category: "stream_interrupted"}
+		return generationResult{}, &upstreamError{Category: "stream_interrupted", Retryable: content.Len() == 0}
 	}
 	if err = flush(); err != nil {
 		return generationResult{}, err

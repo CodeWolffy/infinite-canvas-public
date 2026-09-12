@@ -97,7 +97,7 @@ func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any,
 func promptEstimate(ctx context.Context, q querier, conversation, content, system string) (int64, error) {
 	var history int64
 	if conversation != "" {
-		if err := q.QueryRow(ctx, "SELECT coalesce(sum(octet_length(content)),0) FROM messages WHERE conversation_id=$1", conversation).Scan(&history); err != nil {
+		if err := q.QueryRow(ctx, "SELECT coalesce(sum(octet_length(m.content)),0) FROM messages m WHERE m.conversation_id=$1 AND "+approvedMessage, conversation).Scan(&history); err != nil {
 			return 0, err
 		}
 	}

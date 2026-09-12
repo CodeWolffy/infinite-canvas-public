@@ -3,7 +3,7 @@ import { taskDelay } from "./tasks";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type TextMessage = { id: string; role: "system" | "user" | "assistant"; content: string; createdAt: string };
-export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "queued" | "running" | "succeeded" | "failed" | "canceled"; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string };
+export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled"; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string; attemptCount?: number; maxAttempts?: number };
 export type TextRequestDetail = { request: TextRequestState; message: TextMessage | null };
 
 export function watchTextRequest(id: string, onChange: (detail: TextRequestDetail) => void, signal?: AbortSignal, onError?: (error: Error) => void) {
@@ -27,7 +27,7 @@ export function watchTextRequest(id: string, onChange: (detail: TextRequestDetai
         if (run < lastRun || run === lastRun && sequence < lastSequence) return;
         lastRun = run; lastSequence = sequence;
         onChange(detail);
-        if (!["queued", "running"].includes(detail.request.status)) cleanup();
+        if (!["reviewing", "queued", "running"].includes(detail.request.status)) cleanup();
     };
     const poll = async () => {
         while (!closed) {
@@ -83,13 +83,13 @@ export function queueTextRequest(input: Parameters<typeof createTextRequest>[0],
     return apiRequest<{ conversationId: string; requestId: string }>("/api/text/requests", { method: "POST", body: input, signal });
 }
 
-export async function listTextConversations() {
-    return (await apiRequest<{ conversations: Array<{ id: string; title: string; canvasProjectId: string | null; createdAt: string; updatedAt: string }> }>("/api/text/conversations")).conversations;
+export async function listTextConversations(offset = 0) {
+    return (await apiRequest<{ conversations: Array<{ id: string; title: string; canvasProjectId: string | null; createdAt: string; updatedAt: string }> }>(`/api/text/conversations?offset=${offset}`)).conversations;
 }
 
 export async function getTextConversation(id: string) {
     return apiRequest<{
-        conversation: { id: string; title: string; canvasProjectId: string | null };
+        conversation: { id: string; title: string; canvasProjectId: string | null; modelId?: string; parameters?: Record<string, unknown> };
         messages: TextMessage[];
         latestRequest: TextRequestState | null;
     }>(`/api/text/conversations/${id}`);

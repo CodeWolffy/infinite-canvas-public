@@ -40,9 +40,13 @@ const AdminGroupsPage = lazy(() => import("@/pages/admin/groups"));
 const AdminRedeemPage = lazy(() => import("@/pages/admin/redeem"));
 const AdminSensitivePage = lazy(() => import("@/pages/admin/sensitive"));
 const AdminStatusPage = lazy(() => import("@/pages/admin/status"));
+const StatusPage = lazy(() => import("@/pages/status"));
+const TextPage = lazy(() => import("@/pages/text"));
+const ReferralsPage = lazy(() => import("@/pages/user/referrals"));
 
 export const router = createBrowserRouter([
     { path: "/login", element: <LoginPage /> },
+    { path: "/status", element: <Suspense fallback={<Spin />}><StatusPage /></Suspense> },
     { path: "/forgot-password", element: <AccountRecoveryPage /> },
     { path: "/reset-password", element: <AccountRecoveryPage /> },
     { path: "/verify-email", element: <AccountRecoveryPage /> },
@@ -69,7 +73,7 @@ export const router = createBrowserRouter([
                     { path: "/studio", element: <StudioPage /> },
                     { path: "/video", element: <Navigate to="/studio?type=video" replace /> },
                     { path: "/audio", element: <Navigate to="/studio?type=audio" replace /> },
-                    { path: "/text", element: <Navigate to="/studio?type=text" replace /> },
+                    { path: "/text", element: <TextPage /> },
                     { path: "/assets", element: <AssetsPage /> },
                     { path: "/prompts", element: <PromptsPage /> },
                     { path: "/canvas", element: <CanvasPage /> },
@@ -86,6 +90,7 @@ export const router = createBrowserRouter([
                     { path: "logs", element: <UserLogsPage /> },
                     { path: "account", element: <UserAccountPage /> },
                     { path: "wallet", element: <WalletPage /> },
+                    { path: "referrals", element: <ReferralsPage /> },
                 ],
             },
             {

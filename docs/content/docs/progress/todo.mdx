@@ -14,6 +14,8 @@ The code review fixes for migrations, cost reports, media cleanup, channel probe
 
 ## Go backend capability follow-up
 
-Billing and redemption fixes, channel monitoring and notifications, account security, streaming text, group model permissions and periodic grants, cost reporting, group spending limits, storage quotas, user notices, cost filters, channel probes, wallet summaries, and the platform status page are implemented and moved to the pending-test list. See `docs/backend-capability-review.md` and `docs/public-platform.md` for scope and setup.
+渠道自动故障转移、多 Key、健康自动停用恢复、Claude Messages、耗时统计、公开模型状态、人工审核、可选邀请奖励和用户文本对话已完成实现与本机 Docker 回归，真实环境验收继续留在待测试清单。周期赠送与周期消费额度已按要求移除，余额、签到和兑换到账永久保留。配置见 `docs/public-platform.md`。
 
-- Evaluate additional provider protocols and external API tokens only for confirmed usage scenarios; agree on behavior limits before implementing them.
+- 收到实际供应商 API 文档或请求/响应示例后，接入即梦、可灵、Vidu、原生 Sora 等异步视频适配器；现有 OpenAI 兼容视频与 Gemini/Veo 适配器已完成。
+- 音乐生成：等待 Suno 类实际渠道与用户使用场景，确认任务参数和计费方式后再开放音乐能力。
+- 对外 API 令牌按明确使用场景另行评估，涉及行为边界时先确认默认值。

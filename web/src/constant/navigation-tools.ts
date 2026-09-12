@@ -1,7 +1,8 @@
-import { FileText, ImagePlus, Images, Maximize2, Sparkles } from "lucide-react";
+import { FileText, ImagePlus, Images, Maximize2, MessageSquare, Sparkles } from "lucide-react";
 
 export const navigationTools = [
     { slug: "studio", icon: Sparkles },
+    { slug: "text", icon: MessageSquare },
     {
         slug: "canvas",
         icon: Maximize2,

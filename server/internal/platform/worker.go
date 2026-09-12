@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,13 +125,27 @@ func classify(err error) *upstreamError {
 		return &upstreamError{Category: "storage_quota"}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return &upstreamError{Category: "timeout"}
+		return &upstreamError{Category: "timeout", Retryable: true}
+	}
+	if errors.Is(err, context.Canceled) {
+		return &upstreamError{Category: "canceled"}
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return &upstreamError{Category: "upstream_error", Retryable: true}
+	}
+	var network net.Error
+	if errors.As(err, &network) {
+		if network.Timeout() {
+			return &upstreamError{Category: "timeout", Retryable: true}
+		}
+		return &upstreamError{Category: "upstream_error", Retryable: true}
 	}
 	return &upstreamError{Category: "upstream_error"}
 }
 
 type channel struct {
 	ID, Name, Protocol, BaseURL, APIKey, UpstreamModel, BindingID string
+	KeyID, KeyStrategy, TaskAdapter                             string
 	TimeoutMS, MaxConcurrency, CooldownSeconds, Priority, Weight int
 	CostConfig                                                   map[string]any
 }
@@ -137,14 +153,16 @@ type channel struct {
 func (a *App) channelFromRow(row Row) (channel, error) {
 	c := channel{ID: str(row["id"]), BindingID: str(row["bindingId"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"]))}
 	c.CostConfig = object(row["costConfig"])
-	var err error
-	if str(row["encryptedApiKey"]) != "" {
-		c.APIKey, err = a.unseal(str(row["encryptedApiKey"]))
-	}
-	return c, err
+	c.KeyStrategy, c.TaskAdapter = str(row["keyStrategy"]), str(row["taskAdapter"])
+	return c, nil
 }
-func (a *App) candidates(ctx context.Context, modelID string) ([]channel, error) {
-	items, err := rows(ctx, a.DB, "SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()) ORDER BY b.priority DESC", modelID)
+func (a *App) candidates(ctx context.Context, modelID string, excludedChannels, excludedKeys []string) ([]channel, error) {
+	items, err := rows(ctx, a.DB, `SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config
+		FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id
+		WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL
+		AND m.status='published' AND m.deleted_at IS NULL AND (c.protocol<>'anthropic' OR m.capability='text') AND (c.cooldown_until IS NULL OR c.cooldown_until<=now())
+		AND NOT(c.id=ANY(coalesce($2::text[]::uuid[],'{}'))) AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active' AND NOT(k.id=ANY(coalesce($3::text[]::uuid[],'{}'))))
+		ORDER BY b.priority DESC`, modelID, excludedChannels, excludedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -181,16 +199,22 @@ if redis.call('ZCARD',KEYS[1])>=tonumber(ARGV[2]) then return 0 end
 redis.call('ZADD',KEYS[1],now+tonumber(ARGV[3]),ARGV[1]); redis.call('PEXPIRE',KEYS[1],math.max(redis.call('PTTL',KEYS[1]),tonumber(ARGV[3])))
 return 1`)
 
+func slotReference(task Row) string {
+	if token := str(task["slotToken"]); token != "" {
+		return token
+	}
+	return taskReference(task)
+}
 func (a *App) slot(ctx context.Context, c channel, task Row, deadline time.Time) (bool, error) {
 	duration := time.Until(deadline).Milliseconds()
 	if duration <= 0 {
 		return false, context.DeadlineExceeded
 	}
-	value, err := acquireSlot.Run(ctx, a.Redis, []string{"ic:slots:" + c.ID}, taskReference(task), c.MaxConcurrency, duration).Int()
+	value, err := acquireSlot.Run(ctx, a.Redis, []string{"ic:slots:" + c.ID}, slotReference(task), c.MaxConcurrency, duration).Int()
 	return value == 1, err
 }
 func (a *App) releaseSlot(c channel, task Row) {
-	if err := a.Redis.ZRem(context.Background(), "ic:slots:"+c.ID, taskReference(task)).Err(); err != nil {
+	if err := a.Redis.ZRem(context.Background(), "ic:slots:"+c.ID, slotReference(task)).Err(); err != nil {
 		slog.Warn("渠道槽位将按原截止时间回收", "channel", c.ID)
 	}
 }
@@ -284,6 +308,17 @@ func (a *App) executeTask(root context.Context, task Row) {
 	var candidates []channel
 	var err error
 	resuming := str(task["upstreamTaskId"]) != ""
+	var attemptedKeys, failedChannels []string
+	if !resuming {
+		task["slotToken"] = task["workerToken"]
+		if err = a.DB.QueryRow(ctx, "SELECT attempted_key_ids::text[],failed_channel_ids::text[] FROM generation_tasks WHERE id=$1", task["id"]).Scan(&attemptedKeys, &failedChannels); err != nil {
+			return
+		}
+		if integer(task["attemptCount"]) >= integer(task["maxAttempts"]) {
+			_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
+			return
+		}
+	}
 	if resuming {
 		raw, err := a.unseal(str(task["channelSnapshot"]))
 		if err != nil {
@@ -297,14 +332,18 @@ func (a *App) executeTask(root context.Context, task Row) {
 		}
 		candidates = []channel{saved}
 	} else {
-		candidates, err = a.candidates(ctx, str(task["modelId"]))
+		candidates, err = a.candidates(ctx, str(task["modelId"]), failedChannels, attemptedKeys)
 		if err != nil {
 			return
 		}
 	}
 	if len(candidates) == 0 {
+		if integer(task["attemptCount"]) > 0 {
+			_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
+			return
+		}
 		var configured bool
-		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL)", task["modelId"]).Scan(&configured)
+		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active') AND m.status='published' AND m.deleted_at IS NULL)", task["modelId"]).Scan(&configured)
 		if err != nil {
 			return
 		}
@@ -317,6 +356,9 @@ func (a *App) executeTask(root context.Context, task Row) {
 		return
 	}
 	var last *upstreamError
+	var attemptChannel channel
+	var logID string
+	upstreamFailed := false
 	for _, candidate := range candidates {
 		deadline := task["deadline"].(time.Time)
 		if !resuming {
@@ -337,6 +379,12 @@ func (a *App) executeTask(root context.Context, task Row) {
 		keepSlot := false
 		func() {
 			defer func() {
+				if last != nil && upstreamFailed && logID != "" {
+					last.Message = (&upstreamTrace{secret: candidate.APIKey}).redact(last.Message)
+					if err := a.recordAttemptFailure(context.WithoutCancel(ctx), candidate, logID, last); err != nil {
+						last = &upstreamError{Category: "storage"}
+					}
+				}
 				if !keepSlot {
 					a.releaseSlot(candidate, task)
 				}
@@ -344,14 +392,18 @@ func (a *App) executeTask(root context.Context, task Row) {
 			if !resuming {
 				var eligible bool
 				if candidate.BindingID != "" {
-					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
 				} else {
 					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
 				}
 				if err != nil || !eligible {
 					return
 				}
+				if err = a.selectChannelKey(ctx, &candidate, attemptedKeys, false); err != nil {
+					return
+				}
 			}
+			attemptChannel = candidate
 			jobCtx, cancel := context.WithDeadline(ctx, deadline)
 			defer cancel()
 			snapshot, err := a.seal(string(jsonBytes(candidate)))
@@ -359,24 +411,29 @@ func (a *App) executeTask(root context.Context, task Row) {
 				last = classify(err)
 				return
 			}
-			updated, err := a.DB.Exec(jobCtx, "UPDATE generation_tasks SET deadline=$3,channel_id=$4,channel_snapshot=$5,upstream_model=$6 WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"], deadline, candidate.ID, snapshot, candidate.UpstreamModel)
+			updated, err := a.DB.Exec(jobCtx, `UPDATE generation_tasks SET deadline=$3,channel_id=$4,channel_snapshot=$5,upstream_model=$6,slot_token=$8,
+				attempt_count=attempt_count+CASE WHEN $7 THEN 0 ELSE 1 END,
+				attempted_key_ids=CASE WHEN $7 THEN attempted_key_ids ELSE array_append(attempted_key_ids,$9::uuid) END
+				WHERE id=$1 AND worker_token=$2 AND status='running' AND ($7 OR attempt_count<max_attempts)`, task["id"], task["workerToken"], deadline, candidate.ID, snapshot, candidate.UpstreamModel, resuming, task["slotToken"], nullable(candidate.KeyID))
 			if err != nil || updated.RowsAffected() != 1 {
 				return
 			}
 			task["deadline"] = deadline
 			log, err := one(jobCtx, a.DB, "SELECT id FROM request_logs WHERE task_id=$1 AND status='running' ORDER BY started_at DESC LIMIT 1", task["id"])
 			if errors.Is(err, notFound) {
-				log, err = one(jobCtx, a.DB, "INSERT INTO request_logs(user_id,type,task_id,model_id,model_name_snapshot,model_display_name_snapshot,channel_id,channel_name_snapshot,upstream_model,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'running') RETURNING id", task["userId"], task["capability"], task["id"], task["modelId"], task["modelName"], task["modelDisplayName"], candidate.ID, candidate.Name, candidate.UpstreamModel)
+				log, err = one(jobCtx, a.DB, "INSERT INTO request_logs(user_id,type,task_id,model_id,model_name_snapshot,model_display_name_snapshot,channel_id,channel_name_snapshot,upstream_model,status,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10) RETURNING id", task["userId"], task["capability"], task["id"], task["modelId"], task["modelName"], task["modelDisplayName"], candidate.ID, candidate.Name, candidate.UpstreamModel, nullable(candidate.KeyID))
 			}
 			if err != nil {
 				last = &upstreamError{Category: "storage"}
 				return
 			}
-			if _, err = a.DB.Exec(jobCtx, "INSERT INTO upstream_cost_entries(id,task_id,user_id,model_id,channel_id,capability,cost_config) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO NOTHING", log["id"], task["id"], task["userId"], task["modelId"], candidate.ID, task["capability"], jsonBytes(candidate.CostConfig)); err != nil {
+			logID = str(log["id"])
+			if _, err = a.DB.Exec(jobCtx, "INSERT INTO upstream_cost_entries(id,task_id,user_id,model_id,channel_id,capability,cost_config,key_id,binding_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING", log["id"], task["id"], task["userId"], task["modelId"], candidate.ID, task["capability"], jsonBytes(candidate.CostConfig), nullable(candidate.KeyID), nullable(candidate.BindingID)); err != nil {
 				last = &upstreamError{Category: "storage"}
 				return
 			}
 			result, err := a.generate(jobCtx, candidate, task)
+			_, _ = a.DB.Exec(context.WithoutCancel(ctx), "UPDATE upstream_cost_entries SET duration_ms=(extract(epoch FROM(now()-created_at))*1000)::bigint WHERE id=$1", logID)
 			if err != nil {
 				if resuming && root.Err() != nil {
 					a.requeue(context.Background(), task, true)
@@ -385,9 +442,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 					return
 				}
 				last = classify(err)
-				if err = a.recordAttemptFailure(ctx, candidate, str(log["id"]), last); err != nil {
-					last = &upstreamError{Category: "storage"}
-				}
+				upstreamFailed = true
 				return
 			}
 			if result.Pending {
@@ -411,6 +466,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 			// 非文本任务必须拿到并持久化媒体结果才能成功结算，空结果按上游失败处理。
 			if task["capability"] != "text" && len(result.Data) == 0 {
 				last = &upstreamError{Category: "upstream_error", Retryable: true}
+				upstreamFailed = true
+				return
+			}
+			if updated, err := a.DB.Exec(context.WithoutCancel(ctx), "UPDATE generation_tasks SET upstream_completed=true WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"]); err != nil || updated.RowsAffected() != 1 {
+				last = &upstreamError{Category: "storage"}
 				return
 			}
 			if task["capability"] == "audio" && len(result.Data) > 0 && (task["pricePerSecond"] != nil || candidate.CostConfig["second"] != nil) {
@@ -451,6 +511,9 @@ func (a *App) executeTask(root context.Context, task Row) {
 			}
 			task["status"] = "succeeded"
 			_ = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+				if err := recordKeySuccess(ctx, tx, candidate, task["startedAt"].(time.Time)); err != nil {
+					return err
+				}
 				result, err := tx.Exec(ctx, "UPDATE channels SET last_success_at=now(),last_error_code=NULL,cooldown_until=NULL WHERE id=$1 AND (last_failure_at IS NULL OR last_failure_at<$2) AND (last_error_code IS NOT NULL OR cooldown_until IS NOT NULL)", candidate.ID, task["startedAt"])
 				if err != nil || result.RowsAffected() == 0 {
 					return err
@@ -461,7 +524,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 		if task["status"] == "succeeded" || task["status"] == "queued" {
 			return
 		}
-		if last != nil && !last.Retryable {
+		if last != nil {
 			break
 		}
 	}
@@ -473,6 +536,15 @@ func (a *App) executeTask(root context.Context, task Row) {
 	if ctx.Err() != nil {
 		finishCtx = context.Background()
 	}
+	if attemptChannel.APIKey != "" {
+		last.Message = (&upstreamTrace{secret: attemptChannel.APIKey}).redact(last.Message)
+	}
+	if !upstreamFailed {
+		last.Retryable = false
+	}
+	if retried, err := a.retryTask(finishCtx, task, attemptChannel, last); err != nil || retried {
+		return
+	}
 	if err := a.finishTask(finishCtx, task, nil, nil, last); err != nil {
 		slog.Warn("任务结算等待恢复", "task", task["id"])
 	}
@@ -482,18 +554,39 @@ func (a *App) requeue(ctx context.Context, task Row, resuming bool) {
 	if resuming {
 		_, _ = a.DB.Exec(ctx, "UPDATE generation_tasks SET status='queued',worker_token=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
 	} else {
-		_, _ = a.DB.Exec(ctx, "UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,started_at=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
+		_, _ = a.DB.Exec(ctx, "UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
 	}
+}
+
+// 一次换渠道沿用原冻结额，持久化次数和排除列表；已输出文本/已受理异步任务不重放。
+func (a *App) retryTask(ctx context.Context, task Row, ch channel, failure *upstreamError) (bool, error) {
+	if !failure.Retryable {
+		return false, nil
+	}
+	result, err := a.DB.Exec(ctx, `UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,channel_id=NULL,channel_snapshot=NULL,slot_token=NULL,
+		failed_channel_ids=CASE WHEN $5='authentication' THEN failed_channel_ids ELSE array_append(failed_channel_ids,$3::uuid) END,
+		error_code=$5,error_message=$4,available_at=now()
+		WHERE id=$1 AND worker_token=$2 AND status='running' AND attempt_count<max_attempts AND upstream_task_id IS NULL AND partial_text='' AND NOT upstream_completed
+		AND EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id
+			WHERE b.model_id=generation_tasks.model_id AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL
+			AND (c.protocol<>'anthropic' OR generation_tasks.capability='text') AND (c.cooldown_until IS NULL OR c.cooldown_until<=now())
+			AND NOT(c.id=ANY(generation_tasks.failed_channel_ids)) AND ($5='authentication' OR c.id<>$3::uuid)
+			AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active' AND NOT(k.id=ANY(generation_tasks.attempted_key_ids))))`,
+		task["id"], task["workerToken"], nullable(ch.ID), failure.Error(), failure.Category)
+	return result.RowsAffected() == 1, err
 }
 func (a *App) recordAttemptFailure(ctx context.Context, c channel, logID string, failure *upstreamError) error {
 	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE id=$1", logID); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',duration_ms=coalesce(duration_ms,(extract(epoch FROM(now()-created_at))*1000)::bigint),updated_at=now() WHERE id=$1", logID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "UPDATE request_logs SET status='failed',http_status=$2,error_category=$3,error_message=$4,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer WHERE id=$1", logID, nullableStatus(failure.Status), failure.Category, failure.Error()); err != nil {
 			return err
 		}
-		if failure.Category == "content_policy" || failure.Category == "invalid_request" {
+		if failure.Category == "authentication" {
+			return recordKeyFailure(ctx, tx, c, failure)
+		}
+		if !channelFailure(failure) {
 			return nil
 		}
 		old, err := one(ctx, tx, "SELECT last_error_code FROM channels WHERE id=$1 FOR UPDATE", c.ID)
@@ -632,7 +725,7 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		if failure == nil {
 			billed = money(billedMicros)
 		}
-		_, err = tx.Exec(ctx, "UPDATE request_logs SET status=$2,error_category=$3,error_message=$4,billed_amount=$5,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer,first_token_ms=(SELECT (extract(epoch FROM(first_token_at-started_at))*1000)::integer FROM generation_tasks WHERE id=$1),output_tokens=$6 WHERE task_id=$1 AND status='running'", task["id"], status, errorCode, errorMessage, billed, integer(completionTokens))
+		_, err = tx.Exec(ctx, "UPDATE request_logs SET status=$2,error_category=$3,error_message=$4,billed_amount=$5,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer,first_token_ms=(SELECT (extract(epoch FROM(first_token_at-request_logs.started_at))*1000)::integer FROM generation_tasks WHERE id=$1),output_tokens=$6 WHERE task_id=$1 AND status='running'", task["id"], status, errorCode, errorMessage, billed, integer(completionTokens))
 		return err
 	})
 	if err == nil && original["capability"] == "text" {
@@ -650,7 +743,31 @@ func (a *App) recoverTasks(ctx context.Context) {
 		return
 	}
 	for _, task := range tasks {
-		if err = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: "timeout"}); err != nil {
+		// 先接管过期租约，旧 worker 的迟到结果无法结算或覆盖下一次尝试。
+		task, err = one(ctx, a.DB, "UPDATE generation_tasks SET worker_token=$3 WHERE id=$1 AND worker_token=$2 AND status='running' AND deadline<now() RETURNING *", task["id"], task["workerToken"], uuid.NewString())
+		if err != nil {
+			continue
+		}
+		failure := &upstreamError{Category: "timeout", Retryable: true}
+		var ch channel
+		if raw, err := a.unseal(str(task["channelSnapshot"])); err == nil {
+			_ = json.Unmarshal([]byte(raw), &ch)
+		}
+		if ch.ID != "" {
+			a.releaseSlot(ch, task)
+			if log, err := one(ctx, a.DB, "SELECT id,status,error_category,error_message,http_status FROM request_logs WHERE task_id=$1 ORDER BY started_at DESC,id DESC LIMIT 1", task["id"]); err == nil && task["upstreamCompleted"] != true {
+				if log["status"] == "failed" {
+					failure = &upstreamError{Category: str(log["errorCategory"]), Message: str(log["errorMessage"]), Status: int(integer(log["httpStatus"]))}
+					failure.Retryable = channelFailure(failure)
+				} else if err = a.recordAttemptFailure(ctx, ch, str(log["id"]), failure); err != nil {
+					continue
+				}
+			}
+			if retry, err := a.retryTask(ctx, task, ch, failure); err != nil || retry {
+				continue
+			}
+		}
+		if err = a.finishTask(ctx, task, nil, nil, failure); err != nil {
 			slog.Warn("恢复任务结算失败", "task", task["id"])
 		}
 	}

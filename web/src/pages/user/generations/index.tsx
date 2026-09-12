@@ -166,7 +166,7 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
         enabled: expanded,
         // 只有该批次仍有未完成任务时才继续轮询详情。
         refetchInterval: (query) =>
-            (query.state.data?.tasks ?? []).some((task) => task.status === "queued" || task.status === "running") ? 3000 : false,
+            (query.state.data?.tasks ?? []).some((task) => task.status === "reviewing" || task.status === "queued" || task.status === "running") ? 3000 : false,
     });
 
     const isAllSaved = Boolean(detail && detail.tasks.length > 0 && detail.tasks.every((task) => task.image?.isSaved));

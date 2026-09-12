@@ -7,6 +7,7 @@ export type PublicModel = {
     name: string;
     displayName: string;
     capability: "image" | "text" | "video" | "audio";
+    requiresMaxOutputTokens?: boolean;
     price?: string;
     pricePerImage?: string | null;
     inputPricePerMillion?: string | null;
@@ -37,7 +38,9 @@ export type GenerationTask = {
     output?: { mediaId: string; url: string; mimeType: string; bytes: number; width?: number | null; height?: number | null };
     id: string;
     batchId: string;
-    status: "queued" | "running" | "succeeded" | "failed" | "canceled";
+    status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled";
+    attemptCount?: number;
+    maxAttempts?: number;
     sequence: number;
     errorCode: string | null;
     errorMessage: string | null;

@@ -357,8 +357,11 @@ func idParam(c *gin.Context, name string) (string, error) {
 	}
 	return id.String(), nil
 }
-func body[T any](c *gin.Context) (T, error) {
+func body[T any](c *gin.Context, defaults ...T) (T, error) {
 	var value T
+	if len(defaults) > 0 {
+		value = defaults[0]
+	}
 	if err := c.ShouldBindJSON(&value); err != nil {
 		var sizeError *http.MaxBytesError
 		if errors.As(err, &sizeError) {
@@ -516,6 +519,7 @@ func (a *App) Router() *gin.Engine {
 		return gin.H{"status": "ok"}, nil
 	}))
 	a.authRoutes(r)
+	r.GET("/api/status/models", respond(a.publicStatus))
 	a.authSecurityRoutes(r)
 	a.paymentCallbacks(r)
 	api := r.Group("/api", a.authenticate())
@@ -525,7 +529,6 @@ func (a *App) Router() *gin.Engine {
 	a.walletRoutes(api)
 	a.groupRoutes(api)
 	a.quoteRoutes(api)
-	a.grantRoutes(api)
 	a.userSecurityRoutes(api)
 	admin := api.Group("/admin", func(c *gin.Context) {
 		if currentUser(c).Role != "admin" {
@@ -536,11 +539,14 @@ func (a *App) Router() *gin.Engine {
 	})
 	a.adminRoutes(admin)
 	a.billingAdminRoutes(admin)
+	a.referralRoutes(api, admin)
 	a.groupAdminRoutes(admin)
 	a.groupPolicyRoutes(admin)
+	a.moderationRoutes(admin)
 	a.notificationRoutes(api, admin)
 	a.costRoutes(admin)
 	a.monitoringRoutes(admin)
+	a.taskAdapterRoutes(admin)
 	a.opsRoutes(admin)
 	return r
 }

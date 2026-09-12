@@ -10,8 +10,9 @@ import { queryChannelBalance } from "@/services/api/billing";
 import { checkAllChannels } from "@/services/api/platform-operations";
 import { batchSaveModelChannelBindings, createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
 import ChannelMonitoring from "./components/channel-monitoring";
+import ChannelKeys from "./components/channel-keys";
 
-type ChannelValues = Omit<ChannelInput, "timeoutMs"> & { timeoutSeconds: number; cooldownSeconds: number };
+type ChannelValues = Omit<ChannelInput, "timeoutMs" | "apiKeys"> & { timeoutSeconds: number; cooldownSeconds: number; apiKeysText?: string };
 type QuickModelValues = {
     targetModelId: string;
     name?: string;
@@ -94,18 +95,19 @@ export default function AdminChannelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         form.resetFields();
-        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 300, maxConcurrency: 20, cooldownSeconds: 120 });
+        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKeysText: "", keyStrategy: editing.keyStrategy, taskAdapter: editing.taskAdapter } : { protocol: "openai", status: "disabled", timeoutSeconds: 300, maxConcurrency: 20, cooldownSeconds: 120, keyStrategy: "round_robin", taskAdapter: "" });
     }, [editing, form]);
 
     const columns: TableColumnsType<AdminChannel> = [
         { title: "主动检测", key: "monitoring", width: 125, render: (_, channel) => <div><Button type="link" size="small" onClick={() => setMonitoring(channel)}>{channel.monitorStatus === "healthy" ? "检测正常" : channel.monitorStatus === "failed" ? "检测异常" : "配置检测"}</Button>{channel.monitorToken ? <div className="text-xs text-muted-foreground">检测中</div> : channel.modelChanges ? <div className="text-xs text-muted-foreground">模型列表有变更</div> : null}</div> },
         { title: "渠道", key: "channel", width: 152, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
         { title: "接口地址", dataIndex: "baseUrl", width: 221, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
-        { title: "密钥", key: "secret", width: 130, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><KeyRound className="size-3.5" />{channel.apiKeyHint || "已配置"}</span> : <Tag color="orange">未配置</Tag> },
+        { title: "密钥", key: "secret", width: 130, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><KeyRound className="size-3.5" />{channel.activeKeyCount} / {channel.keyCount} 可用</span> : <Tag color="orange">未配置</Tag> },
+        { title: "响应 p50 / p95", key: "latency", width: 155, render: (_, channel) => <Tooltip title={`${channel.latency?.samples || 0} 个成功样本，含真实任务、生成检测与调试`}><span className="font-mono text-xs">{channel.latency?.p50Ms == null ? "—" : `${(channel.latency.p50Ms / 1000).toFixed(1)}s / ${((channel.latency.p95Ms || 0) / 1000).toFixed(1)}s`}</span></Tooltip> },
         { title: "并发", dataIndex: "maxConcurrency", width: 65 },
         { title: "超时", dataIndex: "timeoutMs", width: 75, render: (value: number) => `${Math.round(value / 1000)}s` },
         { title: "故障冷却", dataIndex: "cooldownSeconds", width: 85, render: (value: number) => `${value ?? 120}s` },
-        { title: "状态", dataIndex: "status", width: 140, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}{channel.lastErrorCode && status !== "active" ? <Tooltip title={channel.lastErrorCode}><Tag color="red">异常</Tag></Tooltip> : null}</Space> },
+        { title: "状态", dataIndex: "status", width: 140, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.autoDisabledAt ? <Tooltip title={`连续 ${channel.consecutiveCheckFailures} 次检测失败，检测成功后恢复`}><Tag color="red">自动停用</Tag></Tooltip> : channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}</Space> },
         { title: "最近尝试", key: "health", width: 307, render: (_, channel) => {
             const attempt = channel.lastAttempt;
             if (!attempt) return <div className="text-xs text-stone-500">{channel.lastErrorCode ? <span className="text-red-500">{channel.lastErrorCode}</span> : channel.lastSuccessAt ? dayjs(channel.lastSuccessAt).format("YYYY-MM-DD HH:mm") : "尚无尝试"}</div>;
@@ -120,7 +122,7 @@ export default function AdminChannelsPage() {
         const matchingModels = modelsQuery.data?.filter((model) => model.name === suggestedName) || [];
         const matchedModel = matchingModels.length === 1 ? matchingModels[0] : undefined;
         quickModelForm.resetFields();
-        quickModelForm.setFieldsValue({ targetModelId: matchedModel?.id || createModelValue, name: suggestedName, displayName: suggestedName, capability: "image", status: "draft", priority: 0, weight: 100, enabled: true });
+        quickModelForm.setFieldsValue({ targetModelId: matchedModel?.id || createModelValue, name: suggestedName, displayName: suggestedName, capability: modelResult?.channel.protocol === "anthropic" ? "text" : "image", status: "draft", priority: 0, weight: 100, enabled: true });
         setConfiguringUpstream(upstreamModel);
     };
 
@@ -131,9 +133,12 @@ export default function AdminChannelsPage() {
             <Modal title={editing ? "编辑渠道" : "创建渠道"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
                 <Form<ChannelValues> form={form} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveMutation.mutate(values)}>
                     <Form.Item name="name" label="渠道名称" rules={[{ required: true, message: "请输入渠道名称" }]}><Input /></Form.Item>
-                    <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="协议" rules={[{ required: true }]}><Select options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
+                    <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="协议" rules={[{ required: true }]}><Select onChange={() => form.setFieldValue("taskAdapter", "")} options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }, { value: "anthropic", label: "Claude Messages" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请输入 Base URL" }, { type: "url", message: "请输入有效 URL" }]}><Input placeholder="https://api.example.com/v1" /></Form.Item>
-                    <Form.Item name="apiKey" label={editing?.apiKeyConfigured ? "替换 API Key" : "API Key"} extra={editing?.apiKeyConfigured ? `当前密钥：${editing.apiKeyHint || "已配置"}。留空表示保持不变。` : "密钥只会提交到服务端加密保存，不会在页面回显。"}><Input.Password autoComplete="new-password" placeholder={editing?.apiKeyConfigured ? "留空则不替换" : "请输入 API Key（如上游需要）"} /></Form.Item>
+                    {editing ? <ChannelKeys channelId={editing.id} /> : null}
+                    <Form.Item name="apiKeysText" label="添加 API Key（每行一个）" extra="只追加新密钥，留空保持不变；服务端加密保存，不回显明文。"><Input.TextArea rows={3} autoComplete="off" className="font-mono [-webkit-text-security:disc]" placeholder="粘贴一个或多个 API Key" /></Form.Item>
+                    <Form.Item name="keyStrategy" label="密钥分配方式" rules={[{ required: true }]}><Select options={[{ value: "round_robin", label: "轮询" }, { value: "random", label: "随机" }]} /></Form.Item>
+                    <Form.Item name="taskAdapter" label="视频任务适配器" extra="仅已接入的协议可用于生成；即梦、可灵、Vidu、原生 Sora 和 Suno 待提供实际接口文档。"><Select options={[{ value: "", label: "按渠道协议选择" }, { value: "openai-video", label: "OpenAI 兼容视频" }, { value: "gemini-video", label: "Gemini / Veo" }, ...["即梦", "可灵", "Vidu", "Sora", "Suno"].map((name) => ({ value: `pending:${name}`, label: `${name} · 待接入`, disabled: true }))]} /></Form.Item>
                     <div className="grid grid-cols-3 gap-4">
                         <Form.Item name="timeoutSeconds" label="超时（秒）" extra="视频渠道可按上游生成耗时单独配置。" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item>
                         <Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={20} precision={0} /></Form.Item>
@@ -244,8 +249,8 @@ export default function AdminChannelsPage() {
 }
 
 function channelPayload(values: ChannelValues) {
-    const { timeoutSeconds, apiKey, ...rest } = values;
-    return { ...rest, timeoutMs: timeoutSeconds * 1000, ...(apiKey?.trim() ? { apiKey: apiKey.trim() } : {}) };
+    const { timeoutSeconds, apiKeysText, ...rest } = values;
+    return { ...rest, timeoutMs: timeoutSeconds * 1000, apiKeys: (apiKeysText || "").split(/\r?\n/).map((key) => key.trim()).filter(Boolean) };
 }
 
 function notifyError(notify: (content: string) => void) { return (error: Error) => notify(error.message || "操作失败"); }

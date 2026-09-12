@@ -9,7 +9,27 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
-### Code review fixes awaiting acceptance
+### 渠道调度与开放能力待验收
+
+本次扩展已完成本机 Docker 构建、启动与回归：后端 44 组测试（共 55 个含子用例的通过记录）及前端 52 项全部通过，0 失败、0 跳过。已补充 `server/internal/platform/routing_moderation_test.go`，修正登录测试沙箱缺失 `URLSearchParams`、多模型探针依赖外部 DNS 的测试夹具；生产超时与频控默认值未因测试调整。
+
+已有本机数据库从版本 11 升至 13，升级前备份 PostgreSQL、MinIO、Redis 和 `.env.local`；钱包、账本、签到及加密 Key 的数量与内容摘要前后相同。`http://localhost:3301` 的 API、Web 与三项存储依赖运行正常，健康、登录、文本、状态、素材页及 JS 入口均返回 200。
+
+独立数据库与模拟上游下的 7 组接口验收全部通过，覆盖 Nginx 登录、单次冻结与故障转移、Key 去重/停用、审核通过与拒绝退款、Claude 原生协议及用量、检测停用恢复、匿名状态、邀请/签到奖励和图片存储；公开状态页浏览器渲染正常，无脚本错误。真实上游、商户支付、SMTP、生产 HTTPS 反代、备份恢复演练及持续压测仍需验收。
+
+- 永久余额：分组页面不再出现周期赠送、周期消费上限，周期领取接口应返回 404；升级后原余额、冻结额、签到与历史账本不变，兑换码继续可用。本月统计不改变余额。
+- 自动切换：默认每任务最多 3 次（含首次），按优先级和权重选候选；限流、超时和上游故障切换，鉴权失败停用对应 Key。核对不同实例继续同一任务时只冻结一次、成功只结算一次；耗尽或没有剩余候选后全额退回冻结。
+- 不重复提交：内容政策、无效参数直接失败；流式已输出文本、已取得视频任务 ID、或上游结果已成功返回后，不再次发起生成。服务重启与迟到响应不得突破尝试次数、覆盖取消结果或重放已知拒绝。
+- 多 Key：验证追加去重、轮询/随机、单独启停与删除；一个 Key 鉴权失败不能停用其他 Key 或整条渠道。已受理视频在更换 Key 后仍按原快照续查，管理接口不返回明文。
+- 健康处置：连续 3 次有效检测失败停止接单，冷却后按原配置检查，1 次成功恢复；手动停用不自动开启。无效参数、内容拒绝和本地存储错误不累计为健康故障。未开启自动检测时需手动触发恢复检查。
+- 耗时与公开状态：任务/探针/调试成功后，渠道列表 p50/p95 与保存样本一致；匿名访问 `/status` 和 `/api/status/models`，未检测及自动检测过期显示待检测，部分渠道可用时显示部分可用；响应不包含密钥、地址或检测提示词。
+- Claude Messages：核对原生请求头、系统提示词、图片附件、SSE 完成标记及输入/缓存/输出用量。未填写最大输出 token 数时在冻结前拒绝；显式填写后按该值请求，达到上限正常结算。验证工作台、画布和文本对话页均可配置。
+- 人工审核：`review` 进入待审核，`log` 放行仅记规则，`block` 优先拒绝；文本及图片/视频/音频提示词、文本参数均检测。验证普通用户不能审批，通过后入队，拒绝/取消退款幂等，批量请求和重新手动重试不绕过审核；被拒绝的文本不会成为下一轮上游上下文。
+- 邀请奖励：默认关闭；推荐链接不能替代注册邀请码。开启后按注册时配置给邀请人永久入账，注册失败不发奖，重复处理不重复入账；关闭期间记录关系但不补发。用户与后台能查询邀请关系、奖励和对应账本。
+- 用户文本对话：`/text` 支持模型选择、报价、系统提示词、输出预算、历史续聊、流式回复和服务端取消；刷新恢复历史及之前填写的参数，最终消息只出现一次；换账号关闭旧订阅，不显示旧会话或写回旧请求结果。
+- 任务适配器：现有 OpenAI 兼容视频、Gemini/Veo 经统一适配器提交与续查；核对时长与价格快照不变。即梦、可灵、Vidu、原生 Sora、Suno 只有待接入入口，收到实际 API 文档后才能接入验收。
+
+### Earlier code review fixes awaiting acceptance
 
 - Startup migrations now include channel soft deletion, the distinct uploading state, and probe deadlines (`009`–`011`). Verify both an empty database and an existing Go database, including channel/model access after startup.
 - Cost totals must show positive user payments: a known upstream cost of ¥1 and payment of ¥0.6 should produce a ¥0.4 subsidy.
@@ -58,8 +78,8 @@ Validation also fixed an unsupported native-button `loading` prop, missing test 
 - Channel operations: active generation probes, model changes and balance alerts. Automatic checks default off, share channel slots and cooldown, and recover interrupted checks without replaying the original generation. Verify state-change notifications and mail failure records with real channels and SMTP.
 - Account security: verified email, single-use 30-minute recovery links, TOTP login, one-time recovery code and device revocation. Invalid/expired/replayed proofs must fail; password recovery must retain MFA, and revoked devices must lose access.
 - Text streaming: OpenAI/Gemini partial text is persisted before one authoritative final message and settlement. Verify Studio/canvas progress, refresh/reconnect, local stop versus server cancellation, and account changes without stale text entering the next session.
-- Group permissions and quotes: enforce allowed models on listing, quoting, creation, retry and execution; claim daily/weekly/monthly grants once per user per Beijing-time period. Unclaimed periods do not accumulate, claimed balances remain. Verify server quotes and actual charges.
-- Group spending limits: default off (0). When configured, creation, text requests and retries add the new hold to billed charges plus current frozen balance for the Beijing-time day/week/month; exceeding the limit returns 429 without creating a task. Unclaimed grants do not count as spend.
+- Group permissions and quotes: enforce allowed models on listing, quoting, creation, retry and execution; verify service quotes and actual charges. Periodic grants and spending caps have been removed; credited balances remain.
+
 - 公网配置文件：服务器使用 `/opt/infinite-canvas-public/.env`，其中包含独立数据库、Redis、MinIO、对象桶、加密密钥和 `infinite_canvas_public_session`；该文件不得提交 Git。
 - User notices: password, email, MFA and new-device login, recharge/grant/check-in credits, and daily low-balance alerts appear in the notification center; verified email plus SMTP also send mail. Same-device logins while a matching session remains do not repeat.
 - Channel operations extras: a channel can probe multiple bound models, administrators can queue every configured channel, and models with no usable channel notify administrators at most once per hour.
@@ -75,7 +95,7 @@ Validation also fixed an unsupported native-button `loading` prop, missing test 
 - 浏览器已查看登录、四类创作工作台、钱包、支付配置和运营设置页面；继续验证邀请注册、昵称与账号安全流程、不同窗口登录退出、浅深色主题与手机布局。
 - 已在隔离环境（模拟上游渠道）跑通端到端闭环：四类生成任务提交、冻结、结算、取消退款均正确（测试余额 ¥10 → ¥9.60），图片/视频/音频可保存为素材，插入画布后刷新可恢复三种媒体节点。
 - 创作工作台图片页与视频页的尺寸记忆相互独立，直接打开视频页不再带入图片尺寸；批次任务全部落定后自动刷新钱包与账本缓存，冻结余额变化即时反映。
-- New operations capabilities pending verification: user group discounts, redeem codes (admin creates, wallet page redeems, once per user per code), per-second video/audio pricing, channel balance query (channels page button via dashboard/billing endpoints; unsupported channels error out), and sensitive-word blocking (substring match on generation and text submission; review action currently behaves same as block). Database migrations support in-place v2→v3 upgrade; back up before upgrading.
+- New operations capabilities pending verification: user group discounts, redeem codes (admin creates, wallet page redeems, once per user per code), per-second video/audio pricing, channel balance query (channels page button via dashboard/billing endpoints; unsupported channels error out), and sensitive-word blocking (substring match on generation and text submission; review now queues manual moderation and log records without blocking). Database migrations support in-place v2→v3 upgrade; back up before upgrading.
 - 以管理员配置图片、视频、文本、音频的真实 OpenAI/Gemini 兼容渠道，验证参数、参考资源、模型按结果收费、生成失败退款、后台停用渠道和任务取消。
 - 文本模型 token 级计价：管理员给文本模型配置输入/缓存命中/输出每百万 token 单价后，提交时按历史长度与 max_tokens 预估冻结，完成时按上游 usage（OpenAI prompt_tokens_details.cached_tokens、Gemini cachedContentTokenCount）实际用量结算并多退少补；上游缺 usage 时回退按冻结额结算。已用隔离测试覆盖缓存计价与冻结清零。
 - 验证画布刷新后图片/文本恢复及视频/音频续查，媒体下载、保存到素材与导入导出；删除生成历史后其他画布或素材引用应继续有效。

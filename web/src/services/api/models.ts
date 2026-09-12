@@ -5,6 +5,7 @@ export type PublicModel = {
     name: string;
     displayName: string;
     capability: "image" | "text" | "video" | "audio";
+    requiresMaxOutputTokens?: boolean;
     price?: string;
     pricePerImage?: string | null;
     sortOrder: number;

@@ -40,7 +40,7 @@ export default function CostReport() {
             <Button onClick={() => { setFilters((current) => ({ ...current, source: "unknown" })); setPage(1); }}>只看未知成本</Button>
             <Button disabled={!entries.length} onClick={exportRows}>导出当前页 CSV</Button>
         </Space>
-        <div className="grid grid-cols-2 gap-6 border-y border-border py-6 lg:grid-cols-4">{[["用户实付", totals?.userPaid], ["已知上游成本", totals?.knownCost], ["成本超过实付的部分", totals?.subsidy], ["已发签到与公益额度", totals?.grants]].map(([label, value]) => <div key={label}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 break-all font-mono text-xl">¥{value || "0.000000"}</p></div>)}</div>
+        <div className="grid grid-cols-2 gap-6 border-y border-border py-6 lg:grid-cols-4">{[["用户实付", totals?.userPaid], ["已知上游成本", totals?.knownCost], ["成本超过实付的部分", totals?.subsidy], ["已发签到、邀请与公益赠送", totals?.grants]].map(([label, value]) => <div key={label}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 break-all font-mono text-xl">¥{value || "0.000000"}</p></div>)}</div>
         <Alert type="info" showIcon title={`另有 ${totals?.unknownCount || 0} 次调用的成本未知`} description="用户实付来自余额账本。上游成本优先使用人工核对值，其余按模型渠道配置估算；未知不按零费用处理。成本差额只基于已知成本，不代表最终账单。渠道检测产生的费用也会记录。" />
         {query.error ? <Alert type="error" title={query.error.message} /> : null}
         <Table<CostEntry> rowKey="id" dataSource={entries} loading={query.isPending} pagination={false} scroll={{ x: 1000 }} columns={[

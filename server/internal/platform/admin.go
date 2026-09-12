@@ -48,9 +48,19 @@ func publicModelRows(items []Row) []Row {
 	return items
 }
 func publicChannel(row Row) Row {
-	row["apiKeyConfigured"] = str(row["encryptedApiKey"]) != ""
-	delete(row, "encryptedApiKey")
+	row["apiKeyConfigured"] = integer(row["keyCount"]) > 0
 	return row
+}
+
+func validateChannelBinding(ctx context.Context, q querier, modelID, channelID string) error {
+	row, err := one(ctx, q, "SELECT m.capability,c.protocol FROM models m JOIN channels c ON c.id=$2 WHERE m.id=$1 AND m.deleted_at IS NULL AND c.deleted_at IS NULL", modelID, channelID)
+	if err != nil {
+		return err
+	}
+	if row["protocol"] == "anthropic" && row["capability"] != "text" {
+		return problem(400, "invalid_capability", "Claude Messages 渠道只能绑定文本模型")
+	}
+	return nil
 }
 
 func (a *App) adminRoutes(admin *gin.RouterGroup) {
@@ -343,8 +353,11 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
+		if err = validateChannelBinding(c.Request.Context(), a.DB, id, channelID); err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(input.ID) != "" {
-			_, err = a.DB.Exec(c.Request.Context(), "UPDATE model_channels SET upstream_model=$3,priority=$4,weight=$5,enabled=$6,updated_at=now() WHERE id=$1 AND model_id=$2", input.ID, id, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
+			_, err = a.DB.Exec(c.Request.Context(), "UPDATE model_channels SET upstream_model=$3,priority=$4,weight=$5,enabled=$6,updated_at=now() WHERE id=$1 AND model_id=$2 AND channel_id=$7", input.ID, id, input.UpstreamModel, input.Priority, input.Weight, input.Enabled, channelID)
 		} else {
 			_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
 		}
@@ -370,6 +383,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := validateChannelBinding(ctx, tx, id, channelID); err != nil {
+				return err
+			}
 			for _, m := range input.UpstreamModels {
 				m = strings.TrimSpace(m)
 				if m == "" {
@@ -446,7 +462,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 	}))
 	admin.GET("/tasks", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT t.id,t.batch_id,t.capability,t.status,t.model_display_name,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,u.username FROM generation_tasks t JOIN users u ON u.id=t.user_id WHERE ($1='' OR t.status=$1) AND ($2='' OR t.capability=$2) ORDER BY t.queued_at DESC LIMIT $3 OFFSET $4", c.Query("status"), c.Query("capability"), limit, offset)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT t.id,t.batch_id,t.capability,t.status,t.attempt_count,t.max_attempts,t.model_display_name,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,u.username FROM generation_tasks t JOIN users u ON u.id=t.user_id WHERE ($1='' OR t.status=$1) AND ($2='' OR t.capability=$2) ORDER BY t.queued_at DESC LIMIT $3 OFFSET $4", c.Query("status"), c.Query("capability"), limit, offset)
 		return gin.H{"tasks": items}, err
 	}))
 	admin.POST("/tasks/:id/cancel", respond(func(c *gin.Context) (any, error) {
@@ -463,8 +479,12 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 }
 
 func (a *App) channelRoutes(admin *gin.RouterGroup) {
+	a.channelKeyRoutes(admin)
 	admin.GET("/channels", respond(func(c *gin.Context) (any, error) {
-		items, err := rows(c.Request.Context(), a.DB, `SELECT c.*,row_to_json(latest) AS last_attempt FROM channels c LEFT JOIN LATERAL (SELECT status,duration_ms AS "durationMs",http_status AS "httpStatus",error_category AS "errorCategory",error_message AS "errorMessage",upstream_model AS "upstreamModel",started_at AS "startedAt",finished_at AS "finishedAt" FROM request_logs WHERE channel_id=c.id ORDER BY started_at DESC,id DESC LIMIT 1) latest ON true WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`)
+		items, err := rows(c.Request.Context(), a.DB, `SELECT c.*,`+channelKeyCounts+`,row_to_json(latest) AS last_attempt,row_to_json(latency) AS latency FROM channels c
+			LEFT JOIN LATERAL (SELECT status,duration_ms AS "durationMs",http_status AS "httpStatus",error_category AS "errorCategory",error_message AS "errorMessage",upstream_model AS "upstreamModel",started_at AS "startedAt",finished_at AS "finishedAt" FROM request_logs WHERE channel_id=c.id ORDER BY started_at DESC,id DESC LIMIT 1) latest ON true
+			LEFT JOIN LATERAL (SELECT count(*) AS samples,percentile_cont(0.5) WITHIN GROUP(ORDER BY duration_ms) AS "p50Ms",percentile_cont(0.95) WITHIN GROUP(ORDER BY duration_ms) AS "p95Ms" FROM upstream_cost_entries WHERE channel_id=c.id AND status='succeeded' AND duration_ms IS NOT NULL) latency ON true
+			WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`)
 		for _, row := range items {
 			publicChannel(row)
 		}
@@ -473,15 +493,20 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 	save := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Name            string `json:"name" binding:"required,max=120"`
-			Protocol        string `json:"protocol" binding:"required,oneof=openai gemini"`
+			Protocol        string `json:"protocol" binding:"required,oneof=openai gemini anthropic"`
 			BaseURL         string `json:"baseUrl" binding:"required"`
-			APIKey          string `json:"apiKey"`
+			APIKeys         []string `json:"apiKeys"`
+			KeyStrategy     string `json:"keyStrategy" binding:"required,oneof=round_robin random"`
+			TaskAdapter     string `json:"taskAdapter"`
 			Status          string `json:"status" binding:"required,oneof=active disabled needs_attention"`
 			TimeoutMS       int    `json:"timeoutMs" binding:"required,min=1000"`
 			MaxConcurrency  int    `json:"maxConcurrency" binding:"required,min=1"`
 			CooldownSeconds int    `json:"cooldownSeconds" binding:"min=0"`
 		}](c)
 		if err != nil {
+			return nil, err
+		}
+		if err = validateTaskAdapter(input.TaskAdapter, input.Protocol); err != nil {
 			return nil, err
 		}
 		u, err := url.Parse(input.BaseURL)
@@ -501,30 +526,34 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			var sealed, hint string
 			if !create {
-				old, err := one(ctx, tx, "SELECT * FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
-				if err != nil {
+				if _, err := one(ctx, tx, "SELECT id FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id); err != nil {
 					return err
 				}
-				sealed = str(old["encryptedApiKey"])
-				hint = str(old["apiKeyHint"])
-			}
-			if input.APIKey != "" {
-				var err error
-				sealed, err = a.seal(input.APIKey)
-				if err != nil {
-					return err
-				}
-				hint = "已配置"
-			}
-			if input.Status == "active" && sealed == "" {
-				return problem(400, "missing_key", "启用渠道前请配置 API Key")
 			}
 			var err error
-			saved, err = one(ctx, tx, "INSERT INTO channels(id,name,protocol,base_url,encrypted_api_key,api_key_hint,status,timeout_ms,max_concurrency,cooldown_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET name=excluded.name,protocol=excluded.protocol,base_url=excluded.base_url,encrypted_api_key=excluded.encrypted_api_key,api_key_hint=excluded.api_key_hint,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,updated_at=now() RETURNING *", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), sealed, hint, input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds)
+			if input.Protocol == "anthropic" {
+				var incompatible bool
+				if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.enabled AND m.deleted_at IS NULL AND m.capability<>'text')", id).Scan(&incompatible); err != nil {
+					return err
+				}
+				if incompatible {
+					return problem(400, "invalid_capability", "切换到 Claude Messages 前，请先解绑或停用非文本模型")
+				}
+			}
+			_, err = tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET name=excluded.name,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter)
 			if err != nil {
 				return err
+			}
+			if err = a.addChannelKeys(ctx, tx, id, input.APIKeys); err != nil {
+				return err
+			}
+			saved, err = one(ctx, tx, "SELECT c.*,"+channelKeyCounts+" FROM channels c WHERE c.id=$1", id)
+			if err != nil {
+				return err
+			}
+			if input.Status == "active" && integer(saved["activeKeyCount"]) == 0 {
+				return problem(400, "missing_key", "启用渠道前请配置至少一个可用 API Key")
 			}
 			return a.audit(ctx, tx, currentUser(c).ID, "channel.save", id, gin.H{"name": input.Name, "status": input.Status})
 		})
@@ -569,6 +598,9 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
+		if err = a.selectChannelKey(c.Request.Context(), &candidate, nil, true); err != nil {
+			return nil, err
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(candidate.TimeoutMS)*time.Millisecond)
 		defer cancel()
 		names, err := a.channelModels(ctx, candidate)
@@ -594,7 +626,7 @@ func (a *App) userRoutes(api *gin.RouterGroup) {
 	api.GET("/user/stats", respond(func(c *gin.Context) (any, error) {
 		ctx := c.Request.Context()
 		id := currentUser(c).ID
-		counts, err := rows(ctx, a.DB, "SELECT capability,count(*)::int AS total,count(*) FILTER(WHERE status='succeeded')::int AS succeeded,count(*) FILTER(WHERE status='failed')::int AS failed,count(*) FILTER(WHERE status IN('queued','running'))::int AS active FROM generation_tasks WHERE user_id=$1 GROUP BY capability", id)
+		counts, err := rows(ctx, a.DB, "SELECT capability,count(*)::int AS total,count(*) FILTER(WHERE status='succeeded')::int AS succeeded,count(*) FILTER(WHERE status='failed')::int AS failed,count(*) FILTER(WHERE status IN('reviewing','queued','running'))::int AS active FROM generation_tasks WHERE user_id=$1 GROUP BY capability", id)
 		if err != nil {
 			return nil, err
 		}

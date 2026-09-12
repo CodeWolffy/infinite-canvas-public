@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 type Monitoring struct {
 	IntervalMinutes  int            `json:"intervalMinutes" binding:"min=0"`
+	AutoDisableAfter int            `json:"autoDisableAfter" binding:"min=0"`
 	BindingIDs       []string       `json:"bindingIds,omitempty" binding:"omitempty,dive,uuid"`
 	Prompt           string         `json:"prompt"`
 	Parameters       map[string]any `json:"parameters"`
@@ -27,32 +29,52 @@ type Monitoring struct {
 	BalanceThreshold *string        `json:"balanceThreshold"`
 }
 
-func (a *App) channelModels(ctx context.Context, c channel) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint("models"), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.authorize(req)
-	data, err := a.upstreamJSON(req)
-	if err != nil {
-		return nil, err
-	}
-	list, _ := data["data"].([]any)
-	if c.Protocol == "gemini" {
-		list, _ = data["models"].([]any)
-	}
-	names := []string{}
-	seen := map[string]bool{}
-	for _, item := range list {
-		model := object(item)
-		name := str(model["id"])
+func (a *App) channelModels(ctx context.Context, c channel) (names []string, err error) {
+	started := time.Now()
+	defer func() {
+		if err != nil {
+			_ = recordKeyFailure(context.WithoutCancel(ctx), a.DB, c, classify(err))
+		} else {
+			_ = recordKeySuccess(context.WithoutCancel(ctx), a.DB, c, started)
+		}
+	}()
+	names = []string{}
+	seen, cursors := map[string]bool{}, map[string]bool{}
+	path := "models"
+	for {
+		req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint(path), nil)
+		if err != nil {
+			return nil, err
+		}
+		c.authorize(req)
+		data, err := a.upstreamJSON(req)
+		if err != nil {
+			return nil, err
+		}
+		list, _ := data["data"].([]any)
 		if c.Protocol == "gemini" {
-			name = strings.TrimPrefix(str(model["name"]), "models/")
+			list, _ = data["models"].([]any)
 		}
-		if name != "" && !seen[name] {
-			names = append(names, name)
-			seen[name] = true
+		for _, item := range list {
+			model := object(item)
+			name := str(model["id"])
+			if c.Protocol == "gemini" {
+				name = strings.TrimPrefix(str(model["name"]), "models/")
+			}
+			if name != "" && !seen[name] {
+				names = append(names, name)
+				seen[name] = true
+			}
 		}
+		if c.Protocol != "anthropic" || data["has_more"] != true {
+			break
+		}
+		cursor := str(data["last_id"])
+		if cursor == "" || cursors[cursor] {
+			return nil, &upstreamError{Category: "upstream_error", Message: "上游模型列表分页未推进"}
+		}
+		cursors[cursor] = true
+		path = "models?after_id=" + url.QueryEscape(cursor)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -102,7 +124,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		input, err := body[Monitoring](c)
+		input, err := body[Monitoring](c, Monitoring{AutoDisableAfter: 3})
 		if err != nil {
 			return nil, err
 		}
@@ -121,6 +143,13 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if len(input.BindingIDs) > 0 {
+				var protocol string
+				if err := tx.QueryRow(ctx, "SELECT protocol FROM channels WHERE id=$1 AND deleted_at IS NULL FOR SHARE", id).Scan(&protocol); err != nil {
+					return err
+				}
+				if protocol == "anthropic" && explicitTextTokens(input.Parameters) == 0 {
+					return problem(400, "output_limit_required", "Claude 生成检测必须指定最大输出 token 数")
+				}
 				var count int
 				if err := tx.QueryRow(ctx, "SELECT count(*) FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.id=ANY($2::text[]::uuid[]) AND m.deleted_at IS NULL", id, input.BindingIDs).Scan(&count); err != nil {
 					return err
@@ -129,7 +158,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 					return problem(400, "invalid_probe", "请先将检测模型绑定到此渠道")
 				}
 			}
-			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id, jsonBytes(input), input.IntervalMinutes)
+			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,auto_disabled_at=CASE WHEN $4::int=0 THEN NULL ELSE auto_disabled_at END,consecutive_check_failures=0,updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id, jsonBytes(input), input.IntervalMinutes, input.AutoDisableAfter)
 			if err != nil {
 				return err
 			}
@@ -187,19 +216,23 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 }
 
 func (a *App) runProbe(ctx context.Context, ch channel, task Row) (result generationResult, err error) {
+	started := time.Now()
 	id := str(task["id"])
 	deadline, _ := ctx.Deadline()
-	if _, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,user_id,model_id,channel_id,capability,cost_config,note,monitor_token,deadline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", id, task["userId"], task["modelId"], ch.ID, task["capability"], jsonBytes(ch.CostConfig), task["note"], task["monitorToken"], deadline); err != nil {
-		return result, err
+	if _, err = a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,user_id,model_id,channel_id,capability,cost_config,note,monitor_token,deadline,key_id,binding_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", id, task["userId"], task["modelId"], ch.ID, task["capability"], jsonBytes(ch.CostConfig), task["note"], task["monitorToken"], deadline, nullable(ch.KeyID), nullable(ch.BindingID)); err != nil {
+		return result, &upstreamError{Category: "storage"}
 	}
 	defer func() {
 		status := "succeeded"
 		if err != nil {
 			status = "failed"
+			_ = recordKeyFailure(context.WithoutCancel(ctx), a.DB, ch, classify(err))
+		} else {
+			_ = recordKeySuccess(context.WithoutCancel(ctx), a.DB, ch, started)
 		}
-		_, saveErr := a.DB.Exec(context.WithoutCancel(ctx), "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE id=$1 AND status='running'", id, status)
-		if err == nil {
-			err = saveErr
+		_, saveErr := a.DB.Exec(context.WithoutCancel(ctx), "UPDATE upstream_cost_entries SET status=$2,duration_ms=(extract(epoch FROM(now()-created_at))*1000)::bigint,updated_at=now() WHERE id=$1", id, status)
+		if err == nil && saveErr != nil {
+			err = &upstreamError{Category: "storage"}
 		}
 	}()
 	result, err = a.generate(ctx, ch, task)
@@ -221,7 +254,7 @@ func (a *App) runProbe(ctx context.Context, ch channel, task Row) (result genera
 		result.DurationSeconds, _ = audioDuration(ctx, result.Data)
 	}
 	if err = a.recordCost(context.WithoutCancel(ctx), id, result, object(task["parameters"])["seconds"], ch.CostConfig); err != nil {
-		return result, err
+		return result, &upstreamError{Category: "storage"}
 	}
 	if task["capability"] != "text" && len(result.Data) == 0 {
 		return result, &upstreamError{Category: "invalid_result", Message: "上游未返回媒体结果"}
@@ -266,8 +299,7 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	id, token := str(row["id"]), str(row["monitorToken"])
 	ctx, cancel := context.WithDeadline(root, row["monitorDeadline"].(time.Time))
 	defer cancel()
-	var config Monitoring
-	_ = json.Unmarshal(jsonBytes(row["monitoring"]), &config)
+	config := monitoringConfig(row["monitoring"])
 	ch, err := a.channelFromRow(row)
 	if err != nil {
 		return
@@ -286,7 +318,13 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	var balance any
 	balanceStatus := str(row["balanceStatus"])
 	var failure *upstreamError
-	if probes := config.BindingIDs; len(probes) > 0 {
+	canProbe := a.selectChannelKey(ctx, &ch, nil, true) == nil
+	validHealth := false
+	bindingChecks := []Row{}
+	if !canProbe {
+		status, detail["credentials"] = "failed", "没有可检测的密钥，请检查密钥配置"
+	}
+	if probes := config.BindingIDs; canProbe && len(probes) > 0 {
 		details := []string{}
 		for i, bindingID := range probes {
 			binding, err := one(ctx, a.DB, "SELECT b.model_id,m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL", bindingID, id)
@@ -296,6 +334,7 @@ func (a *App) runMonitor(root context.Context, row Row) {
 				continue
 			}
 			ch.UpstreamModel = str(binding["upstreamModel"])
+			ch.BindingID = bindingID
 			ch.CostConfig = object(binding["costConfig"])
 			// 检测的全部成本记录共用 monitor_token，中断恢复时才能一并关联。
 			costID := token
@@ -303,32 +342,50 @@ func (a *App) runMonitor(root context.Context, row Row) {
 				costID = uuid.NewString()
 			}
 			task := Row{"id": costID, "run": 1, "probe": true, "modelId": binding["modelId"], "monitorToken": token, "note": "渠道生成检测", "capability": binding["capability"], "prompt": config.Prompt, "parameters": config.Parameters}
+			probeStarted := time.Now()
 			_, err = a.runProbe(ctx, ch, task)
+			checkStatus := "healthy"
+			category := ""
 			if err != nil {
 				status = "failed"
-				failure = classify(err)
-				details = append(details, str(binding["upstreamModel"])+" 生成检测失败（"+failure.Category+"）")
+				checkStatus = "failed"
+				currentFailure := classify(err)
+				category = currentFailure.Category
+				if channelFailure(currentFailure) {
+					failure = currentFailure
+					validHealth = true
+				}
+				details = append(details, str(binding["upstreamModel"])+" 生成检测失败（"+currentFailure.Category+"）")
 			} else {
+				validHealth = true
 				details = append(details, str(binding["upstreamModel"])+" 生成成功")
+			}
+			if err == nil || channelFailure(classify(err)) {
+				bindingChecks = append(bindingChecks, Row{"id": bindingID, "status": checkStatus, "category": nullable(category), "duration": time.Since(probeStarted).Milliseconds(), "started": probeStarted})
 			}
 		}
 		if len(details) > 0 {
 			detail["generation"] = strings.Join(details, "；")
 		}
 	}
-	if config.CheckModels {
+	if config.CheckModels && canProbe {
 		models, err = a.channelModels(ctx, ch)
 		if err != nil {
 			status = "failed"
 			detail["models"] = "模型列表读取失败"
+			if currentFailure := classify(err); channelFailure(currentFailure) {
+				failure = currentFailure
+				validHealth = true
+			}
 		} else {
+			validHealth = true
 			detail["modelCount"] = len(models)
 			if row["upstreamModels"] != nil {
 				changes = modelChanges(row["upstreamModels"], models)
 			}
 		}
 	}
-	if config.BalanceThreshold != nil {
+	if config.BalanceThreshold != nil && canProbe {
 		info, err := a.channelBalance(ctx, ch)
 		balanceStatus = "unavailable"
 		if err == nil && info["balance"] != nil {
@@ -360,6 +417,13 @@ func (a *App) runMonitor(root context.Context, row Row) {
 		if _, err = tx.Exec(root, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,$3,$4,$5)", token, id, status, jsonBytes(detail), time.Since(started).Milliseconds()); err != nil {
 			return err
 		}
+		for _, check := range bindingChecks {
+			if _, err = tx.Exec(root, `INSERT INTO channel_binding_checks(binding_id,status,duration_ms,checked_at,error_category) SELECT id,$2,$3,$4,$5 FROM model_channels WHERE id=$1
+				ON CONFLICT(binding_id) DO UPDATE SET status=excluded.status,duration_ms=excluded.duration_ms,checked_at=excluded.checked_at,error_category=excluded.error_category
+				WHERE channel_binding_checks.checked_at<excluded.checked_at`, check["id"], check["status"], check["duration"], check["started"], check["category"]); err != nil {
+				return err
+			}
+		}
 		var changeJSON, errorText any
 		if changes != nil {
 			changeJSON = jsonBytes(changes)
@@ -373,17 +437,17 @@ func (a *App) runMonitor(root context.Context, row Row) {
 		if _, err = tx.Exec(root, "UPDATE channels SET monitor_status=$2,monitor_error=$3,monitor_checked_at=now(),upstream_models=coalesce($4::text[],upstream_models),model_changes=coalesce($5,model_changes),upstream_balance=coalesce($6,upstream_balance),balance_status=$7 WHERE id=$1", id, status, errorText, models, changeJSON, balance, nullable(balanceStatus)); err != nil {
 			return err
 		}
-		if failure != nil && failure.Category != "content_policy" && failure.Category != "invalid_request" {
-			if _, err = tx.Exec(root, "UPDATE channels SET cooldown_until=now()+($2*interval '1 second'),last_failure_at=now(),last_error_code=$3 WHERE id=$1", id, ch.CooldownSeconds, failure.Category); err != nil {
+		if validHealth {
+			if err = a.recordMonitorHealth(root, tx, current, started, status == "healthy", failure); err != nil {
 				return err
 			}
-		}
-		if status == "healthy" && len(config.BindingIDs) > 0 {
-			if _, err = tx.Exec(root, "UPDATE channels SET last_success_at=now(),last_error_code=NULL,cooldown_until=NULL WHERE id=$1 AND (last_failure_at IS NULL OR last_failure_at<$2)", id, started); err != nil {
-				return err
+			if status == "healthy" {
+				if err = recordKeySuccess(root, tx, ch, started); err != nil {
+					return err
+				}
 			}
 		}
-		if str(current["monitorStatus"]) != status && (status == "failed" || current["monitorStatus"] != nil) {
+		if str(current["monitorStatus"]) != status && (status == "failed" || current["monitorStatus"] != nil) && !(status == "healthy" && current["autoDisabledAt"] != nil) {
 			if err = a.notification(root, tx, "", "monitor:"+token, "channel.health", "渠道检测状态变化", ch.Name+"："+map[string]string{"healthy": "已恢复", "failed": "检测失败，请查看检测记录"}[status]); err != nil {
 				return err
 			}
@@ -423,11 +487,14 @@ func (a *App) startMonitoring(ctx context.Context) {
 
 func (a *App) recoverMonitoring(ctx context.Context) {
 	_ = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-		stale, err := rows(ctx, tx, "SELECT id,name,monitor_token,monitor_status FROM channels WHERE monitor_token IS NOT NULL AND monitor_deadline<now() FOR UPDATE SKIP LOCKED")
+		stale, err := rows(ctx, tx, "SELECT * FROM channels WHERE monitor_token IS NOT NULL AND monitor_deadline<now() FOR UPDATE SKIP LOCKED")
 		if err != nil {
 			return err
 		}
 		for _, row := range stale {
+			if err = a.recordMonitorHealth(ctx, tx, row, time.Now(), false, &upstreamError{Category: "timeout"}); err != nil {
+				return err
+			}
 			if _, err = tx.Exec(ctx, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,'failed',$3,0) ON CONFLICT(id) DO NOTHING", row["monitorToken"], row["id"], jsonBytes(Row{"generation": "检测超时或进程中断，未重新提交原请求"})); err != nil {
 				return err
 			}

@@ -45,7 +45,7 @@ export default function AdminPlaygroundPage() {
     const handleChannelChange = (channelId: string) => {
         const ch = activeChannels.find((c) => c.id === channelId);
         if (ch) {
-            const defaultModel = ch.lastAttempt?.upstreamModel || ch.upstreamModels?.[0] || (ch.protocol === "openai" ? "gpt-4o-mini" : "gemini-1.5-flash");
+            const defaultModel = ch.lastAttempt?.upstreamModel || ch.upstreamModels?.[0] || (ch.protocol === "openai" ? "gpt-4o-mini" : ch.protocol === "anthropic" ? "" : "gemini-1.5-flash");
             form.setFieldsValue({ model: defaultModel });
         }
     };
@@ -223,8 +223,8 @@ export default function AdminPlaygroundPage() {
                                 <Form.Item name="temperature" label={<span className="text-[11px] text-stone-500">Temperature</span>} className="!mb-0">
                                     <InputNumber min={0} max={2} step={0.1} className="!w-full" size="small" />
                                 </Form.Item>
-                                <Form.Item name="maxTokens" label={<span className="text-[11px] text-stone-500">Max Tokens</span>} className="!mb-0">
-                                    <InputNumber min={1} max={8192} step={128} className="!w-full" size="small" placeholder="默认" />
+                                <Form.Item name="maxTokens" label={<span className="text-[11px] text-stone-500">最大输出 token</span>} className="!mb-0" rules={[{ required: selectedChannel?.protocol === "anthropic", message: "Claude 必须填写" }]}>
+                                    <InputNumber min={1} precision={0} className="!w-full" size="small" placeholder={selectedChannel?.protocol === "anthropic" ? "必须填写" : "由上游决定"} />
                                 </Form.Item>
                             </div>
                         </div>

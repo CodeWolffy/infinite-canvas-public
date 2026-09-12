@@ -59,6 +59,7 @@ export type CanvasNodeMetadata = {
     generationType?: CanvasImageGenerationType;
     model?: string;
     reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
+    textMaxTokens?: string;
     conversationId?: string;
     textRequestId?: string;
     size?: string;

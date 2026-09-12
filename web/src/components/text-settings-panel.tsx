@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { InputNumber } from "antd";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
@@ -10,7 +11,7 @@ const reasoningEffortOptions: ReasoningEffort[] = ["auto", "low", "medium", "hig
 
 type TextSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "reasoningEffort", value: ReasoningEffort) => void;
+    onConfigChange: (changes: Partial<Pick<AiConfig, "reasoningEffort" | "textMaxTokens">>) => void;
     theme: CanvasTheme;
     className?: string;
 };
@@ -27,12 +28,13 @@ export function TextSettingsPanel({ config, onConfigChange, theme, className = "
                     </div>
                     <div className="grid grid-cols-5 gap-2">
                         {reasoningEffortOptions.map((value) => (
-                            <OptionPill key={value} selected={config.reasoningEffort === value} theme={theme} onClick={() => onConfigChange("reasoningEffort", value)}>
+                            <OptionPill key={value} selected={config.reasoningEffort === value} theme={theme} onClick={() => onConfigChange({ reasoningEffort: value })}>
                                 {t(`settingsPanels.common.${value}`)}
                             </OptionPill>
                         ))}
                     </div>
                 </div>
+                <div className="space-y-2.5"><label className="text-sm font-medium" style={{ color: theme.node.muted }}>最大输出 token</label><InputNumber aria-label="最大输出 token" min={1} precision={0} className="!w-full" value={config.textMaxTokens ? Number(config.textMaxTokens) : null} onChange={(value) => onConfigChange({ textMaxTokens: value == null ? "" : String(value) })} placeholder="Claude 必填，其他模型选填" /><p className="text-xs" style={{ color: theme.node.muted }}>不设置默认值，由你填写本次输出上限。</p></div>
             </div>
         </ImageSettingsTheme>
     );

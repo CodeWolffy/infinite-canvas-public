@@ -41,7 +41,7 @@ function setup(t) {
         runInNewContext(compiled, {
             module, exports: module.exports,
             require: (id) => { assert.ok(imports[id], `Unexpected dependency: ${id}`); return imports[id]; },
-            DOMException, URL, setTimeout, clearTimeout, window: { location: { origin: "https://canvas.example.test" } },
+            DOMException, URL, URLSearchParams, setTimeout, clearTimeout, window: { location: { origin: "https://canvas.example.test" } },
             localStorage: { getItem: (key) => browserStorage.get(key) ?? null, setItem: (key, value) => browserStorage.set(key, value), removeItem: (key) => browserStorage.delete(key) },
             BroadcastChannel: class {
                 sent = [];

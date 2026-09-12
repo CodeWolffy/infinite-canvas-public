@@ -50,6 +50,7 @@ export type AiConfig = {
     videoMode: string;
     systemPrompt: string;
     reasoningEffort: ReasoningEffort;
+    textMaxTokens: string;
     models: string[];
     quality: string;
     size: string;
@@ -118,6 +119,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
+    textMaxTokens: "",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
@@ -286,6 +288,7 @@ export const useConfigStore = create<ConfigStore>()(
                     count: state.config.count,
                     canvasImageCount: state.config.canvasImageCount,
                     reasoningEffort: state.config.reasoningEffort,
+                    textMaxTokens: state.config.textMaxTokens,
                     systemPrompt: state.config.systemPrompt,
                     videoSeconds: state.config.videoSeconds,
                     vquality: state.config.vquality,
@@ -313,6 +316,7 @@ export const useConfigStore = create<ConfigStore>()(
                         count: persistedConfig.count ?? defaults.count,
                         canvasImageCount: persistedConfig.canvasImageCount ?? defaults.canvasImageCount,
                         reasoningEffort: persistedConfig.reasoningEffort ?? defaults.reasoningEffort,
+                        textMaxTokens: persistedConfig.textMaxTokens ?? defaults.textMaxTokens,
                         systemPrompt: persistedConfig.systemPrompt ?? defaults.systemPrompt,
                         videoSeconds: persistedConfig.videoSeconds ?? defaults.videoSeconds,
                         vquality: persistedConfig.vquality ?? defaults.vquality,

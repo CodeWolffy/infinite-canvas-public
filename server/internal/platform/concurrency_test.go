@@ -203,7 +203,10 @@ func fixtureModel(t *testing.T, a *App, capability, baseURL string) (string, str
 	if _, err = a.DB.Exec(ctx, "INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'test','测试模型',$2,'published',1000000)", modelID, capability); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.DB.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,encrypted_api_key,status) VALUES($1,'测试渠道','openai',$2,$3,'active')", channelID, baseURL, sealed); err != nil {
+	if _, err = a.DB.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", channelID, baseURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.DB.Exec(ctx, "INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", channelID, sealed); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = a.DB.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'test')", modelID, channelID); err != nil {
@@ -272,7 +275,10 @@ func TestVideoPollingRetainsAcceptedTaskAndCredentialSnapshot(t *testing.T) {
 	}
 	testBalance(t, a, id, moneyScale, moneyScale)
 	changed, _ := a.seal("changed-test-key")
-	if _, err := a.DB.Exec(ctx, "UPDATE channels SET encrypted_api_key=$2,status='disabled' WHERE id=$1", channel, changed); err != nil {
+	if _, err := a.DB.Exec(ctx, "UPDATE channel_keys SET encrypted_api_key=$2 WHERE channel_id=$1", channel, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.Exec(ctx, "UPDATE channels SET status='disabled' WHERE id=$1", channel); err != nil {
 		t.Fatal(err)
 	}
 	secondInstance := &App{DB: a.DB, Redis: a.Redis, Config: a.Config}

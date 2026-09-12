@@ -5,6 +5,7 @@ import { Plus, Ticket } from "lucide-react";
 import dayjs, { type Dayjs } from "dayjs";
 
 import { createInvitation, getInvitations, setInvitationDisabled, type Invitation } from "@/services/api/billing";
+import ReferralRecords from "./components/referral-records";
 
 export default function InvitationsPage() {
     const { message } = App.useApp();
@@ -39,5 +40,6 @@ export default function InvitationsPage() {
                 <Space className="flex justify-end"><Button onClick={() => setOpen(false)}>取消</Button><Button type="primary" htmlType="submit" loading={create.isPending}>创建</Button></Space>
             </Form>
         </Modal>
+        <ReferralRecords />
     </div>;
 }

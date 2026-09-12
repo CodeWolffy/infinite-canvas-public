@@ -28,9 +28,12 @@ type PlatformSettings struct {
 	IPRPM               int    `json:"ipRPM"`
 	ActiveTasks         int    `json:"activeTasks"`
 	PaymentOrderMinutes int    `json:"paymentOrderMinutes"`
+	MaxAttempts         int    `json:"maxAttempts" binding:"min=1"`
+	ReferralEnabled     bool   `json:"referralEnabled"`
+	ReferralReward      string `json:"referralReward"`
 }
 
-var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30}
+var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30, MaxAttempts: 3, ReferralReward: "0"}
 
 func (a *App) settings(ctx context.Context, q querier) (PlatformSettings, error) {
 	var raw []byte
@@ -132,22 +135,6 @@ func (a *App) walletRoutes(api *gin.RouterGroup) {
 		summary, err := walletSummary(ctx, a.DB, u.ID, &from, &to)
 		if err != nil {
 			return nil, err
-		}
-		limit, err := one(ctx, a.DB, `SELECT g.spend_limit_micros,g.spend_period,(date_trunc(g.spend_period,now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai') AS period_start
-			FROM users u JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND g.spend_limit_micros>0`, u.ID)
-		if err != nil && !errors.Is(err, notFound) {
-			return nil, err
-		}
-		if err == nil {
-			var spent, frozen int64
-			if err = a.DB.QueryRow(ctx, `SELECT coalesce((SELECT -sum(delta_balance+delta_frozen) FROM wallet_entries WHERE user_id=$1 AND kind='charge' AND created_at>=$2),0),
-				coalesce((SELECT frozen_micros FROM wallets WHERE user_id=$1),0)`, u.ID, limit["periodStart"]).Scan(&spent, &frozen); err != nil {
-				return nil, err
-			}
-			summary["spendLimit"] = money(integer(limit["spendLimitMicros"]))
-			summary["spendPeriod"] = limit["spendPeriod"]
-			summary["periodSpent"] = money(spent)
-			summary["periodFrozen"] = money(frozen)
 		}
 		return gin.H{"wallet": walletView(wallet), "checkin": gin.H{"enabled": settings.CheckinEnabled, "day": day, "checkedIn": checked, "rewardMin": settings.RewardMin, "rewardMax": settings.RewardMax, "timezone": "Asia/Shanghai"}, "paymentChannels": channels, "summary": summary}, nil
 	}))
@@ -260,6 +247,10 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		max, err := amountUnits(settings.RewardMax, moneyScale)
 		if err != nil {
 			return nil, err
+		}
+		reward, err := amountUnits(settings.ReferralReward, moneyScale)
+		if err != nil || reward < 0 {
+			return nil, problem(400, "invalid_settings", "邀请奖励必须为非负金额")
 		}
 		if min < 0 || max < min || settings.UserRPM < 0 || settings.IPRPM < 0 || settings.ActiveTasks < 0 || settings.PaymentOrderMinutes <= 0 {
 			return nil, problem(400, "invalid_settings", "奖励范围、频控或订单有效期不正确")

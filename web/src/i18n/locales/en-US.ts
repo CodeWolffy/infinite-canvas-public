@@ -362,6 +362,7 @@ export default {
     },
     navigation: {
         studio: "创作工作台",
+        text: "文本对话",
         canvas: "My Canvases",
         image: "Image Studio",
         video: "Video Studio",

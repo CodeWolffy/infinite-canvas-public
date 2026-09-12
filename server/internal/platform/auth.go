@@ -268,6 +268,7 @@ func (a *App) authRoutes(r *gin.Engine) {
 			DisplayName    string `json:"displayName" binding:"required,max=80"`
 			Password       string `json:"password" binding:"required,min=10,max=128"`
 			InvitationCode string `json:"invitationCode" binding:"required"`
+			ReferralCode   string `json:"referralCode" binding:"omitempty,uuid"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -308,6 +309,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 				return err
 			}
 			if _, err = tx.Exec(ctx, "INSERT INTO invitation_uses(invitation_id,user_id) VALUES($1,$2)", invitation, id); err != nil {
+				return err
+			}
+			if err = a.creditReferral(ctx, tx, id, input.ReferralCode); err != nil {
 				return err
 			}
 			token, err = a.sessionWithClient(ctx, tx, id, c)

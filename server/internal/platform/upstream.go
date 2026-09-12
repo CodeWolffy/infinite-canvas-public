@@ -28,6 +28,9 @@ func (c channel) endpoint(path string) string {
 	if c.Protocol == "gemini" && !strings.HasSuffix(base, "/v1beta") && !strings.HasSuffix(base, "/v1") {
 		base += "/v1beta"
 	}
+	if c.Protocol == "anthropic" && !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
 	return base + "/" + strings.TrimLeft(path, "/")
 }
 func (c channel) authorize(req *http.Request) {
@@ -36,6 +39,9 @@ func (c channel) authorize(req *http.Request) {
 		if strings.HasPrefix(c.APIKey, "sk-") {
 			req.Header.Set("Authorization", "Bearer "+c.APIKey)
 		}
+	} else if c.Protocol == "anthropic" {
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
 	} else {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
@@ -119,7 +125,9 @@ func responseError(status int, payload map[string]any, raw ...string) *upstreamE
 		if strings.Contains(value, "content_policy") ||
 			strings.Contains(value, "content_filter") ||
 			strings.Contains(value, "prohibited_content") ||
-			strings.Contains(value, "safety") ||
+			strings.Contains(value, "safety_violation") ||
+			strings.Contains(value, "safety_policy") ||
+			(status < 500 && strings.Contains(value, "safety")) ||
 			strings.Contains(value, "安全政策") ||
 			strings.Contains(value, "安全审核") ||
 			strings.Contains(value, "不适合进行图像生成") ||
@@ -133,7 +141,21 @@ func responseError(status int, payload map[string]any, raw ...string) *upstreamE
 	if isContentPolicy || status == 451 {
 		return &upstreamError{Category: "content_policy", Status: status, Message: msg}
 	}
+	if status == 400 {
+		switch kind {
+		case "overloaded_error", "api_error":
+			status = 503
+		case "rate_limit_error":
+			status = 429
+		case "authentication_error":
+			status = 401
+		case "permission_error":
+			status = 403
+		}
+	}
 	switch {
+	case status == 408 || status == 504:
+		return &upstreamError{Category: "timeout", Status: status, Retryable: true, Message: msg}
 	case status == 429:
 		return &upstreamError{Category: "rate_limit", Status: status, Retryable: true, Message: msg}
 	case status == 401 || status == 403:
@@ -199,19 +221,33 @@ func (a *App) references(ctx context.Context, kind, id string) ([]referenceMedia
 func (a *App) generate(ctx context.Context, c channel, task Row) (generationResult, error) {
 	params := object(task["parameters"])
 	capability := str(task["capability"])
-	if capability == "video" && str(task["upstreamTaskId"]) != "" {
-		return a.pollVideo(ctx, c, str(task["upstreamTaskId"]))
+	var adapter taskAdapter
+	if capability == "video" {
+		var err error
+		adapter, err = videoAdapter(c)
+		if err != nil {
+			return generationResult{}, err
+		}
+		if id := str(task["upstreamTaskId"]); id != "" {
+			return adapter.Poll(a, ctx, c, id)
+		}
 	}
 	if capability == "text" {
 		return a.generateText(ctx, c, task, params)
+	}
+	if c.Protocol == "anthropic" {
+		return generationResult{}, &upstreamError{Category: "invalid_request", Message: "Claude Messages 渠道仅支持文本对话"}
 	}
 	var refs []referenceMedia
 	var err error
 	if task["probe"] != true {
 		refs, err = a.references(ctx, "batch", str(task["batchId"]))
 		if err != nil {
-			return generationResult{}, err
+			return generationResult{}, &upstreamError{Category: "storage", Message: "参考文件暂时无法读取，请检查文件后重试"}
 		}
+	}
+	if capability == "video" {
+		return adapter.Submit(a, ctx, c, task, params, refs)
 	}
 	if c.Protocol == "gemini" {
 		return a.generateGemini(ctx, c, capability, str(task["prompt"]), params, refs)
@@ -280,58 +316,6 @@ func (a *App) generate(ctx context.Context, c channel, task Row) (generationResu
 			data, err = pcmWAV(data, 24000)
 		}
 		return generationResult{Data: data}, err
-	case "video":
-		body := selectedParams(params, "seconds", "size", "resolution_name", "generate_audio", "watermark", "mode")
-		body["model"] = c.UpstreamModel
-		body["prompt"] = task["prompt"]
-		if body["mode"] == nil {
-			body["mode"] = "frames"
-		}
-		images := 0
-		for _, ref := range refs {
-			if strings.HasPrefix(ref.MIME, "image/") {
-				images++
-			}
-		}
-		if images > 2 {
-			body["mode"] = "reference"
-		}
-		fields := []formFile{}
-		imageIndex := 0
-		for _, ref := range refs {
-			name := ""
-			switch {
-			case strings.HasPrefix(ref.MIME, "video/"):
-				name = "video[]"
-			case strings.HasPrefix(ref.MIME, "audio/"):
-				name = "audio[]"
-			case strings.HasPrefix(ref.MIME, "image/"):
-				name = "image[]"
-				if body["mode"] == "frames" {
-					name = "first_frame"
-					if imageIndex > 0 {
-						name = "last_frame"
-					}
-				}
-				imageIndex++
-			}
-			if name != "" {
-				fields = append(fields, formFile{name, ref})
-			}
-		}
-		req, err := c.multipartRequest(ctx, "videos", body, fields)
-		if err != nil {
-			return generationResult{}, err
-		}
-		response, err := a.upstreamJSON(req)
-		if err != nil {
-			return generationResult{}, err
-		}
-		id := str(response["id"])
-		if id == "" {
-			return generationResult{}, &upstreamError{Category: "upstream_error"}
-		}
-		return generationResult{Pending: true, UpstreamID: id}, nil
 	}
 	return generationResult{}, &upstreamError{Category: "invalid_request"}
 }
@@ -389,12 +373,13 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 	stored := []Row{{"role": "user", "content": task["prompt"]}}
 	var err error
 	if task["probe"] != true {
-		stored, err = rows(ctx, a.DB, "SELECT id,role,content FROM messages WHERE conversation_id=$1 ORDER BY sequence", task["conversationId"])
+		stored, err = rows(ctx, a.DB, "SELECT m.id,m.role,m.content FROM messages m WHERE m.conversation_id=$1 AND "+approvedMessage+" ORDER BY m.sequence", task["conversationId"])
 		if err != nil {
-			return generationResult{}, err
+			return generationResult{}, &upstreamError{Category: "storage", Message: "对话暂时无法读取，请稍后重试"}
 		}
 	}
 	messages := []any{}
+	anthropicMessages := []any{}
 	contents := []any{}
 	system := str(params["systemPrompt"])
 	if system != "" {
@@ -405,11 +390,12 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 		if m["id"] != nil {
 			refs, err = a.references(ctx, "message", str(m["id"]))
 			if err != nil {
-				return generationResult{}, err
+				return generationResult{}, &upstreamError{Category: "storage", Message: "对话附件暂时无法读取，请检查文件后重试"}
 			}
 		}
 		parts := []any{map[string]any{"text": m["content"]}}
 		openParts := []any{map[string]any{"type": "text", "text": m["content"]}}
+		claudeParts := []any{map[string]any{"type": "text", "text": m["content"]}}
 		for _, ref := range refs {
 			if !strings.HasPrefix(ref.MIME, "image/") {
 				return generationResult{}, &upstreamError{Category: "invalid_request"}
@@ -417,8 +403,10 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			encoded := base64.StdEncoding.EncodeToString(ref.Data)
 			parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": ref.MIME, "data": encoded}})
 			openParts = append(openParts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:" + ref.MIME + ";base64," + encoded}})
+			claudeParts = append(claudeParts, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": ref.MIME, "data": encoded}})
 		}
 		messages = append(messages, map[string]any{"role": m["role"], "content": openParts})
+		anthropicMessages = append(anthropicMessages, map[string]any{"role": m["role"], "content": claudeParts})
 		role := str(m["role"])
 		if role == "assistant" {
 			role = "model"
@@ -428,11 +416,25 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 	var req *http.Request
 	if c.Protocol == "gemini" {
 		config := selectedParams(params, "temperature", "topP", "maxOutputTokens")
+		if limit := explicitTextTokens(params); limit > 0 {
+			config["maxOutputTokens"] = limit
+		}
 		body := map[string]any{"contents": contents, "generationConfig": config}
 		if system != "" {
 			body["systemInstruction"] = map[string]any{"parts": []any{map[string]string{"text": system}}}
 		}
 		req, err = c.jsonRequest(ctx, "models/"+url.PathEscape(c.UpstreamModel)+":streamGenerateContent?alt=sse", body)
+	} else if c.Protocol == "anthropic" {
+		limit := explicitTextTokens(params)
+		if limit == 0 {
+			return generationResult{}, &upstreamError{Category: "invalid_request", Message: "Claude Messages 必须由用户指定最大输出 token 数"}
+		}
+		body := selectedParams(params, "temperature", "top_p", "stop_sequences")
+		body["model"], body["messages"], body["max_tokens"], body["stream"] = c.UpstreamModel, anthropicMessages, limit, true
+		if system != "" {
+			body["system"] = system
+		}
+		req, err = c.jsonRequest(ctx, "messages", body)
 	} else {
 		body := selectedParams(params, "temperature", "top_p", "max_tokens", "max_completion_tokens", "reasoning_effort")
 		if effort := str(params["reasoningEffort"]); effort != "" && effort != "auto" {
@@ -443,6 +445,9 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 		body["stream"] = true
 		body["stream_options"] = map[string]any{"include_usage": true}
 		body["n"] = 1
+		if body["max_tokens"] == nil && body["max_completion_tokens"] == nil && explicitTextTokens(params) > 0 {
+			body["max_tokens"] = explicitTextTokens(params)
+		}
 		req, err = c.jsonRequest(ctx, "chat/completions", body)
 	}
 	if err != nil {
@@ -507,60 +512,6 @@ func geminiImageConfig(params map[string]any) map[string]any {
 	return config
 }
 func (a *App) generateGemini(ctx context.Context, c channel, capability, prompt string, params map[string]any, refs []referenceMedia) (generationResult, error) {
-	if capability == "video" {
-		instance := map[string]any{"prompt": prompt}
-		images := []any{}
-		for _, ref := range refs {
-			if !strings.HasPrefix(ref.MIME, "image/") {
-				return generationResult{}, &upstreamError{Category: "invalid_request"}
-			}
-			images = append(images, map[string]any{"bytesBase64Encoded": base64.StdEncoding.EncodeToString(ref.Data), "mimeType": ref.MIME})
-		}
-		if params["mode"] == "reference" || len(images) > 2 {
-			references := []any{}
-			for _, img := range images {
-				references = append(references, map[string]any{"image": img, "referenceType": "asset"})
-			}
-			instance["referenceImages"] = references
-		} else {
-			if len(images) > 0 {
-				instance["image"] = images[0]
-			}
-			if len(images) > 1 {
-				instance["lastFrame"] = images[1]
-			}
-		}
-		parameters := selectedParams(params, "aspectRatio", "resolution", "generateAudio")
-		if audio, exists := params["generate_audio"]; exists {
-			parameters["generateAudio"] = audio
-		}
-		if resolution := str(params["resolution_name"]); parameters["resolution"] == nil && resolution != "" {
-			parameters["resolution"] = strings.TrimSuffix(resolution, "p") + "p"
-		}
-		// 上游请求使用与计费一致的规范化时长，不再直接透传 durationSeconds。
-		if seconds, err := paramSeconds(params); err != nil {
-			return generationResult{}, err
-		} else if !seconds.IsZero() {
-			parameters["durationSeconds"] = json.Number(seconds.String())
-		}
-		if parameters["aspectRatio"] == nil {
-			parameters["aspectRatio"] = geminiImageConfig(params)["aspectRatio"]
-		}
-		parameters["sampleCount"] = 1
-		req, err := c.jsonRequest(ctx, "models/"+url.PathEscape(c.UpstreamModel)+":predictLongRunning", map[string]any{"instances": []any{instance}, "parameters": parameters})
-		if err != nil {
-			return generationResult{}, err
-		}
-		response, err := a.upstreamJSON(req)
-		if err != nil {
-			return generationResult{}, err
-		}
-		id := str(response["name"])
-		if id == "" {
-			return generationResult{}, &upstreamError{Category: "upstream_error"}
-		}
-		return generationResult{Pending: true, UpstreamID: id}, nil
-	}
 	parts := []any{map[string]any{"text": prompt}}
 	for _, ref := range refs {
 		parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": ref.MIME, "data": base64.StdEncoding.EncodeToString(ref.Data)}})

@@ -591,7 +591,7 @@ function InfiniteCanvasPage() {
                     });
                     return;
                 }
-                if (task.status === "queued" || task.status === "running") return;
+                if (task.status === "reviewing" || task.status === "queued" || task.status === "running") return;
                 if (task.status !== "succeeded" || !task.image) {
                     setNodes((current) => {
                         const updated = current.map((item) => {
@@ -2874,6 +2874,7 @@ function InfiniteCanvasPage() {
                         fontSize: 14,
                         model: generationConfig.model,
                         reasoningEffort: generationConfig.reasoningEffort,
+                        textMaxTokens: generationConfig.textMaxTokens,
                         textCount,
                         texts: textIds.map((id) => ({ id, status: NODE_STATUS_LOADING, content: "" })),
                         primaryTextId: textIds[0],

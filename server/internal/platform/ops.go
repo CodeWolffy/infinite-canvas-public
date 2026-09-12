@@ -29,30 +29,6 @@ func queryTime(c *gin.Context, key string) (*time.Time, error) {
 	return &parsed, nil
 }
 
-func (a *App) enforceSpendLimit(ctx context.Context, q querier, userID string, extra int64) error {
-	if extra < 0 {
-		extra = 0
-	}
-	row, err := one(ctx, q, `SELECT g.spend_limit_micros,g.spend_period,(date_trunc(g.spend_period,now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai') AS period_start
-		FROM users u JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND g.spend_limit_micros>0`, userID)
-	if errors.Is(err, notFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var spent, frozen int64
-	if err = q.QueryRow(ctx, `SELECT coalesce((SELECT -sum(delta_balance+delta_frozen) FROM wallet_entries WHERE user_id=$1 AND kind='charge' AND created_at>=$2),0),
-		coalesce((SELECT frozen_micros FROM wallets WHERE user_id=$1),0)`, userID, row["periodStart"]).Scan(&spent, &frozen); err != nil {
-		return err
-	}
-	if spent+frozen+extra > integer(row["spendLimitMicros"]) {
-		label := map[string]string{"day": "今日", "week": "本周", "month": "本月"}[str(row["spendPeriod"])]
-		return problem(429, "spend_limit", label+"分组消费已达上限，请等待下个周期或联系管理员")
-	}
-	return nil
-}
-
 func lockStorage(ctx context.Context, tx pgx.Tx, userID string) error {
 	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "storage:"+userID)
 	return err
@@ -98,7 +74,7 @@ func (a *App) notifyCredit(ctx context.Context, q querier, userID, kind string, 
 	if amount <= 0 {
 		return nil
 	}
-	title := map[string]string{"recharge": "余额已到账", "grant": "公益额度已发放", "checkin": "签到奖励已到账", "adjustment": "管理员已调整余额"}[kind]
+	title := map[string]string{"recharge": "余额已到账", "grant": "公益额度已发放", "checkin": "签到奖励已到账", "referral": "邀请奖励已到账", "adjustment": "管理员已调整余额"}[kind]
 	if title == "" {
 		title = "余额已增加"
 	}
@@ -188,7 +164,7 @@ func walletSummary(ctx context.Context, q querier, userID string, from, to *time
 	row, err := one(ctx, q, `SELECT
 		coalesce(-sum(delta_balance+delta_frozen) FILTER(WHERE kind='charge'),0)::bigint AS spent,
 		coalesce(sum(delta_balance) FILTER(WHERE kind='recharge'),0)::bigint AS recharge,
-		coalesce(sum(delta_balance) FILTER(WHERE kind='grant'),0)::bigint AS grants,
+		coalesce(sum(delta_balance) FILTER(WHERE kind IN('grant','referral')),0)::bigint AS grants,
 		coalesce(sum(delta_balance) FILTER(WHERE kind='checkin'),0)::bigint AS checkin,
 		coalesce(sum(delta_balance) FILTER(WHERE kind='adjustment'),0)::bigint AS adjustment
 		FROM wallet_entries WHERE user_id=$1 AND ($2::timestamptz IS NULL OR created_at>=$2) AND ($3::timestamptz IS NULL OR created_at<=$3)`, userID, from, to)

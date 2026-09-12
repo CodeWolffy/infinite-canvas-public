@@ -26,13 +26,14 @@ func (a *App) groupDiscount(ctx context.Context, q querier, user *User) (decimal
 }
 
 // 记录命中的规则及处理方式，不把完整用户提示词写入审计日志。
-func (a *App) checkSensitive(ctx context.Context, text, userID string) (string, error) {
+func (a *App) checkSensitive(ctx context.Context, text, userID string) (sensitiveDecision, error) {
+	decision := sensitiveDecision{Matches: []Row{}}
 	if strings.TrimSpace(text) == "" {
-		return "", nil
+		return decision, nil
 	}
 	items, err := rows(ctx, a.DB, "SELECT id,pattern,action FROM sensitive_words ORDER BY created_at,id")
 	if err != nil {
-		return "", err
+		return decision, err
 	}
 	lowered := strings.ToLower(text)
 	for _, item := range items {
@@ -41,20 +42,26 @@ func (a *App) checkSensitive(ctx context.Context, text, userID string) (string, 
 			continue
 		}
 		if strings.Contains(lowered, strings.ToLower(pattern)) {
+			decision.Matches = append(decision.Matches, item)
 			if err := a.audit(ctx, a.DB, userID, "sensitive.match", str(item["id"]), Row{"pattern": pattern, "action": item["action"]}); err != nil {
-				return "", err
+				return decision, err
 			}
 			if item["action"] == "block" {
-				return pattern, nil
+				decision.Action = "block"
+			} else if item["action"] == "review" && decision.Action != "block" {
+				decision.Action = "review"
 			}
 		}
 	}
-	return "", nil
+	return decision, nil
 }
 
 func (a *App) modelAccess(ctx context.Context, q querier, userID, modelID string) error {
 	var allowed bool
 	if err := q.QueryRow(ctx, "SELECT g.model_ids IS NULL OR $2::uuid=ANY(g.model_ids) FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND u.status='active'", userID, modelID).Scan(&allowed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return problem(403, "account_disabled", "账号不可用")
+		}
 		return err
 	}
 	if !allowed {
@@ -116,13 +123,7 @@ func (a *App) groupRoutes(api *gin.RouterGroup) {
 
 func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 	admin.GET("/user-groups", respond(func(c *gin.Context) (any, error) {
-		items, err := rows(c.Request.Context(), a.DB, `SELECT g.id,g.name,g.discount,to_json(g.model_ids) AS model_ids,g.grant_amount_micros,g.grant_period,g.spend_limit_micros,g.spend_period,g.storage_quota_bytes,g.created_at,(SELECT count(*) FROM users u WHERE u.group_id=g.id) AS member_count FROM user_groups g ORDER BY g.created_at`)
-		for _, group := range items {
-			group["grantAmount"] = money(integer(group["grantAmountMicros"]))
-			group["spendLimit"] = money(integer(group["spendLimitMicros"]))
-			delete(group, "grantAmountMicros")
-			delete(group, "spendLimitMicros")
-		}
+		items, err := rows(c.Request.Context(), a.DB, `SELECT g.id,g.name,g.discount,to_json(g.model_ids) AS model_ids,g.storage_quota_bytes,g.created_at,(SELECT count(*) FROM users u WHERE u.group_id=g.id) AS member_count FROM user_groups g ORDER BY g.created_at`)
 		return gin.H{"groups": items}, err
 	}))
 	admin.POST("/user-groups", respond(func(c *gin.Context) (any, error) {
@@ -332,12 +333,15 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 	admin.POST("/sensitive-words", respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Pattern string `json:"pattern" binding:"required,min=1,max=200"`
-			Action  string `json:"action" binding:"required,oneof=block review"`
+			Action  string `json:"action" binding:"required,oneof=block review log"`
 		}](c)
 		if err != nil {
 			return nil, err
 		}
 		pattern := strings.TrimSpace(input.Pattern)
+		if pattern == "" {
+			return nil, problem(400, "invalid_pattern", "关键词不能为空")
+		}
 		ctx := c.Request.Context()
 		word, err := one(ctx, a.DB, "INSERT INTO sensitive_words(pattern,action) VALUES($1,$2) ON CONFLICT(pattern) DO UPDATE SET action=excluded.action RETURNING id,pattern,action,created_at", pattern, input.Action)
 		if err != nil {
@@ -375,6 +379,9 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		}
 		ch, err := a.channelFromRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err = a.selectChannelKey(c.Request.Context(), &ch, nil, true); err != nil {
 			return nil, err
 		}
 		info, err := a.channelBalance(ctx, ch)

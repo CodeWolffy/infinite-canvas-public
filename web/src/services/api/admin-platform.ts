@@ -22,14 +22,20 @@ export type AdminModel = {
 export type AdminChannel = {
     id: string;
     name: string;
-    protocol: "openai" | "gemini";
+    protocol: "openai" | "gemini" | "anthropic";
     baseUrl: string;
     status: "active" | "disabled" | "needs_attention";
     timeoutMs: number;
     maxConcurrency: number;
     cooldownSeconds: number;
     apiKeyConfigured: boolean;
-    apiKeyHint: string | null;
+    keyCount: number;
+    activeKeyCount: number;
+    keyStrategy: "round_robin" | "random";
+    taskAdapter: string;
+    autoDisabledAt: string | null;
+    consecutiveCheckFailures: number;
+    latency?: { samples: number; p50Ms: number | null; p95Ms: number | null };
     cooldownUntil: string | null;
     lastSuccessAt: string | null;
     lastFailureAt: string | null;
@@ -74,7 +80,12 @@ export type ModelChannelBinding = {
 };
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; inputPricePerMillion?: string | null; cachedPricePerMillion?: string | null; outputPricePerMillion?: string | null; pricePerSecond?: string | null; description?: string | null; config?: Record<string, unknown> };
-export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
+export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency" | "keyStrategy"> & { cooldownSeconds?: number; apiKeys?: string[]; taskAdapter?: string };
+export type ChannelKey = { id: string; keyHint: string; status: "active" | "disabled"; disabledReason: string | null; lastUsedAt: string | null; lastErrorCode: string | null };
+export const getChannelKeys = (id: string) => apiRequest<{ keys: ChannelKey[] }>(`/api/admin/channels/${id}/keys`);
+export const setChannelKeyStatus = (id: string, keyId: string, status: ChannelKey["status"]) => apiRequest<void>(`/api/admin/channels/${id}/keys/${keyId}`, { method: "PATCH", body: { status } });
+export const deleteChannelKey = (id: string, keyId: string) => apiRequest<void>(`/api/admin/channels/${id}/keys/${keyId}`, { method: "DELETE" });
+export const getTaskAdapters = () => apiRequest<{ adapters: Array<{ id: string; name: string; protocol: string; capability: string }> }>("/api/admin/task-adapters");
 export type BindingInput = { id?: string; upstreamModel: string; priority: number; weight: number; enabled: boolean };
 
 export async function getAdminModels() {

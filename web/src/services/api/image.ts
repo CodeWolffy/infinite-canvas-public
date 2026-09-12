@@ -865,7 +865,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         content,
         systemPrompt,
         attachmentMediaIds,
-        parameters: config.reasoningEffort === "auto" ? {} : { reasoningEffort: config.reasoningEffort },
+        parameters: { ...(config.reasoningEffort === "auto" ? {} : { reasoningEffort: config.reasoningEffort }), ...(config.textMaxTokens ? { max_tokens: Number(config.textMaxTokens) } : {}) },
     }, options?.signal, onDelta);
     const response = options?.signal ? await waitForTextRequest(request, options.signal) : await request;
     assertCurrentSession(sessionVersion);
@@ -955,7 +955,7 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
         }
         if (detail) {
             options?.onTasksUpdated?.(detail);
-            if (detail.tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
+            if (detail.tasks.every((task) => task.status !== "reviewing" && task.status !== "queued" && task.status !== "running")) {
                 const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{
                     id: task.id,
                     dataUrl: task.image.url,

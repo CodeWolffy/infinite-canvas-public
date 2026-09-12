@@ -24,13 +24,20 @@ export const getNotifications = () => apiRequest<{ notifications: PlatformNotifi
 export const readNotification = (id: string) => apiRequest<void>(`/api/user/notifications/${id}/read`, { method: "POST" });
 export const readAllNotifications = () => apiRequest<void>("/api/user/notifications/read-all", { method: "POST" });
 
-export type GroupPolicy = { modelIds: string[] | null; grantAmount: string; grantPeriod: "day" | "week" | "month"; spendLimit: string; spendPeriod: "day" | "week" | "month"; storageQuotaBytes: number };
+export type GroupPolicy = { modelIds: string[] | null; storageQuotaBytes: number };
 export const saveGroupPolicy = (id: string, body: GroupPolicy) => apiRequest<void>(`/api/admin/user-groups/${id}/policy`, { method: "PUT", body });
-export const getGroupGrant = () => apiRequest<{ grant: { groupId: string; groupName: string; amount: string; period: GroupPolicy["grantPeriod"]; periodStart: string; claimed: boolean } | null }>("/api/user/group-grant");
-export const claimGroupGrant = () => apiRequest<{ amount: string; alreadyClaimed: boolean }>("/api/user/group-grant/claim", { method: "POST" });
-export const getSensitiveEvents = () => apiRequest<{ events: Array<{ id: string; username: string; detail: { pattern: string; action: "block" | "review" }; createdAt: string }> }>("/api/admin/sensitive-events");
+export const getSensitiveEvents = (params: { offset?: number; action?: string; search?: string } = {}) => apiRequest<{ events: Array<{ id: string; username: string; detail: { pattern: string; action: "block" | "review" | "log" }; createdAt: string }> }>(`/api/admin/sensitive-events?${serializeApiParams(params)}`);
+export type ModerationReview = { id: string; username: string; status: "pending" | "approved" | "rejected" | "canceled"; matches: Array<{ id: string; pattern: string; action: string }>; prompt: string; parameters: Record<string, unknown>; capability: string; modelDisplayName: string; taskCount: number; frozen: string; note: string; createdAt: string; reviewedAt: string | null; reviewerName: string | null };
+export const getModerationReviews = (status = "pending", offset = 0) => apiRequest<{ reviews: ModerationReview[] }>(`/api/admin/moderation?${serializeApiParams({ status, offset })}`);
+export const decideModeration = (id: string, body: { decision: "approved" | "rejected"; note: string }) => apiRequest<void>(`/api/admin/moderation/${id}/decision`, { method: "POST", body });
 
-export type MonitoringConfig = { intervalMinutes: number; bindingIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
+export type MonitoringConfig = { intervalMinutes: number; autoDisableAfter: number; bindingIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
+
+export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable" | "unknown"; availableChannels: number; checkedAt: string | null };
+export const getPublicStatus = () => apiRequest<{ models: ModelAvailability[] }>("/api/status/models");
+export type Referral = { id: string; displayName: string; reward: string; createdAt: string };
+export const getReferrals = (offset = 0) => apiRequest<{ code: string; url: string; enabled: boolean; reward: string; summary: { invited: number; earned: string }; referrals: Referral[] }>(`/api/user/referrals?offset=${offset}`);
+export const getAdminReferrals = (search = "", offset = 0) => apiRequest<{ referrals: Array<Referral & { username: string; inviterName: string }> }>(`/api/admin/referrals?${serializeApiParams({ search, offset })}`);
 export const saveMonitoring = (id: string, body: MonitoringConfig) => apiRequest<void>(`/api/admin/channels/${id}/monitoring`, { method: "PUT", body });
 export const checkChannel = (id: string) => apiRequest<{ queued: boolean }>(`/api/admin/channels/${id}/check`, { method: "POST" });
 export const checkAllChannels = () => apiRequest<{ queued: number }>("/api/admin/channels/check-all", { method: "POST" });

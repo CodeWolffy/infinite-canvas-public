@@ -72,13 +72,17 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	ch.UpstreamModel = input.Model
+	if ch.Protocol == "anthropic" && input.Capability == "text" && explicitTextTokens(input.Parameters) == 0 {
+		return nil, problem(400, "output_limit_required", "Claude Messages 必须填写最大输出 token 数")
+	}
 	task := Row{"id": uuid.NewString(), "run": 1, "probe": true, "userId": currentUser(c).ID, "note": "渠道在线调试", "capability": input.Capability, "prompt": input.Prompt, "parameters": input.Parameters}
-	bindings, err := rows(ctx, a.DB, "SELECT b.model_id,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.upstream_model=$2 AND m.capability=$3 AND m.deleted_at IS NULL", ch.ID, ch.UpstreamModel, input.Capability)
+	bindings, err := rows(ctx, a.DB, "SELECT b.id,b.model_id,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.upstream_model=$2 AND m.capability=$3 AND m.deleted_at IS NULL", ch.ID, ch.UpstreamModel, input.Capability)
 	if err != nil {
 		return nil, err
 	}
 	if len(bindings) == 1 {
 		task["modelId"], ch.CostConfig = bindings[0]["modelId"], object(bindings[0]["costConfig"])
+		ch.BindingID = str(bindings[0]["id"])
 	}
 	// 排队期间跟随请求取消；拿到共享槽位后才开始计算渠道执行超时。
 	var deadline time.Time
@@ -110,6 +114,9 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 		}
 	}
 	defer a.releaseSlot(ch, task)
+	if err = a.selectChannelKey(ctx, &ch, nil, true); err != nil {
+		return nil, err
+	}
 	testCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	trace := &upstreamTrace{secret: ch.APIKey}
