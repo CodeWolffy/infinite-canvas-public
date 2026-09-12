@@ -146,14 +146,20 @@ func (a *App) opsRoutes(admin *gin.RouterGroup) {
 		}, nil
 	}))
 	admin.POST("/channels/check-all", respond(func(c *gin.Context) (any, error) {
-		result, err := a.DB.Exec(c.Request.Context(), `UPDATE channels SET next_check_at=now() WHERE status='active' AND (
+		capability := c.Query("capability")
+		switch capability {
+		case "", "image", "text", "video", "audio":
+		default:
+			return nil, problem(400, "invalid_capability", "渠道类型不正确")
+		}
+		result, err := a.DB.Exec(c.Request.Context(), `UPDATE channels SET next_check_at=now() WHERE status='active' AND deleted_at IS NULL AND ($1='' OR capability=$1) AND (
 			(jsonb_typeof(monitoring->'bindingIds')='array' AND jsonb_array_length(monitoring->'bindingIds')>0)
 			OR coalesce((monitoring->>'checkModels')::boolean,false)
-			OR (monitoring ? 'balanceThreshold' AND monitoring->>'balanceThreshold' NOT IN ('','null')))`)
+			OR (monitoring ? 'balanceThreshold' AND monitoring->>'balanceThreshold' NOT IN ('','null')))`, capability)
 		if err != nil {
 			return nil, err
 		}
-		if err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "channel.check_all", "channels", gin.H{"queued": result.RowsAffected()}); err != nil {
+		if err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "channel.check_all", "channels", gin.H{"queued": result.RowsAffected(), "capability": capability}); err != nil {
 			return nil, err
 		}
 		return gin.H{"queued": result.RowsAffected()}, nil

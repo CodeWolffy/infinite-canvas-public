@@ -7,7 +7,7 @@ import (
 func (a *App) publicStatus(c *gin.Context) (any, error) {
 	c.Header("Cache-Control", "no-store")
 	items, err := rows(c.Request.Context(), a.DB, `WITH health AS (
-		SELECT b.model_id,b.channel_id,h.checked_at,
+		SELECT b.model_id,b.channel_id,c.capability,h.checked_at,
 			CASE WHEN c.status<>'active' OR c.auto_disabled_at IS NOT NULL OR c.cooldown_until>now()
 				OR NOT EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active') THEN 'unavailable'
 			WHEN h.binding_id IS NULL OR (coalesce((c.monitoring->>'intervalMinutes')::int,0)>0
@@ -22,7 +22,7 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 		CASE WHEN count(*) FILTER(WHERE h.state='available')>0 THEN
 			CASE WHEN count(*) FILTER(WHERE h.state<>'available')>0 THEN 'degraded' ELSE 'available' END
 		WHEN count(*) FILTER(WHERE h.state='unknown')>0 THEN 'unknown' ELSE 'unavailable' END AS status
-	FROM models m LEFT JOIN health h ON h.model_id=m.id WHERE m.status='published' AND m.deleted_at IS NULL
+	FROM models m LEFT JOIN health h ON h.model_id=m.id AND h.capability=m.capability WHERE m.status='published' AND m.deleted_at IS NULL
 	GROUP BY m.id ORDER BY m.sort_order,m.created_at`)
 	return gin.H{"models": items}, err
 }

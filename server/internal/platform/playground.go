@@ -67,6 +67,9 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if row["capability"] != input.Capability {
+		return nil, problem(400, "invalid_capability", "请选择与调试类型一致的渠道")
+	}
 	ch, err := a.channelFromRow(row)
 	if err != nil {
 		return nil, err

@@ -203,7 +203,7 @@ func fixtureModel(t *testing.T, a *App, capability, baseURL string) (string, str
 	if _, err = a.DB.Exec(ctx, "INSERT INTO models(id,name,display_name,capability,status,price_micros,config) VALUES($1,'test','测试模型',$2,'published',1000000,$3)", modelID, capability, jsonBytes(Row{"maxOutputTokens": 4096})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.DB.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", channelID, baseURL); err != nil {
+	if _, err = a.DB.Exec(ctx, "INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'测试渠道',$3,'openai',$2,'active')", channelID, baseURL, capability); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = a.DB.Exec(ctx, "INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", channelID, sealed); err != nil {

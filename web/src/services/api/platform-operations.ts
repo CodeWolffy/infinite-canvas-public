@@ -1,4 +1,5 @@
 import { apiRequest, serializeApiParams } from "./request";
+import type { ModelCapability } from "@/lib/model-capabilities";
 
 export type SecurityProof = { password: string; code?: string };
 export type AccountSecurity = { email: string | null; emailVerifiedAt: string | null; mfaEnabled: boolean; recoveryAvailable: boolean };
@@ -40,7 +41,7 @@ export const getReferrals = (offset = 0) => apiRequest<{ code: string; url: stri
 export const getAdminReferrals = (search = "", offset = 0) => apiRequest<{ referrals: Array<Referral & { username: string; inviterName: string }> }>(`/api/admin/referrals?${serializeApiParams({ search, offset })}`);
 export const saveMonitoring = (id: string, body: MonitoringConfig) => apiRequest<void>(`/api/admin/channels/${id}/monitoring`, { method: "PUT", body });
 export const checkChannel = (id: string) => apiRequest<{ queued: boolean }>(`/api/admin/channels/${id}/check`, { method: "POST" });
-export const checkAllChannels = () => apiRequest<{ queued: number }>("/api/admin/channels/check-all", { method: "POST" });
+export const checkAllChannels = (capability?: ModelCapability) => apiRequest<{ queued: number }>(`/api/admin/channels/check-all?${serializeApiParams({ capability })}`, { method: "POST" });
 export const getChannelChecks = (id: string) => apiRequest<{ checks: Array<{ id: string; status: string; detail: Record<string, unknown>; durationMs: number; createdAt: string }> }>(`/api/admin/channels/${id}/checks`);
 export const getChannelBindings = (id: string) => apiRequest<{ models: Array<{ id: string; modelId: string; displayName: string; capability: string; upstreamModel: string }> }>(`/api/admin/channels/${id}/bindings`);
 export const acknowledgeModelChanges = (id: string) => apiRequest<void>(`/api/admin/channels/${id}/model-changes/ack`, { method: "POST" });

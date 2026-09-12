@@ -66,7 +66,7 @@ func testApp(t *testing.T) *App {
 	if _, err = db.Exec(ctx, string(ddl)); err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql", "../../migrations/012_channel_routing.sql", "../../migrations/013_moderation_and_rewards.sql"} {
+	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql", "../../migrations/012_channel_routing.sql", "../../migrations/013_moderation_and_rewards.sql", "../../migrations/014_channel_capability.sql"} {
 		extra, err := os.ReadFile(migration)
 		if err != nil {
 			t.Fatal(err)
@@ -297,7 +297,7 @@ func TestGenerationIdempotencyAndSettlement(t *testing.T) {
 	for _, query := range []struct {
 		sql  string
 		args []any
-	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'gpt-image-test','测试图片','image','published',1000000)", []any{modelID}}, {"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-image-test')", []any{modelID, channelID}}} {
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'gpt-image-test','测试图片','image','published',1000000)", []any{modelID}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'测试渠道','image','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-image-test')", []any{modelID, channelID}}} {
 		if _, err := a.DB.Exec(ctx, query.sql, query.args...); err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestTokenPricingSettlesByUsage(t *testing.T) {
 	for _, query := range []struct {
 		sql  string
 		args []any
-	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,config) VALUES($1,'gpt-test','测试文本','text','published',10000,2000000,200000,4000000,$2)", []any{modelID, jsonBytes(Row{"maxOutputTokens": 4096})}}, {"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", []any{channelID, upstream.URL + "/v1"}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-test')", []any{modelID, channelID}}} {
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,config) VALUES($1,'gpt-test','测试文本','text','published',10000,2000000,200000,4000000,$2)", []any{modelID, jsonBytes(Row{"maxOutputTokens": 4096})}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'测试渠道','text','openai',$2,'active')", []any{channelID, upstream.URL + "/v1"}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-test')", []any{modelID, channelID}}} {
 		if _, err := a.DB.Exec(ctx, query.sql, query.args...); err != nil {
 			t.Fatal(err)
 		}
@@ -601,7 +601,7 @@ func TestPlatformFeaturesRedeemGroupAndSensitive(t *testing.T) {
 	for _, query := range []struct {
 		sql  string
 		args []any
-	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'m','半价模型','image','published',2000000)", []any{modelID}}, {"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'c','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'m')", []any{modelID, channelID}}} {
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'m','半价模型','image','published',2000000)", []any{modelID}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'c','image','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'m')", []any{modelID, channelID}}} {
 		if _, err := a.DB.Exec(ctx, query.sql, query.args...); err != nil {
 			t.Fatal(err)
 		}

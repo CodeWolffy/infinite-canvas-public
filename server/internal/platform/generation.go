@@ -37,7 +37,7 @@ func modelForTask(ctx context.Context, tx pgx.Tx, id string) (Row, error) {
 		return nil, problem(400, "model_unavailable", "模型未发布或已停用")
 	}
 	var available bool
-	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND (c.protocol<>'anthropic' OR $2='text') AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active'))", id, model["capability"]).Scan(&available); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=$1 AND b.enabled AND c.capability=$2 AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND (c.protocol<>'anthropic' OR $2='text') AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active'))", id, model["capability"]).Scan(&available); err != nil {
 		return nil, err
 	}
 	if !available {

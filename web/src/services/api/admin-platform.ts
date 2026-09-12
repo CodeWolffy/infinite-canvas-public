@@ -1,10 +1,11 @@
 import { apiRequest, serializeApiParams } from "@/services/api/request";
+import type { ModelCapability } from "@/lib/model-capabilities";
 
 export type AdminModel = {
     id: string;
     name: string;
     displayName: string;
-    capability: "image" | "text" | "video" | "audio";
+    capability: ModelCapability;
     price?: string;
     sortOrder: number;
     status: "draft" | "published" | "disabled";
@@ -22,6 +23,7 @@ export type AdminModel = {
 export type AdminChannel = {
     id: string;
     name: string;
+    capability: ModelCapability;
     protocol: "openai" | "gemini" | "anthropic";
     baseUrl: string;
     status: "active" | "disabled" | "needs_attention";
@@ -80,7 +82,7 @@ export type ModelChannelBinding = {
 };
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; inputPricePerMillion?: string | null; cachedPricePerMillion?: string | null; outputPricePerMillion?: string | null; pricePerSecond?: string | null; description?: string | null; config?: Record<string, unknown> };
-export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency" | "keyStrategy"> & { cooldownSeconds?: number; apiKeys?: string[]; taskAdapter?: string };
+export type ChannelInput = Pick<AdminChannel, "name" | "capability" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency" | "keyStrategy"> & { cooldownSeconds?: number; apiKeys?: string[]; taskAdapter?: string };
 export type ChannelKey = { id: string; keyHint: string; status: "active" | "disabled"; disabledReason: string | null; lastUsedAt: string | null; lastErrorCode: string | null };
 export const getChannelKeys = (id: string) => apiRequest<{ keys: ChannelKey[] }>(`/api/admin/channels/${id}/keys`);
 export const setChannelKeyStatus = (id: string, keyId: string, status: ChannelKey["status"]) => apiRequest<void>(`/api/admin/channels/${id}/keys/${keyId}`, { method: "PATCH", body: { status } });

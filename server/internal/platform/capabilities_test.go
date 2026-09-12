@@ -39,7 +39,7 @@ func capabilityModel(t *testing.T, a *App, capability, endpoint string, price in
 		args []any
 	}{
 		{"INSERT INTO models(id,name,display_name,capability,status,price_micros,config) VALUES($1,'capability','capability',$2,'published',$3,$4)", []any{model, capability, price, jsonBytes(Row{"maxOutputTokens": 4096})}},
-		{"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'test','openai',$2,'active')", []any{channel, endpoint}},
+		{"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'test',$3,'openai',$2,'active')", []any{channel, endpoint, capability}},
 		{"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channel, sealed}},
 		{"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'test')", []any{model, channel}},
 	} {

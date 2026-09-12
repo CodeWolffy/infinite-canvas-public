@@ -38,7 +38,7 @@ func attachRoutingChannel(t *testing.T, a *App, model, endpoint string, priority
 		t.Fatal(err)
 	}
 	for _, q := range []struct{ sql string; args []any }{
-		{"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'backup','openai',$2,'active')", []any{id, endpoint}},
+		{"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'backup',(SELECT capability FROM models WHERE id=$3),'openai',$2,'active')", []any{id, endpoint, model}},
 		{"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{id, secret}},
 		{"INSERT INTO model_channels(model_id,channel_id,upstream_model,priority) VALUES($1,$2,'test',$3)", []any{model, id, priority}},
 	} {

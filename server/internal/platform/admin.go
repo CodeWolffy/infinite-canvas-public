@@ -54,12 +54,15 @@ func publicChannel(row Row) Row {
 }
 
 func validateChannelBinding(ctx context.Context, q querier, modelID, channelID string) error {
-	row, err := one(ctx, q, "SELECT m.capability,c.protocol FROM models m JOIN channels c ON c.id=$2 WHERE m.id=$1 AND m.deleted_at IS NULL AND c.deleted_at IS NULL", modelID, channelID)
+	row, err := one(ctx, q, "SELECT m.capability,c.capability AS channel_capability,c.protocol FROM models m JOIN channels c ON c.id=$2 WHERE m.id=$1 AND m.deleted_at IS NULL AND c.deleted_at IS NULL", modelID, channelID)
 	if err != nil {
 		return err
 	}
 	if row["protocol"] == "anthropic" && row["capability"] != "text" {
 		return problem(400, "invalid_capability", "Claude Messages 渠道只能绑定文本模型")
+	}
+	if row["capability"] != row["channelCapability"] {
+		return problem(400, "invalid_capability", "模型与渠道类型必须一致")
 	}
 	return nil
 }
@@ -514,6 +517,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 	save := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Name            string `json:"name" binding:"required,max=120"`
+			Capability      string `json:"capability" binding:"required,oneof=image text video audio"`
 			Protocol        string `json:"protocol" binding:"required,oneof=openai gemini anthropic"`
 			BaseURL         string `json:"baseUrl" binding:"required"`
 			APIKeys         []string `json:"apiKeys"`
@@ -526,6 +530,12 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		}](c)
 		if err != nil {
 			return nil, err
+		}
+		if input.Protocol == "anthropic" && input.Capability != "text" {
+			return nil, problem(400, "invalid_capability", "Claude Messages 仅支持文本渠道")
+		}
+		if input.TaskAdapter != "" && input.Capability != "video" {
+			return nil, problem(400, "invalid_task_adapter", "仅视频渠道可配置视频任务适配器")
 		}
 		if err = validateTaskAdapter(input.TaskAdapter, input.Protocol); err != nil {
 			return nil, err
@@ -548,21 +558,15 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if !create {
-				if _, err := one(ctx, tx, "SELECT id FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id); err != nil {
+				old, err := one(ctx, tx, "SELECT capability FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
+				if err != nil {
 					return err
 				}
-			}
-			var err error
-			if input.Protocol == "anthropic" {
-				var incompatible bool
-				if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.enabled AND m.deleted_at IS NULL AND m.capability<>'text')", id).Scan(&incompatible); err != nil {
-					return err
-				}
-				if incompatible {
-					return problem(400, "invalid_capability", "切换到 Claude Messages 前，请先解绑或停用非文本模型")
+				if old["capability"] != input.Capability {
+					return problem(400, "capability_immutable", "渠道类型修改请创建新渠道")
 				}
 			}
-			_, err = tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET name=excluded.name,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter)
+			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET name=excluded.name,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability)
 			if err != nil {
 				return err
 			}
@@ -576,7 +580,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 			if input.Status == "active" && integer(saved["activeKeyCount"]) == 0 {
 				return problem(400, "missing_key", "启用渠道前请配置至少一个可用 API Key")
 			}
-			return a.audit(ctx, tx, currentUser(c).ID, "channel.save", id, gin.H{"name": input.Name, "status": input.Status})
+			return a.audit(ctx, tx, currentUser(c).ID, "channel.save", id, gin.H{"name": input.Name, "status": input.Status, "capability": input.Capability})
 		})
 		if err != nil {
 			return nil, err

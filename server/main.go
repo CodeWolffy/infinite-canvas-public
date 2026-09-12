@@ -51,6 +51,9 @@ var channelRouting string
 //go:embed migrations/013_moderation_and_rewards.sql
 var moderationAndRewards string
 
+//go:embed migrations/014_channel_capability.sql
+var channelCapability string
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
 		response, err := http.Get("http://127.0.0.1:3001/health")
@@ -65,7 +68,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards})
+	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability})
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)

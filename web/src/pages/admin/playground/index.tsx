@@ -21,7 +21,8 @@ export default function AdminPlaygroundPage() {
         queryFn: getAdminChannels,
     });
 
-    const activeChannels = (channelsQuery.data || []).filter((ch) => ch.status !== "disabled");
+    const capability = Form.useWatch("capability", form) || "text";
+    const activeChannels = (channelsQuery.data || []).filter((ch) => ch.status !== "disabled" && ch.capability === capability);
 
     const testMutation = useMutation({
         mutationFn: (body: PlaygroundTestParams) => {
@@ -45,7 +46,7 @@ export default function AdminPlaygroundPage() {
     const handleChannelChange = (channelId: string) => {
         const ch = activeChannels.find((c) => c.id === channelId);
         if (ch) {
-            const defaultModel = ch.lastAttempt?.upstreamModel || ch.upstreamModels?.[0] || (ch.protocol === "openai" ? "gpt-4o-mini" : ch.protocol === "anthropic" ? "" : "gemini-1.5-flash");
+            const defaultModel = ch.lastAttempt?.upstreamModel || ch.upstreamModels?.[0] || "";
             form.setFieldsValue({ model: defaultModel });
         }
     };
@@ -55,8 +56,8 @@ export default function AdminPlaygroundPage() {
         setResult(null);
         setRawOpen(false);
         const parameters: Record<string, unknown> = {};
-        if (values.temperature !== undefined) parameters.temperature = values.temperature;
-        if (values.maxTokens !== undefined) parameters[activeChannels.find((channel) => channel.id === values.channelId)?.protocol === "gemini" ? "maxOutputTokens" : "max_tokens"] = values.maxTokens;
+        if (values.capability === "text" && values.temperature !== undefined) parameters.temperature = values.temperature;
+        if (values.capability === "text" && values.maxTokens !== undefined) parameters[activeChannels.find((channel) => channel.id === values.channelId)?.protocol === "gemini" ? "maxOutputTokens" : "max_tokens"] = values.maxTokens;
 
         testMutation.mutate({
             channelId: values.channelId,
@@ -123,6 +124,12 @@ export default function AdminPlaygroundPage() {
                         onFinish={handleRun}
                     >
                         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            <Form.Item name="capability" label={<span className="text-xs font-medium">调试类型</span>} className="!mb-3">
+                                <Radio.Group buttonStyle="solid" size="small" className="grid w-full grid-cols-2 text-center" onChange={() => { form.setFieldsValue({ channelId: undefined, model: undefined, maxTokens: undefined }); setResult(null); }}>
+                                    <Radio.Button value="text">文本对话</Radio.Button>
+                                    <Radio.Button value="image">图片生成</Radio.Button>
+                                </Radio.Group>
+                            </Form.Item>
                             <Form.Item
                                 name="channelId"
                                 label={<span className="text-xs font-medium">目标渠道</span>}
@@ -130,7 +137,8 @@ export default function AdminPlaygroundPage() {
                                 className="!mb-3"
                             >
                                 <Select
-                                    placeholder="选择渠道"
+                                    placeholder={`选择${capability === "text" ? "文本" : "图片"}渠道`}
+                                    notFoundContent="暂无同类型的启用渠道"
                                     onChange={handleChannelChange}
                                     loading={channelsQuery.isLoading}
                                     className="w-full"
@@ -174,8 +182,6 @@ export default function AdminPlaygroundPage() {
                                 const list = [
                                     selectedChannel.lastAttempt?.upstreamModel,
                                     ...(selectedChannel.upstreamModels || []),
-                                    selectedChannel.protocol === "openai" ? "gpt-4o-mini" : "gemini-1.5-flash",
-                                    selectedChannel.protocol === "openai" ? "gpt-4o" : "gemini-1.5-pro",
                                 ].filter((m): m is string => Boolean(m));
                                 const unique = Array.from(new Set(list));
                                 return (
@@ -193,13 +199,6 @@ export default function AdminPlaygroundPage() {
                                     </div>
                                 );
                             })() : null}
-
-                            <Form.Item name="capability" label={<span className="text-xs font-medium">能力类型</span>} className="!mb-3">
-                                <Radio.Group buttonStyle="solid" size="small" className="w-full grid grid-cols-2 text-center">
-                                    <Radio.Button value="text">文本对话 (text)</Radio.Button>
-                                    <Radio.Button value="image">图像生成 (image)</Radio.Button>
-                                </Radio.Group>
-                            </Form.Item>
 
                             <Form.Item
                                 name="prompt"
@@ -219,14 +218,14 @@ export default function AdminPlaygroundPage() {
                                 />
                             </Form.Item>
 
-                            <div className="grid grid-cols-2 gap-3 pt-1">
+                            {capability === "text" ? <div className="grid grid-cols-2 gap-3 pt-1">
                                 <Form.Item name="temperature" label={<span className="text-[11px] text-stone-500">Temperature</span>} className="!mb-0">
                                     <InputNumber min={0} max={2} step={0.1} className="!w-full" size="small" />
                                 </Form.Item>
                                 <Form.Item name="maxTokens" label={<span className="text-[11px] text-stone-500">最大输出 token</span>} className="!mb-0" rules={[{ required: selectedChannel?.protocol === "anthropic", message: "Claude 必须填写" }]}>
                                     <InputNumber min={1} precision={0} className="!w-full" size="small" placeholder={selectedChannel?.protocol === "anthropic" ? "必须填写" : "由上游决定"} />
                                 </Form.Item>
-                            </div>
+                            </div> : null}
                         </div>
 
                         <div className="border-t border-stone-200 p-4 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/20">
