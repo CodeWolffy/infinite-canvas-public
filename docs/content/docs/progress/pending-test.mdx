@@ -11,6 +11,8 @@ description: Implemented changes that still need manual verification
 
 ### 渠道调度与开放能力待验收
 
+- 登录页：左下角不再显示「邀请加入 · 每日签到 · 按需充值」；登录表单下方为「注册」与「忘记密码」同一行链接，点击「注册」切换注册表单后显示「已有账号，返回登录」，两步验证状态下保留「返回账号密码登录」。
+
 本次扩展已完成本机 Docker 构建、启动与回归：后端 44 组测试（共 55 个含子用例的通过记录）及前端 52 项全部通过，0 失败、0 跳过。已补充 `server/internal/platform/routing_moderation_test.go`，修正登录测试沙箱缺失 `URLSearchParams`、多模型探针依赖外部 DNS 的测试夹具；生产超时与频控默认值未因测试调整。
 
 已有本机数据库从版本 11 升至 13，升级前备份 PostgreSQL、MinIO、Redis 和 `.env.local`；钱包、账本、签到及加密 Key 的数量与内容摘要前后相同。`http://localhost:3301` 的 API、Web 与三项存储依赖运行正常，健康、登录、文本、状态、素材页及 JS 入口均返回 200。

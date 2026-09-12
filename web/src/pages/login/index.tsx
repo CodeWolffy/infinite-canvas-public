@@ -63,7 +63,6 @@ export default function LoginPage() {
                     <h1 className="text-5xl font-semibold leading-[1.08] tracking-[-0.045em]">把灵感、生成与画布，收进同一个工作空间。</h1>
                     <p className="mt-7 max-w-lg text-base leading-7 text-stone-400">图片、视频、文本与声音，在这里一起生长。签到领取创作余额，选择模型即可开始。</p>
                 </div>
-                <p className="relative text-xs text-stone-500">邀请加入 · 每日签到 · 按需充值</p>
             </section>
 
             <section className="relative flex items-center justify-center px-1 py-8 sm:px-10 lg:px-16">
@@ -88,8 +87,12 @@ export default function LoginPage() {
                         </>}
                         <Button type="primary" size="large" htmlType="submit" loading={submitting || status === "loading"} block className="mt-2" iconPlacement="end" icon={<ArrowRight className="size-4" />}>{challenge ? "验证并登录" : registering ? "注册并开始创作" : "登录"}</Button>
                     </Form>
-                    <Button type="link" block className="mt-4" disabled={submitting} onClick={() => { if (challenge) setChallenge(""); else setRegistering((value) => !value); setError(""); }}>{challenge ? "返回账号密码登录" : registering ? "已有账号，返回登录" : "拥有邀请码，注册账号"}</Button>
-                    {!challenge && !registering ? <div className="mt-3 text-center text-sm"><Link to="/forgot-password" className="text-muted-foreground hover:text-foreground">忘记密码</Link></div> : null}
+                    {challenge ? <Button type="link" block className="mt-4" disabled={submitting} onClick={() => { setChallenge(""); setError(""); }}>返回账号密码登录</Button> : (
+                        <div className="mt-4 flex items-center justify-center gap-6 text-sm">
+                            <Button type="link" size="small" className="px-0" disabled={submitting} onClick={() => { setRegistering((value) => !value); setError(""); }}>{registering ? "已有账号，返回登录" : "注册"}</Button>
+                            {!registering ? <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground">忘记密码</Link> : null}
+                        </div>
+                    )}
                     <div className="mt-5 text-center text-xs"><Link to="/status" className="text-muted-foreground hover:text-foreground">查看模型运行状态</Link></div>
                 </div>
             </section>
