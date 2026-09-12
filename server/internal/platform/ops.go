@@ -74,7 +74,7 @@ func (a *App) notifyCredit(ctx context.Context, q querier, userID, kind string, 
 	if amount <= 0 {
 		return nil
 	}
-	title := map[string]string{"recharge": "余额已到账", "grant": "公益额度已发放", "checkin": "签到奖励已到账", "referral": "邀请奖励已到账", "adjustment": "管理员已调整余额"}[kind]
+	title := map[string]string{"recharge": "余额已到账", "grant": "公益额度已发放", "checkin": "签到奖励已到账", "referral": "邀请返利已到账", "adjustment": "管理员已调整余额"}[kind]
 	if title == "" {
 		title = "余额已增加"
 	}

@@ -59,16 +59,7 @@ func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any,
 		if p["cachedPricePerMillion"] == nil {
 			p["cachedPricePerMillion"] = p["inputPricePerMillion"]
 		}
-		output := integer(params["max_completion_tokens"])
-		if output <= 0 {
-			output = integer(params["max_tokens"])
-		}
-		if output <= 0 {
-			output = integer(params["maxOutputTokens"])
-		}
-		if output <= 0 {
-			output = 4096
-		}
+		output := explicitTextTokens(params)
 		estimate, err := tokenCost(promptEstimate, 0, output, integer(p["inputPricePerMillion"]), integer(p["cachedPricePerMillion"]), integer(p["outputPricePerMillion"]))
 		if err != nil {
 			return nil, err
@@ -125,6 +116,12 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
+		if model["capability"] == "text" {
+			input.Parameters, err = modelTextParameters(model, input.Parameters)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if input.ConversationID != "" {
 			if _, err = one(ctx, a.DB, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2", input.ConversationID, u.ID); err != nil {
 				return nil, err
@@ -149,6 +146,6 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		return gin.H{"quote": gin.H{"pricingKind": p["pricingKind"], "estimatedHold": money(total), "unitHold": money(integer(p["priceMicros"])), "seconds": p["seconds"], "groupDiscount": p["groupDiscount"], "variable": p["pricingKind"] == "token" || p["pricePerSecond"] != nil}}, nil
+		return gin.H{"quote": gin.H{"pricingKind": p["pricingKind"], "estimatedHold": modelPrice(total), "unitHold": modelPrice(integer(p["priceMicros"])), "seconds": p["seconds"], "groupDiscount": p["groupDiscount"], "variable": p["pricingKind"] == "token" || p["pricePerSecond"] != nil}}, nil
 	}))
 }

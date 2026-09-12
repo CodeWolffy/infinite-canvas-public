@@ -1,7 +1,10 @@
 package platform
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +22,44 @@ type textInput struct {
 	SystemPrompt       string         `json:"systemPrompt" binding:"max=100000"`
 	AttachmentMediaIDs []string       `json:"attachmentMediaIds" binding:"max=20,dive,uuid"`
 	Parameters         map[string]any `json:"parameters"`
+}
+
+func modelTextParameters(model Row, params map[string]any) (map[string]any, error) {
+	config := object(model["config"])
+	limit := explicitTextTokens(Row{"maxOutputTokens": config["maxOutputTokens"]})
+	if limit == 0 {
+		return nil, problem(400, "model_output_limit_required", "此文本模型尚未配置有效的输出上限，请联系管理员")
+	}
+	var efforts []string
+	if err := json.Unmarshal(jsonBytes(config["reasoningEfforts"]), &efforts); err != nil {
+		return nil, problem(400, "invalid_reasoning_config", "模型思考强度配置必须为选项列表")
+	}
+	for i, effort := range efforts {
+		if !slices.Contains([]string{"low", "medium", "high", "xhigh", "max", "ultra"}, effort) || slices.Contains(efforts[:i], effort) {
+			return nil, problem(400, "invalid_reasoning_config", "模型思考强度配置包含无效或重复选项")
+		}
+	}
+	effort, alias := str(params["reasoningEffort"]), str(params["reasoning_effort"])
+	if effort == "" {
+		effort = alias
+	} else if alias != "" && alias != effort {
+		return nil, problem(400, "invalid_reasoning_effort", "思考强度参数不一致")
+	}
+	if effort != "" && effort != "auto" && !slices.Contains(efforts, effort) {
+		return nil, problem(400, "invalid_reasoning_effort", "此模型未开放该思考强度，请重新选择")
+	}
+	parameters := maps.Clone(params)
+	if parameters == nil {
+		parameters = map[string]any{}
+	}
+	for _, key := range []string{"max_tokens", "max_completion_tokens", "maxOutputTokens", "reasoningEffort", "reasoning_effort"} {
+		delete(parameters, key)
+	}
+	if effort != "" && effort != "auto" {
+		parameters["reasoningEffort"] = effort
+	}
+	parameters["max_tokens"] = limit
+	return parameters, nil
 }
 
 func (a *App) textRoutes(api *gin.RouterGroup) {
@@ -106,9 +147,6 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if !errors.Is(err, notFound) {
 			return nil, err
 		}
-		if err = a.validateTextParameters(ctx, input.ModelID, input.Parameters); err != nil {
-			return nil, err
-		}
 		settings, err := a.settings(ctx, a.DB)
 		if err != nil {
 			return nil, err
@@ -149,6 +187,10 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			}
 			if model["capability"] != "text" {
 				return problem(400, "invalid_capability", "请选择文本模型")
+			}
+			input.Parameters, err = modelTextParameters(model, input.Parameters)
+			if err != nil {
+				return err
 			}
 			if err = projectAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
 				return err

@@ -1,13 +1,13 @@
 import { apiRequest } from "@/services/api/request";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
+import type { ModelReasoning } from "@/lib/model-reasoning";
 export { uploadMedia as uploadGenerationMedia } from "@/services/api/media";
 
-export type PublicModel = {
+export type PublicModel = ModelReasoning & {
     id: string;
     name: string;
     displayName: string;
     capability: "image" | "text" | "video" | "audio";
-    requiresMaxOutputTokens?: boolean;
     price?: string;
     pricePerImage?: string | null;
     inputPricePerMillion?: string | null;
@@ -73,6 +73,10 @@ export const GENERATION_PAGE_SIZE = 50;
 const publicModelsCacheTtl = 60_000;
 let publicModelsCache: { models: PublicModel[]; expiresAt: number } | null = null;
 useUserStore.subscribe((state, previous) => { if (state.sessionVersion !== previous.sessionVersion) publicModelsCache = null; });
+
+export function clearPublicModelsCache() {
+    publicModelsCache = null;
+}
 
 export async function getPublicModels() {
     const session = useUserStore.getState().sessionVersion;

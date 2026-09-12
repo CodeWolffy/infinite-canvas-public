@@ -99,7 +99,6 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         ...config,
         model: resolveModelForCapability(config, node?.metadata?.model, mode),
         reasoningEffort: node?.metadata?.reasoningEffort || config.reasoningEffort || defaultConfig.reasoningEffort,
-        textMaxTokens: node?.metadata?.textMaxTokens ?? config.textMaxTokens,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
         size: node?.metadata?.size || config.size || defaultConfig.size,
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,

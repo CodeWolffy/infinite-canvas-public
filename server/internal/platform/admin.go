@@ -32,17 +32,18 @@ type modelInput struct {
 
 func publicModelRows(items []Row) []Row {
 	for _, row := range items {
-		row["price"] = money(integer(row["priceMicros"]))
+		row["price"] = modelPrice(integer(row["priceMicros"]))
+		row["pricePerImage"] = row["price"]
 		if row["inputPricePerMillion"] != nil {
-			row["inputPricePerMillion"] = money(integer(row["inputPricePerMillion"]))
-			row["outputPricePerMillion"] = money(integer(row["outputPricePerMillion"]))
+			row["inputPricePerMillion"] = modelPrice(integer(row["inputPricePerMillion"]))
+			row["outputPricePerMillion"] = modelPrice(integer(row["outputPricePerMillion"]))
 			if row["cachedPricePerMillion"] != nil {
-				row["cachedPricePerMillion"] = money(integer(row["cachedPricePerMillion"]))
+				row["cachedPricePerMillion"] = modelPrice(integer(row["cachedPricePerMillion"]))
 			}
 		}
 		delete(row, "priceMicros")
 		if row["pricePerSecond"] != nil {
-			row["pricePerSecond"] = money(integer(row["pricePerSecond"]))
+			row["pricePerSecond"] = modelPrice(integer(row["pricePerSecond"]))
 		}
 	}
 	return items
@@ -275,6 +276,11 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if input.Config == nil {
 			input.Config = map[string]any{}
 		}
+		if input.Capability == "text" {
+			if _, err = modelTextParameters(Row{"config": input.Config}, nil); err != nil {
+				return nil, err
+			}
+		}
 		ctx := c.Request.Context()
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
@@ -312,7 +318,22 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		row, err := one(c.Request.Context(), a.DB, "UPDATE models SET status=$2,updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *", id, input.Status)
+		ctx := c.Request.Context()
+		var row Row
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			var err error
+			row, err = one(ctx, tx, "SELECT * FROM models WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
+			if err != nil {
+				return err
+			}
+			if input.Status == "published" && row["capability"] == "text" {
+				if _, err = modelTextParameters(row, nil); err != nil {
+					return err
+				}
+			}
+			row, err = one(ctx, tx, "UPDATE models SET status=$2,updated_at=now() WHERE id=$1 RETURNING *", id, input.Status)
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}

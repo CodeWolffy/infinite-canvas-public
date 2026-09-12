@@ -414,10 +414,20 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 		contents = append(contents, map[string]any{"role": role, "parts": parts})
 	}
 	var req *http.Request
+	effort := str(params["reasoningEffort"])
+	if effort == "" {
+		effort = str(params["reasoning_effort"])
+	}
+	if effort == "auto" {
+		effort = ""
+	}
 	if c.Protocol == "gemini" {
 		config := selectedParams(params, "temperature", "topP", "maxOutputTokens")
 		if limit := explicitTextTokens(params); limit > 0 {
 			config["maxOutputTokens"] = limit
+		}
+		if effort != "" {
+			config["thinkingConfig"] = Row{"thinkingLevel": strings.ToUpper(effort)}
 		}
 		body := map[string]any{"contents": contents, "generationConfig": config}
 		if system != "" {
@@ -427,17 +437,20 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 	} else if c.Protocol == "anthropic" {
 		limit := explicitTextTokens(params)
 		if limit == 0 {
-			return generationResult{}, &upstreamError{Category: "invalid_request", Message: "Claude Messages 必须由用户指定最大输出 token 数"}
+			return generationResult{}, &upstreamError{Category: "invalid_request", Message: "Claude Messages 未配置有效的最大输出 token 数"}
 		}
 		body := selectedParams(params, "temperature", "top_p", "stop_sequences")
 		body["model"], body["messages"], body["max_tokens"], body["stream"] = c.UpstreamModel, anthropicMessages, limit, true
+		if effort != "" {
+			body["output_config"] = Row{"effort": effort}
+		}
 		if system != "" {
 			body["system"] = system
 		}
 		req, err = c.jsonRequest(ctx, "messages", body)
 	} else {
-		body := selectedParams(params, "temperature", "top_p", "max_tokens", "max_completion_tokens", "reasoning_effort")
-		if effort := str(params["reasoningEffort"]); effort != "" && effort != "auto" {
+		body := selectedParams(params, "temperature", "top_p", "max_tokens", "max_completion_tokens")
+		if effort != "" {
 			body["reasoning_effort"] = effort
 		}
 		body["model"] = c.UpstreamModel

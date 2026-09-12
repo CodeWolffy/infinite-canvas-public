@@ -178,7 +178,7 @@ export function getPluginVariables(): PluginVariable[] {
         { name: "baseUrl", type: "string", desc: i18n.t("modelPlugin.variables.baseUrl") },
         { name: "apiKey", type: "string", desc: i18n.t("modelPlugin.variables.apiKey") },
         { name: "systemPrompt", type: "string", desc: i18n.t("modelPlugin.variables.systemPrompt") },
-        { name: "reasoningEffort", type: '"auto" | "low" | "medium" | "high" | "xhigh"', desc: i18n.t("modelPlugin.variables.reasoningEffort"), capabilities: ["text"] },
+        { name: "reasoningEffort", type: '"auto" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"', desc: i18n.t("modelPlugin.variables.reasoningEffort"), capabilities: ["text"] },
         { name: "http", type: "object", desc: i18n.t("modelPlugin.variables.http") },
         { name: "request", type: "function", desc: i18n.t("modelPlugin.variables.request") },
         { name: "poll", type: "function", desc: i18n.t("modelPlugin.variables.poll") },
@@ -854,7 +854,7 @@ return await generateAudio({
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
- * @param {string} reasoningEffort - "auto" | "low" | "medium" | "high" | "xhigh"; omit reasoning when "auto"
+ * @param {string} reasoningEffort - "auto" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"; omit reasoning when "auto"
  * @param {function} request
  * @param {function} onDelta - push streaming text
  * @returns {Promise<string>}

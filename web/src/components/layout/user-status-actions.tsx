@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Dropdown, Tooltip } from "antd";
-import { BookOpen, CircleUserRound, Keyboard, LogOut, ShieldCheck } from "lucide-react";
+import { Activity, BookOpen, CircleUserRound, Keyboard, LogOut, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { GitHubLink } from "@/components/layout/github-link";
@@ -50,6 +50,9 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
 
     return (
         <div className="inline-flex shrink-0 items-center gap-1">
+            <Link to="/status" className={cn(naturalIconClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} aria-label="模型状态" title="模型状态">
+                <Activity className="size-4" /><span className="hidden text-xs md:inline">模型状态</span>
+            </Link>
             <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.docs")} title={t("topNav.docs")}>
                 <BookOpen className="size-4" />
             </a>

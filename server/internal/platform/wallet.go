@@ -30,10 +30,10 @@ type PlatformSettings struct {
 	PaymentOrderMinutes int    `json:"paymentOrderMinutes"`
 	MaxAttempts         int    `json:"maxAttempts" binding:"min=1"`
 	ReferralEnabled     bool   `json:"referralEnabled"`
-	ReferralReward      string `json:"referralReward"`
+	ReferralPercent     string `json:"referralPercent"`
 }
 
-var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30, MaxAttempts: 3, ReferralReward: "0"}
+var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30, MaxAttempts: 3, ReferralPercent: "0"}
 
 func (a *App) settings(ctx context.Context, q querier) (PlatformSettings, error) {
 	var raw []byte
@@ -65,6 +65,9 @@ func amountUnits(value string, scale int64) (int64, error) {
 }
 func money(n int64) string {
 	return decimal.NewFromInt(n).Div(decimal.NewFromInt(moneyScale)).StringFixed(6)
+}
+func modelPrice(n int64) string {
+	return decimal.NewFromInt(n).Div(decimal.NewFromInt(moneyScale)).String()
 }
 func walletView(row Row) Row {
 	return Row{"balance": money(integer(row["balanceMicros"])), "frozen": money(integer(row["frozenMicros"])), "updatedAt": row["updatedAt"]}
@@ -248,10 +251,11 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		reward, err := amountUnits(settings.ReferralReward, moneyScale)
-		if err != nil || reward < 0 {
-			return nil, problem(400, "invalid_settings", "邀请奖励必须为非负金额")
+		percent, err := decimal.NewFromString(settings.ReferralPercent)
+		if err != nil || percent.IsNegative() {
+			return nil, problem(400, "invalid_settings", "邀请返利比例必须为非负百分比")
 		}
+		settings.ReferralPercent = percent.String()
 		if min < 0 || max < min || settings.UserRPM < 0 || settings.IPRPM < 0 || settings.ActiveTasks < 0 || settings.PaymentOrderMinutes <= 0 {
 			return nil, problem(400, "invalid_settings", "奖励范围、频控或订单有效期不正确")
 		}

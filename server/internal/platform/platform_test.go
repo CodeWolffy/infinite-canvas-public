@@ -153,6 +153,15 @@ func TestConcurrentPaymentCallbacksCreditOnce(t *testing.T) {
 	a := testApp(t)
 	id, _ := testUser(t, a, 0)
 	ctx := context.Background()
+	inviter, _ := testUser(t, a, 0)
+	if _, err := a.DB.Exec(ctx, "INSERT INTO referrals(user_id,inviter_id) VALUES($1,$2)", id, inviter); err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultSettings
+	settings.ReferralEnabled, settings.ReferralPercent = true, "12.5"
+	if _, err := a.DB.Exec(ctx, "INSERT INTO app_settings(key,value) VALUES('platform',$1)", jsonBytes(settings)); err != nil {
+		t.Fatal(err)
+	}
 	channelID, orderID := uuid.NewString(), uuid.NewString()
 	config := PaymentConfig{BaseURL: "https://payments.example.com", PartnerID: "merchant-1", Key: "payment-test-secret"}
 	sealed, err := a.seal(string(jsonBytes(config)))
@@ -182,6 +191,7 @@ func TestConcurrentPaymentCallbacksCreditOnce(t *testing.T) {
 		t.Fatal("accepted tampered payment")
 	}
 	testBalance(t, a, id, 0, 0)
+	testBalance(t, a, inviter, 0, 0)
 	var wg sync.WaitGroup
 	failures := make(chan string, 24)
 	for i := 0; i < 24; i++ {
@@ -200,9 +210,17 @@ func TestConcurrentPaymentCallbacksCreditOnce(t *testing.T) {
 		t.Error(failure)
 	}
 	testBalance(t, a, id, 12340000, 0)
+	testBalance(t, a, inviter, 1542500, 0)
 	var count int
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries WHERE user_id=$1", id).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("ledger count=%d err=%v", count, err)
+	}
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries WHERE user_id=$1 AND kind='referral' AND reference=$2", inviter, orderID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("referral ledger count=%d err=%v", count, err)
+	}
+	var reward int64
+	if err = a.DB.QueryRow(ctx, "SELECT reward_micros FROM referrals WHERE user_id=$1", id).Scan(&reward); err != nil || reward != 1542500 {
+		t.Fatalf("referral reward=%d err=%v", reward, err)
 	}
 	wrong := PaymentResult{Paid: true, TradeNo: "trade-1", MerchantOrder: merchantOrder(orderID), Method: "alipay", AmountCents: 1235}
 	if a.creditPayment(ctx, orderID, wrong) == nil {
@@ -429,7 +447,7 @@ func TestTokenPricingSettlesByUsage(t *testing.T) {
 	for _, query := range []struct {
 		sql  string
 		args []any
-	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million) VALUES($1,'gpt-test','测试文本','text','published',10000,2000000,200000,4000000)", []any{modelID}}, {"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", []any{channelID, upstream.URL + "/v1"}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-test')", []any{modelID, channelID}}} {
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,config) VALUES($1,'gpt-test','测试文本','text','published',10000,2000000,200000,4000000,$2)", []any{modelID, jsonBytes(Row{"maxOutputTokens": 4096})}}, {"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'测试渠道','openai',$2,'active')", []any{channelID, upstream.URL + "/v1"}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'gpt-test')", []any{modelID, channelID}}} {
 		if _, err := a.DB.Exec(ctx, query.sql, query.args...); err != nil {
 			t.Fatal(err)
 		}

@@ -11,6 +11,8 @@ import { checkAllChannels } from "@/services/api/platform-operations";
 import { batchSaveModelChannelBindings, createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
 import ChannelMonitoring from "./components/channel-monitoring";
 import ChannelKeys from "./components/channel-keys";
+import { modelReasoningEfforts, reasoningEffortLabel, type ModelReasoningEffort } from "@/lib/model-reasoning";
+import { clearPublicModelsCache } from "@/services/api/generation";
 
 type ChannelValues = Omit<ChannelInput, "timeoutMs" | "apiKeys"> & { timeoutSeconds: number; cooldownSeconds: number; apiKeysText?: string };
 type QuickModelValues = {
@@ -20,6 +22,8 @@ type QuickModelValues = {
     capability?: "image" | "text" | "video" | "audio";
     status?: "draft" | "published" | "disabled";
     pricePerImage?: number;
+    maxOutputTokens?: number;
+    reasoningEfforts?: ModelReasoningEffort[];
     priority: number;
     weight: number;
     enabled: boolean;
@@ -77,7 +81,7 @@ export default function AdminChannelsPage() {
             let modelId = values.targetModelId;
             if (modelId === createModelValue) {
                 if (!values.name || !values.displayName || !values.capability || !values.status) throw new Error("请完善平台模型信息");
-                const model = await createAdminModel({ name: values.name, displayName: values.displayName, capability: values.capability, status: values.status, pricePerImage: values.pricePerImage ?? "0", description: null, config: {} });
+                const model = await createAdminModel({ name: values.name, displayName: values.displayName, capability: values.capability, status: values.status, pricePerImage: values.pricePerImage ?? "0", description: null, config: values.capability === "text" ? { maxOutputTokens: values.maxOutputTokens, reasoningEfforts: values.reasoningEfforts || [] } : {} });
                 modelId = model.id;
             }
             await saveModelChannelBinding(modelId, modelResult.channel.id, { upstreamModel: configuringUpstream, priority: values.priority, weight: values.weight, enabled: values.enabled });
@@ -86,6 +90,8 @@ export default function AdminChannelsPage() {
             void queryClient.invalidateQueries({ queryKey: ["admin", "models"] });
             void queryClient.invalidateQueries({ queryKey: ["admin", "model-bindings"] });
             setConfiguringUpstream(null);
+            clearPublicModelsCache();
+            void queryClient.invalidateQueries({ queryKey: ["public-models"] });
             quickModelForm.resetFields();
             message.success("平台模型与渠道已配置");
         },
@@ -233,10 +239,12 @@ export default function AdminChannelsPage() {
                 <div className="mb-4 rounded-lg bg-stone-50 px-3 py-2.5 dark:bg-stone-900"><div className="text-xs text-stone-500">上游模型</div><code className="mt-1 block break-all text-xs text-stone-800 dark:text-stone-200">{configuringUpstream}</code></div>
                 <Form<QuickModelValues> form={quickModelForm} layout="vertical" requiredMark={false} onFinish={(values) => quickModelMutation.mutate(values)}>
                     <Form.Item name="targetModelId" label="平台模型" extra="只有唯一同名平台模型会自动选中；存在多个同名变体时请手动选择，也可以创建新模型。" rules={[{ required: true, message: "请选择平台模型" }]}><Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...(modelsQuery.data || []).map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} /></Form.Item>
-                    <Form.Item noStyle shouldUpdate={(previous, current) => previous.targetModelId !== current.targetModelId}>{({ getFieldValue }) => getFieldValue("targetModelId") === createModelValue ? <>
+                    <Form.Item noStyle shouldUpdate={(previous, current) => previous.targetModelId !== current.targetModelId || previous.capability !== current.capability}>{({ getFieldValue }) => getFieldValue("targetModelId") === createModelValue ? <>
                         <div className="grid grid-cols-2 gap-4"><Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }, { max: 120 }]}><Input /></Form.Item><Form.Item name="name" label="模型标识" extra="可与其他公开模型相同。" rules={[{ required: true, message: "请输入模型标识" }, { max: 120 }]}><Input /></Form.Item></div>
                         <div className="grid grid-cols-2 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }, { value: "video", label: "视频" }, { value: "audio", label: "音频" }]} /></Form.Item><Form.Item name="status" label="发布状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
                         <Form.Item name="pricePerImage" label="单次价格（元）" extra="图片按每张，其他能力按每个结果收费。"><InputNumber<string> stringMode className="w-full" min="0" precision={6} /></Form.Item>
+                        {getFieldValue("capability") === "text" ? <Form.Item name="maxOutputTokens" label="最大输出 token" extra="统一用于该模型的报价和生成，用户端不展示或修改。" rules={[{ required: true, message: "请配置该模型的最大输出 token 数" }]}><InputNumber min={1} precision={0} className="!w-full" /></Form.Item> : null}
+                        {getFieldValue("capability") === "text" ? <Form.Item name="reasoningEfforts" label="开放的思考强度" extra="只勾选模型与渠道实际支持的档位，留空时使用模型默认。"><Select mode="multiple" allowClear placeholder="仅使用模型默认" options={modelReasoningEfforts.map((value) => ({ value, label: `${reasoningEffortLabel(value)}（${value}）` }))} /></Form.Item> : null}
                     </> : null}</Form.Item>
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="priority" label="优先级" tooltip="数值越大越优先，适合配置主备渠道" rules={[{ required: true }]}><InputNumber className="w-full" precision={0} /></Form.Item><Form.Item name="weight" label="同级权重" tooltip="相同优先级的渠道按权重分流" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item></div>
                     <Form.Item name="enabled" label="启用此渠道" valuePropName="checked"><Switch /></Form.Item>

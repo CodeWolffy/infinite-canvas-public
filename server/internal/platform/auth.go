@@ -311,7 +311,7 @@ func (a *App) authRoutes(r *gin.Engine) {
 			if _, err = tx.Exec(ctx, "INSERT INTO invitation_uses(invitation_id,user_id) VALUES($1,$2)", invitation, id); err != nil {
 				return err
 			}
-			if err = a.creditReferral(ctx, tx, id, input.ReferralCode); err != nil {
+			if err = a.bindReferral(ctx, tx, id, input.ReferralCode); err != nil {
 				return err
 			}
 			token, err = a.sessionWithClient(ctx, tx, id, c)

@@ -1,7 +1,7 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, findChannelModel, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { createGenerationBatch, getGenerationBatch, getPublicModels, uploadGenerationMedia, type GenerationBatchDetail } from "@/services/api/generation";
 import { mediaId } from "@/services/api/media";
 import { createTextConversation, createTextRequest } from "@/services/api/text";
@@ -13,6 +13,7 @@ import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
+import { resolveReasoningEffort } from "@/lib/model-reasoning";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -857,6 +858,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     throwIfAborted();
     const requestId = crypto.randomUUID();
     options?.onTextRequestPrepared?.(requestId, conversationId);
+    const effort = resolveReasoningEffort(findChannelModel(config, config.model || config.textModel)?.model, config.reasoningEffort);
     const request = createTextRequest({
         requestId,
         conversationId,
@@ -865,7 +867,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         content,
         systemPrompt,
         attachmentMediaIds,
-        parameters: { ...(config.reasoningEffort === "auto" ? {} : { reasoningEffort: config.reasoningEffort }), ...(config.textMaxTokens ? { max_tokens: Number(config.textMaxTokens) } : {}) },
+        parameters: effort === "auto" ? {} : { reasoningEffort: effort },
     }, options?.signal, onDelta);
     const response = options?.signal ? await waitForTextRequest(request, options.signal) : await request;
     assertCurrentSession(sessionVersion);

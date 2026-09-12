@@ -239,14 +239,14 @@ func TestMonitorAutoRecoveryAndStatusAuth(t *testing.T) {
 	if err = a.DB.QueryRow(ctx, "SELECT status FROM channels WHERE id=$1", channelID).Scan(&status); err != nil || status != "disabled" { t.Fatal("manual disable was undone", err) }
 }
 
-func TestReferralRegistrationCreditsOnceAndRollsBackInvalidAdmission(t *testing.T) {
+func TestReferralRegistrationOnlyBindsAndRollsBackInvalidAdmission(t *testing.T) {
 	a := routingApp(t)
 	ctx := context.Background()
 	inviter, _ := testUser(t, a, moneyScale)
 	var code string
 	if err := a.DB.QueryRow(ctx, "SELECT referral_code FROM users WHERE id=$1", inviter).Scan(&code); err != nil { t.Fatal(err) }
 	settings := defaultSettings
-	settings.ReferralEnabled, settings.ReferralReward = true, "0.25"
+	settings.ReferralEnabled, settings.ReferralPercent = true, "25"
 	if _, err := a.DB.Exec(ctx, "UPDATE app_settings SET value=$1 WHERE key='platform'", jsonBytes(settings)); err != nil { t.Fatal(err) }
 	admission := uuid.NewString()
 	if _, err := a.DB.Exec(ctx, "INSERT INTO invitations(code_hash,code_hint,created_by,max_uses) VALUES($1,'test',$2,1)", hash(admission), inviter); err != nil { t.Fatal(err) }
@@ -266,10 +266,12 @@ func TestReferralRegistrationCreditsOnceAndRollsBackInvalidAdmission(t *testing.
 	accepted := register(admission)
 	if accepted.Code != 200 { t.Fatal(accepted.Body.String()) }
 	newUser := str(object(responseRow(t, accepted)["user"])["id"])
-	if err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error { return a.creditReferral(ctx, tx, newUser, code) }); err != nil { t.Fatal(err) }
-	testBalance(t, a, inviter, 1_250_000, 0)
+	if err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error { return a.bindReferral(ctx, tx, newUser, code) }); err != nil { t.Fatal(err) }
+	testBalance(t, a, inviter, moneyScale, 0)
 	var credits int
-	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries WHERE user_id=$1 AND kind='referral'", inviter).Scan(&credits); err != nil || credits != 1 { t.Fatalf("credits=%d: %v", credits, err) }
+	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries WHERE user_id=$1 AND kind='referral'", inviter).Scan(&credits); err != nil || credits != 0 { t.Fatalf("credits=%d: %v", credits, err) }
+	var invited int
+	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM referrals WHERE inviter_id=$1 AND reward_micros=0", inviter).Scan(&invited); err != nil || invited != 1 { t.Fatalf("invited=%d: %v", invited, err) }
 }
 
 func TestExpiredTaskDoesNotReplayKnownRefusalOrCompletedUpstream(t *testing.T) {

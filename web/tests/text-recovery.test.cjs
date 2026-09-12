@@ -13,6 +13,7 @@ function compile(source, context = {}) {
 }
 const read = (path) => readFileSync(resolve(__dirname, "../src", path), "utf8");
 const helpers = compile(read("lib/canvas/canvas-text-generation.ts"));
+const reasoning = compile(read("lib/model-reasoning.ts"), { require: (name) => { assert.equal(name, "@/i18n"); return { default: { t: (key) => key } }; } });
 const restoreSource = ts.createSourceFile("helpers.ts", read("lib/canvas/canvas-generation-helpers.ts"), ts.ScriptTarget.Latest, true);
 const restoreDeclaration = restoreSource.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "resetInterruptedGeneration");
 const { resetInterruptedGeneration } = compile(restoreDeclaration.getText(restoreSource), {
@@ -71,7 +72,7 @@ function deferred() {
     const promise = new Promise((done) => { resolve = done; });
     return { promise, resolve };
 }
-function textGeneration({ count = 2, request, failBeforeSubmit = false } = {}) {
+function textGeneration({ count = 2, request, failBeforeSubmit = false, reasoningEffort = "auto", reasoningEfforts = [] } = {}) {
     const project = ts.createSourceFile("project.tsx", read("pages/canvas/project.tsx"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const api = ts.createSourceFile("image.ts", read("services/api/image.ts"), ts.ScriptTarget.Latest, true);
     const user = { sessionVersion: 1 };
@@ -79,10 +80,11 @@ function textGeneration({ count = 2, request, failBeforeSubmit = false } = {}) {
     let sequence = 0, conversation = 0;
     let nodes = [{ id: "source", type: "config", metadata: { status: "loading", prompt: "question" } }, { ...node(), metadata: { status: "loading", prompt: "question", primaryTextId: "a", texts: ["a", "b"].slice(0, count).map((id) => ({ id, status: "loading", content: "" })) } }];
     const context = {
-        ...helpers, AbortController, DOMException,
+        ...helpers, ...reasoning, AbortController, DOMException,
+        findChannelModel: () => ({ model: { reasoningEfforts } }),
         useUserStore: { getState: () => user },
         assertCurrentSession: (version) => { if (user.sessionVersion !== version) throw new DOMException("changed session", "AbortError"); },
-        textIds: ["a", "b"].slice(0, count), rootId: "node", nodeId: "source", projectId: "project", sourceNode: nodes[0], generationConfig: { model: "model", reasoningEffort: "auto" }, generationContext: {}, effectivePrompt: "question", controller: new AbortController(), isConfigNode: true,
+        textIds: ["a", "b"].slice(0, count), rootId: "node", nodeId: "source", projectId: "project", sourceNode: nodes[0], generationConfig: { model: "model", reasoningEffort }, generationContext: {}, effectivePrompt: "question", controller: new AbortController(), isConfigNode: true,
         NODE_STATUS_LOADING: "loading", NODE_STATUS_SUCCESS: "success", NODE_STATUS_ERROR: "error", NODE_STATUS_IDLE: "idle", CanvasNodeType: { Text: "text", Config: "config", Image: "image" },
         buildNodeResponseMessages: () => [{ role: "user", content: "question" }], isGenerationCanceled: (error) => error?.name === "AbortError", t: (key) => key,
         setNodes: (update) => { nodes = update(nodes); context.nodesRef.current = nodes; }, nodesRef: { current: nodes },
@@ -128,6 +130,15 @@ test("lost text POST responses retain every submitted slot for recovery after re
     assert.deepEqual(Array.from(setup.root.metadata.texts, (text) => text.content), ["first answer", "second answer"]);
     assert.equal(setup.root.metadata.status, "success");
     assert.equal(setup.parent.metadata.status, "success");
+});
+
+test("canvas sends only reasoning levels supported by the selected model", async () => {
+    for (const [reasoningEfforts, expected] of [[['high', 'ultra'], 'ultra'], [['high'], undefined], [[], undefined]]) {
+        const setup = textGeneration({ reasoningEffort: "ultra", reasoningEfforts });
+        await setup.generate();
+        assert.equal(setup.requests.length, 2);
+        assert.ok(setup.requests.every((request) => request.parameters.reasoningEffort === expected));
+    }
 });
 
 test("a lost multi-text response keeps successful siblings and later records authoritative failure", async () => {

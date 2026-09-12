@@ -2874,7 +2874,6 @@ function InfiniteCanvasPage() {
                         fontSize: 14,
                         model: generationConfig.model,
                         reasoningEffort: generationConfig.reasoningEffort,
-                        textMaxTokens: generationConfig.textMaxTokens,
                         textCount,
                         texts: textIds.map((id) => ({ id, status: NODE_STATUS_LOADING, content: "" })),
                         primaryTextId: textIds[0],

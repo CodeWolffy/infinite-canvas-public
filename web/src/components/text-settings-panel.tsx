@@ -1,23 +1,22 @@
 import { type ReactNode } from "react";
-import { InputNumber } from "antd";
 import { useTranslation } from "react-i18next";
 
-import i18n from "@/i18n";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import type { AiConfig, ReasoningEffort } from "@/stores/use-config-store";
-
-const reasoningEffortOptions: ReasoningEffort[] = ["auto", "low", "medium", "high", "xhigh"];
+import { modelReasoningOptions, resolveReasoningEffort } from "@/lib/model-reasoning";
+import { findChannelModel, type AiConfig } from "@/stores/use-config-store";
 
 type TextSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (changes: Partial<Pick<AiConfig, "reasoningEffort" | "textMaxTokens">>) => void;
+    onConfigChange: (changes: Partial<Pick<AiConfig, "reasoningEffort">>) => void;
     theme: CanvasTheme;
     className?: string;
 };
 
 export function TextSettingsPanel({ config, onConfigChange, theme, className = "space-y-4" }: TextSettingsPanelProps) {
     const { t } = useTranslation();
+    const model = findChannelModel(config, config.model || config.textModel)?.model;
+    const effort = resolveReasoningEffort(model, config.reasoningEffort);
     return (
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
@@ -26,22 +25,17 @@ export function TextSettingsPanel({ config, onConfigChange, theme, className = "
                     <div className="text-sm font-medium" style={{ color: theme.node.muted }}>
                         {t("settingsPanels.text.reasoning")}
                     </div>
-                    <div className="grid grid-cols-5 gap-2">
-                        {reasoningEffortOptions.map((value) => (
-                            <OptionPill key={value} selected={config.reasoningEffort === value} theme={theme} onClick={() => onConfigChange({ reasoningEffort: value })}>
-                                {t(`settingsPanels.common.${value}`)}
+                    <div className="grid grid-cols-4 gap-2">
+                        {modelReasoningOptions(model).map(({ value, label }) => (
+                            <OptionPill key={value} selected={effort === value} theme={theme} onClick={() => onConfigChange({ reasoningEffort: value })}>
+                                {label}
                             </OptionPill>
                         ))}
                     </div>
                 </div>
-                <div className="space-y-2.5"><label className="text-sm font-medium" style={{ color: theme.node.muted }}>最大输出 token</label><InputNumber aria-label="最大输出 token" min={1} precision={0} className="!w-full" value={config.textMaxTokens ? Number(config.textMaxTokens) : null} onChange={(value) => onConfigChange({ textMaxTokens: value == null ? "" : String(value) })} placeholder="Claude 必填，其他模型选填" /><p className="text-xs" style={{ color: theme.node.muted }}>不设置默认值，由你填写本次输出上限。</p></div>
             </div>
         </ImageSettingsTheme>
     );
-}
-
-export function reasoningEffortLabel(value: ReasoningEffort) {
-    return reasoningEffortOptions.includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value;
 }
 
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {

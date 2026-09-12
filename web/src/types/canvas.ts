@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "@/lib/model-reasoning";
+
 export type Position = {
     x: number;
     y: number;
@@ -58,8 +60,7 @@ export type CanvasNodeMetadata = {
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;
     model?: string;
-    reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
-    textMaxTokens?: string;
+    reasoningEffort?: ReasoningEffort;
     conversationId?: string;
     textRequestId?: string;
     size?: string;

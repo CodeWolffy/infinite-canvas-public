@@ -1,4 +1,5 @@
 import { Drawer } from "antd";
+import { Activity } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -35,6 +36,9 @@ export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDraw
                         </Link>
                     );
                 })}
+                <Link to="/status" onClick={onClose} className="flex items-center gap-3 rounded-lg px-3 py-3 text-base text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                    <Activity className="size-5" /><span>模型状态</span>
+                </Link>
             </div>
         </Drawer>
     );

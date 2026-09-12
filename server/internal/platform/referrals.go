@@ -6,9 +6,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
-func (a *App) creditReferral(ctx context.Context, tx pgx.Tx, userID, code string) error {
+func (a *App) bindReferral(ctx context.Context, tx pgx.Tx, userID, code string) error {
 	if code == "" {
 		return nil
 	}
@@ -19,26 +20,40 @@ func (a *App) creditReferral(ctx context.Context, tx pgx.Tx, userID, code string
 	if err != nil {
 		return err
 	}
-	settings, err := a.settings(ctx, tx)
+	_, err = tx.Exec(ctx, "INSERT INTO referrals(user_id,inviter_id) VALUES($1,$2) ON CONFLICT(user_id) DO NOTHING", userID, inviter["id"])
+	return err
+}
+
+// 仅在真实充值入账的事务中返利，每笔支付订单只产生一条邀请返利账本。
+func (a *App) creditReferral(ctx context.Context, tx pgx.Tx, userID, orderID string, paidMicros int64) error {
+	referral, err := one(ctx, tx, "SELECT inviter_id FROM referrals WHERE user_id=$1", userID)
+	if errors.Is(err, notFound) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	var amount int64
-	if settings.ReferralEnabled {
-		amount, err = amountUnits(settings.ReferralReward, moneyScale)
-		if err != nil || amount < 0 {
-			return problem(503, "invalid_referral_settings", "邀请奖励配置不正确，请联系管理员")
-		}
-	}
-	result, err := tx.Exec(ctx, "INSERT INTO referrals(user_id,inviter_id,reward_micros) VALUES($1,$2,$3) ON CONFLICT(user_id) DO NOTHING", userID, inviter["id"], amount)
-	if err != nil || result.RowsAffected() == 0 || amount == 0 {
+	settings, err := a.settings(ctx, tx)
+	if err != nil || !settings.ReferralEnabled {
 		return err
 	}
-	credited, err := changeWallet(ctx, tx, str(inviter["id"]), "referral", userID, amount, 0, "邀请新用户注册奖励（永久余额）")
+	percent, err := decimal.NewFromString(settings.ReferralPercent)
+	if err != nil || percent.IsNegative() {
+		return problem(503, "invalid_referral_settings", "邀请返利比例配置不正确，请联系管理员")
+	}
+	amount, err := roundedMicros(decimal.NewFromInt(paidMicros).Mul(percent).Shift(-2).Truncate(0))
+	if err != nil || amount == 0 {
+		return err
+	}
+	inviterID := str(referral["inviterId"])
+	credited, err := changeWallet(ctx, tx, inviterID, "referral", orderID, amount, 0, "好友充值 ¥"+modelPrice(paidMicros)+"，按 "+percent.String()+"% 返利（永久余额）")
 	if err != nil || !credited {
 		return err
 	}
-	return a.notifyCredit(ctx, tx, str(inviter["id"]), "referral", amount)
+	if _, err = tx.Exec(ctx, "UPDATE referrals SET reward_micros=reward_micros+$2 WHERE user_id=$1", userID, amount); err != nil {
+		return err
+	}
+	return a.notifyCredit(ctx, tx, inviterID, "referral", amount)
 }
 
 func (a *App) referralRoutes(api, admin *gin.RouterGroup) {
@@ -63,7 +78,7 @@ func (a *App) referralRoutes(api, admin *gin.RouterGroup) {
 			item["reward"] = money(integer(item["rewardMicros"]))
 			delete(item, "rewardMicros")
 		}
-		return gin.H{"code": code, "url": a.Config.PublicURL + "/login?ref=" + code, "enabled": settings.ReferralEnabled, "reward": settings.ReferralReward, "summary": summary, "referrals": items}, err
+		return gin.H{"code": code, "url": a.Config.PublicURL + "/login?ref=" + code, "enabled": settings.ReferralEnabled, "percent": settings.ReferralPercent, "summary": summary, "referrals": items}, err
 	}))
 	admin.GET("/referrals", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)

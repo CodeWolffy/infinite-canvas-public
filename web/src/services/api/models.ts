@@ -1,16 +1,7 @@
 import { apiRequest } from "@/services/api/request";
+import type { PublicModel } from "./generation";
 
-export type PublicModel = {
-    id: string;
-    name: string;
-    displayName: string;
-    capability: "image" | "text" | "video" | "audio";
-    requiresMaxOutputTokens?: boolean;
-    price?: string;
-    pricePerImage?: string | null;
-    sortOrder: number;
-    description: string | null;
-};
+export type { PublicModel } from "./generation";
 
 export async function listModels() {
     return (await apiRequest<{ models: PublicModel[] }>("/api/models")).models;

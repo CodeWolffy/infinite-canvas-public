@@ -57,7 +57,6 @@ export const router = createBrowserRouter([
         ),
         children: [
             { path: "/change-password", element: <ChangePasswordPage /> },
-            { path: "/status", element: <Suspense fallback={<Spin />}><StatusPage /></Suspense> },
             {
                 element: (
                     <UserLayout>
@@ -74,6 +73,7 @@ export const router = createBrowserRouter([
                     { path: "/video", element: <Navigate to="/studio?type=video" replace /> },
                     { path: "/audio", element: <Navigate to="/studio?type=audio" replace /> },
                     { path: "/text", element: <TextPage /> },
+                    { path: "/status", element: <StatusPage /> },
                     { path: "/assets", element: <AssetsPage /> },
                     { path: "/prompts", element: <PromptsPage /> },
                     { path: "/canvas", element: <CanvasPage /> },

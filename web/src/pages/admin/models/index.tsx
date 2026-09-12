@@ -6,8 +6,10 @@ import { Cable, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { createAdminModel, deleteAdminModel, deleteModelBinding, getAdminChannels, getAdminModels, getModelChannelBindings, saveModelChannelBinding, updateAdminModel, updateAdminModelStatus, type AdminModel, type BindingInput, type ModelInput } from "@/services/api/admin-platform";
 import ChannelCosts from "./components/channel-costs";
+import { modelReasoningEfforts, reasoningEffortLabel, type ModelReasoningEffort } from "@/lib/model-reasoning";
+import { clearPublicModelsCache } from "@/services/api/generation";
 
-type ModelValues = ModelInput & { pricePerImage?: string; tokenPricing?: boolean; inputPrice?: string; cachedPrice?: string; outputPrice?: string; perSecondPricing?: boolean; pricePerSecond?: string };
+type ModelValues = ModelInput & { pricePerImage?: string; tokenPricing?: boolean; inputPrice?: string; cachedPrice?: string; outputPrice?: string; perSecondPricing?: boolean; pricePerSecond?: string; maxOutputTokens?: number; reasoningEfforts?: ModelReasoningEffort[] };
 type BindingValues = BindingInput & { channelId: string };
 
 export default function AdminModelsPage() {
@@ -22,7 +24,10 @@ export default function AdminModelsPage() {
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
     const bindingsQuery = useQuery({ queryKey: ["admin", "model-bindings", bindingModel?.id], queryFn: () => getModelChannelBindings(bindingModel!.id), enabled: Boolean(bindingModel) });
-    const refreshModels = () => queryClient.invalidateQueries({ queryKey: ["admin", "models"] });
+    const refreshModels = () => {
+        clearPublicModelsCache();
+        return Promise.all([queryClient.invalidateQueries({ queryKey: ["admin", "models"] }), queryClient.invalidateQueries({ queryKey: ["public-models"] })]);
+    };
     const refreshBindings = () => queryClient.invalidateQueries({ queryKey: ["admin", "model-bindings", bindingModel?.id] });
     const saveModel = useMutation({ mutationFn: (values: ModelValues) => editing ? updateAdminModel(editing.id, normalizeModel(values, editing.config)) : createAdminModel(normalizeModel(values, {}) as ModelInput), onSuccess: () => { void refreshModels(); setEditing(undefined); modelForm.resetFields(); message.success(editing ? "模型已更新" : "模型已创建"); }, onError: notifyError(message.error) });
     const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: AdminModel["status"] }) => updateAdminModelStatus(id, status), onSuccess: () => void refreshModels(), onError: notifyError(message.error) });
@@ -33,7 +38,7 @@ export default function AdminModelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         modelForm.resetFields();
-        modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, sortOrder: editing.sortOrder, status: editing.status, pricePerImage: editing.pricePerImage || undefined, tokenPricing: Boolean(editing.inputPricePerMillion), inputPrice: editing.inputPricePerMillion || undefined, cachedPrice: editing.cachedPricePerMillion || undefined, outputPrice: editing.outputPricePerMillion || undefined, perSecondPricing: Boolean(editing.pricePerSecond), pricePerSecond: editing.pricePerSecond || undefined, description: editing.description } : { capability: "image", sortOrder: 0, status: "draft" });
+        modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, sortOrder: editing.sortOrder, status: editing.status, pricePerImage: editing.pricePerImage || undefined, tokenPricing: Boolean(editing.inputPricePerMillion), inputPrice: editing.inputPricePerMillion || undefined, cachedPrice: editing.cachedPricePerMillion || undefined, outputPrice: editing.outputPricePerMillion || undefined, perSecondPricing: Boolean(editing.pricePerSecond), pricePerSecond: editing.pricePerSecond || undefined, maxOutputTokens: editing.config.maxOutputTokens == null ? undefined : Number(editing.config.maxOutputTokens), reasoningEfforts: (editing.config.reasoningEfforts || []) as ModelReasoningEffort[], description: editing.description } : { capability: "image", sortOrder: 0, status: "draft", reasoningEfforts: [] });
     }, [editing, modelForm]);
 
     const openBinding = (model: AdminModel) => { setBindingModel(model); setEditingBindingId(null); bindingForm.resetFields(); };
@@ -60,6 +65,8 @@ export default function AdminModelsPage() {
                         const tokenPricing = capability === "text" && getFieldValue("tokenPricing");
                         const secondPricing = (capability === "video" || capability === "audio") && getFieldValue("perSecondPricing");
                         return <>
+                            {capability === "text" ? <Form.Item name="maxOutputTokens" label="最大输出 token" extra="由管理员按模型配置，统一用于报价、文本对话和画布生成；用户端不展示或修改，不设置默认值。" rules={[{ required: true, message: "请配置该模型的最大输出 token 数" }]}><InputNumber min={1} precision={0} className="!w-full" /></Form.Item> : null}
+                            {capability === "text" ? <Form.Item name="reasoningEfforts" label="开放的思考强度" extra="按该模型及绑定渠道实际支持的档位勾选；留空时用户仅使用模型默认。"><Select mode="multiple" allowClear placeholder="仅使用模型默认" options={modelReasoningEfforts.map((value) => ({ value, label: `${reasoningEffortLabel(value)}（${value}）` }))} /></Form.Item> : null}
                             {capability === "text" ? <Form.Item name="tokenPricing" label="计费模式" valuePropName="checked" extra="按 token 计费后，单次价格仅作为最低冻结额度兜底；实际费用按回复用量结算，多退少补。"><Switch checkedChildren="按 token" unCheckedChildren="按次" /></Form.Item> : null}
                             {(capability === "video" || capability === "audio") ? <Form.Item name="perSecondPricing" label="计费模式" valuePropName="checked" extra={capability === "audio" ? "按音频实际时长结算，先按 5 秒预估冻结。" : "按请求的视频秒数结算。"}><Switch checkedChildren="按秒" unCheckedChildren="按次" /></Form.Item> : null}
                             {(capability === "video" || capability === "audio") && getFieldValue("perSecondPricing") ? <Form.Item name="pricePerSecond" label="每秒价格（元）" rules={[{ required: true, message: "请输入每秒价格" }]}><InputNumber<string> stringMode min="0" precision={6} className="w-full" /></Form.Item> : null}
@@ -91,8 +98,8 @@ export default function AdminModelsPage() {
 }
 
 function normalizeModel(values: ModelValues, config: Record<string, unknown>): ModelInput {
-    const { tokenPricing, inputPrice, cachedPrice, outputPrice, perSecondPricing, pricePerSecond, ...rest } = values;
-    const input: ModelInput = { ...rest, pricePerImage: values.pricePerImage !== undefined ? String(values.pricePerImage) : "0", description: values.description || null, config };
+    const { tokenPricing, inputPrice, cachedPrice, outputPrice, perSecondPricing, pricePerSecond, maxOutputTokens, reasoningEfforts, ...rest } = values;
+    const input: ModelInput = { ...rest, pricePerImage: values.pricePerImage !== undefined ? String(values.pricePerImage) : "0", description: values.description || null, config: { ...config, ...(values.capability === "text" ? { maxOutputTokens, reasoningEfforts: reasoningEfforts || [] } : {}) } };
     if (values.capability === "text" && tokenPricing) {
         input.inputPricePerMillion = inputPrice !== undefined ? String(inputPrice) : "";
         input.cachedPricePerMillion = cachedPrice !== undefined && cachedPrice !== null ? String(cachedPrice) : null;

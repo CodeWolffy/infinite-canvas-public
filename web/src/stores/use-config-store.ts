@@ -4,19 +4,20 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { modelPriceLabel, type ModelPricing } from "@/lib/model-price";
+import type { ModelReasoning, ReasoningEffort } from "@/lib/model-reasoning";
 import { listModels, type PublicModel } from "@/services/api/models";
 import { useUserStore } from "@/stores/use-user-store";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
-export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
+export type { ReasoningEffort } from "@/lib/model-reasoning";
 
-export type ChannelModel = {
+export type ChannelModel = ModelPricing & ModelReasoning & {
     name: string;
     capability: ModelCapability;
     displayName?: string;
     script?: string;
-    pricePerImage?: string | null;
 };
 
 export type ModelChannel = {
@@ -50,7 +51,6 @@ export type AiConfig = {
     videoMode: string;
     systemPrompt: string;
     reasoningEffort: ReasoningEffort;
-    textMaxTokens: string;
     models: string[];
     quality: string;
     size: string;
@@ -119,7 +119,6 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    textMaxTokens: "",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
@@ -171,7 +170,7 @@ export function guessCapability(name: string): ModelCapability {
     return "text";
 }
 
-function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
+export function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
     const decoded = decodeChannelModel(value);
     const name = decoded?.model || value;
     const channel = decoded
@@ -219,7 +218,7 @@ function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
     // Platform models are selected by UUID. Their public identifiers may be
     // shared by variants (for example, standard and 4K models routing to the
     // same upstream model), while the display name remains user-facing.
-    const platformModels = models.map((model) => ({ name: model.id, displayName: model.displayName, capability: model.capability, pricePerImage: model.pricePerImage }));
+    const platformModels = models.map((model) => ({ ...model, name: model.id }));
     const channel = createModelChannel({ id: PLATFORM_CHANNEL_ID, name: "平台模型", baseUrl: "", apiKey: "", models: platformModels });
     const imageModel = platformModels.find((model) => model.capability === "image");
     const textModel = platformModels.find((model) => model.capability === "text");
@@ -288,7 +287,6 @@ export const useConfigStore = create<ConfigStore>()(
                     count: state.config.count,
                     canvasImageCount: state.config.canvasImageCount,
                     reasoningEffort: state.config.reasoningEffort,
-                    textMaxTokens: state.config.textMaxTokens,
                     systemPrompt: state.config.systemPrompt,
                     videoSeconds: state.config.videoSeconds,
                     vquality: state.config.vquality,
@@ -316,7 +314,6 @@ export const useConfigStore = create<ConfigStore>()(
                         count: persistedConfig.count ?? defaults.count,
                         canvasImageCount: persistedConfig.canvasImageCount ?? defaults.canvasImageCount,
                         reasoningEffort: persistedConfig.reasoningEffort ?? defaults.reasoningEffort,
-                        textMaxTokens: persistedConfig.textMaxTokens ?? defaults.textMaxTokens,
                         systemPrompt: persistedConfig.systemPrompt ?? defaults.systemPrompt,
                         videoSeconds: persistedConfig.videoSeconds ?? defaults.videoSeconds,
                         vquality: persistedConfig.vquality ?? defaults.vquality,
@@ -358,8 +355,7 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
         const displayName = typeof item === "string" ? undefined : item.displayName?.trim() || undefined;
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        const pricePerImage = typeof item === "string" ? undefined : item.pricePerImage;
-        result.push({ name, capability, displayName, script, pricePerImage });
+        result.push({ ...(typeof item === "string" ? {} : item), name, capability, displayName, script });
     }
     return result;
 }
@@ -477,11 +473,7 @@ export function modelOptionPrice(config: AiConfig, value: string): string | null
         ? config.channels.find((item) => item.id === decoded.channelId)
         : config.channels.find((item) => item.models.some((model) => model.name === name || model.displayName === name));
     const model = channel?.models.find((item) => item.name === name || item.displayName === name);
-    if (!model || model.pricePerImage === null || model.pricePerImage === undefined || model.pricePerImage === "") return null;
-    const num = Number(model.pricePerImage);
-    if (isNaN(num)) return null;
-    const formatted = Number.isInteger(num * 100) ? num.toFixed(2) : num.toString();
-    return `¥${formatted} / 张`;
+    return model ? modelPriceLabel(model) : null;
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {

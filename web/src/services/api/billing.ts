@@ -6,12 +6,12 @@ export type PaymentChannel = { id: string; name: string; provider: PaymentProvid
 export type PaymentOrder = { id: string; channelId: string; provider: PaymentProvider; method: PaymentMethod; amount: string; status: "pending" | "paid" | "closed"; paymentUrl?: string; expiresAt: string; paidAt: string | null; createdAt: string; username?: string; tradeNo?: string };
 export type WalletEntry = { id: string; userId: string; username?: string; kind: string; reference: string; deltaBalance: string; deltaFrozen: string; balanceAfter: string; frozenAfter: string; note: string; createdAt: string };
 export type WalletOverview = { wallet: { balance: string; frozen: string }; checkin: { enabled: boolean; day: string; checkedIn: boolean; rewardMin: string; rewardMax: string; timezone: string }; paymentChannels: Pick<PaymentChannel, "id" | "name" | "provider" | "methods">[]; summary?: { spent: string; recharge: string; grants: string; checkin: string; adjustment: string } };
-export type PlatformSettings = { generationEnabled: boolean; checkinEnabled: boolean; rewardMin: string; rewardMax: string; userRPM: number; ipRPM: number; activeTasks: number; paymentOrderMinutes: number; maxAttempts: number; referralEnabled: boolean; referralReward: string };
+export type PlatformSettings = { generationEnabled: boolean; checkinEnabled: boolean; rewardMin: string; rewardMax: string; userRPM: number; ipRPM: number; activeTasks: number; paymentOrderMinutes: number; maxAttempts: number; referralEnabled: boolean; referralPercent: string };
 export type Invitation = { id: string; codeHint: string; note: string; maxUses: number; usedCount: number; expiresAt: string | null; disabled: boolean; createdAt: string };
 
 export const paymentMethodLabels: Record<PaymentMethod, string> = { alipay: "支付宝", wxpay: "微信支付" };
 export const paymentProviderLabels: Record<PaymentProvider, string> = { epay: "易支付兼容", alipay: "支付宝官方", wechat: "微信支付官方" };
-export const walletEntryLabels: Record<string, string> = { recharge: "充值 / 兑换到账", checkin: "签到奖励", referral: "邀请奖励", grant: "公益赠送", hold: "生成冻结", charge: "生成结算", release: "余额退回", adjustment: "管理员调整" };
+export const walletEntryLabels: Record<string, string> = { recharge: "充值 / 兑换到账", checkin: "签到奖励", referral: "邀请返利", grant: "公益赠送", hold: "生成冻结", charge: "生成结算", release: "余额退回", adjustment: "管理员调整" };
 
 export const getWallet = () => apiRequest<WalletOverview>("/api/user/wallet");
 export const checkin = () => apiRequest<{ reward: string; alreadyCheckedIn: boolean }>("/api/user/checkin", { method: "POST", body: {} });

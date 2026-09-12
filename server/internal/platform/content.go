@@ -49,7 +49,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 	a.mediaRoutes(api)
 	api.GET("/models", respond(func(c *gin.Context) (any, error) {
 		u := currentUser(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT id,name,display_name,capability,sort_order,description,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,price_per_second,"+requiresTextLimit+" AS requires_max_output_tokens FROM models m WHERE m.status='published' AND m.deleted_at IS NULL AND EXISTS(SELECT 1 FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND (g.model_ids IS NULL OR m.id=ANY(g.model_ids))) AND EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=m.id AND b.enabled AND c.status='active' AND c.deleted_at IS NULL) ORDER BY sort_order,created_at", u.ID)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT id,name,display_name,capability,sort_order,description,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,price_per_second,coalesce(config->'reasoningEfforts','[]'::jsonb) AS reasoning_efforts FROM models m WHERE m.status='published' AND m.deleted_at IS NULL AND EXISTS(SELECT 1 FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND (g.model_ids IS NULL OR m.id=ANY(g.model_ids))) AND EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id WHERE b.model_id=m.id AND b.enabled AND c.status='active' AND c.deleted_at IS NULL) ORDER BY sort_order,created_at", u.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -64,11 +64,11 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			}
 			for _, field := range []string{"inputPricePerMillion", "cachedPricePerMillion", "outputPricePerMillion", "pricePerSecond"} {
 				if pricing[field] != nil {
-					row[field] = money(integer(pricing[field]))
+					row[field] = modelPrice(integer(pricing[field]))
 				}
 			}
-			row["price"] = money(integer(pricing["unitPriceMicros"]))
-			row["pricePerImage"] = money(integer(pricing["unitPriceMicros"]))
+			row["price"] = modelPrice(integer(pricing["unitPriceMicros"]))
+			row["pricePerImage"] = row["price"]
 			row["groupDiscount"] = discount.String()
 			delete(row, "priceMicros")
 		}

@@ -38,7 +38,7 @@ func capabilityModel(t *testing.T, a *App, capability, endpoint string, price in
 		sql  string
 		args []any
 	}{
-		{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'capability','capability',$2,'published',$3)", []any{model, capability, price}},
+		{"INSERT INTO models(id,name,display_name,capability,status,price_micros,config) VALUES($1,'capability','capability',$2,'published',$3,$4)", []any{model, capability, price, jsonBytes(Row{"maxOutputTokens": 4096})}},
 		{"INSERT INTO channels(id,name,protocol,base_url,status) VALUES($1,'test','openai',$2,'active')", []any{channel, endpoint}},
 		{"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channel, sealed}},
 		{"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'test')", []any{model, channel}},
@@ -91,11 +91,11 @@ func TestGroupPermissionsQuoteAndPermanentBalance(t *testing.T) {
 		t.Fatalf("policy: %d %s", policy.Code, policy.Body.String())
 	}
 	models := responseRow(t, testRequest(router, "GET", "/api/models", nil, cookie))["models"].([]any)
-	if len(models) != 1 || object(models[0])["price"] != "1.000000" {
+	if len(models) != 1 || object(models[0])["price"] != "1" {
 		t.Fatalf("model permissions/price: %v", models)
 	}
 	quote := testRequest(router, "POST", "/api/generation-quote", map[string]any{"modelId": model, "count": 2, "content": "hello"}, cookie)
-	if quote.Code != 200 || object(responseRow(t, quote)["quote"])["estimatedHold"] != "2.000000" {
+	if quote.Code != 200 || object(responseRow(t, quote)["quote"])["estimatedHold"] != "2" {
 		t.Fatalf("quote: %d %s", quote.Code, quote.Body.String())
 	}
 	denied := testRequest(router, "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": other, "count": 1, "prompt": "hello"}, cookie)

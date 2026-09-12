@@ -1,10 +1,6 @@
 package platform
 
-import (
-	"context"
-
-	"github.com/shopspring/decimal"
-)
+import "github.com/shopspring/decimal"
 
 func explicitTextTokens(params map[string]any) int64 {
 	for _, key := range []string{"max_completion_tokens", "max_tokens", "maxOutputTokens"} {
@@ -17,20 +13,6 @@ func explicitTextTokens(params map[string]any) int64 {
 		}
 	}
 	return 0
-}
-
-const requiresTextLimit = `EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id
-	WHERE b.model_id=m.id AND b.enabled AND c.protocol='anthropic' AND c.status='active' AND c.deleted_at IS NULL)`
-
-func (a *App) validateTextParameters(ctx context.Context, modelID string, params map[string]any) error {
-	var required bool
-	if err := a.DB.QueryRow(ctx, "SELECT "+requiresTextLimit+" FROM models m WHERE m.id=$1", modelID).Scan(&required); err != nil {
-		return err
-	}
-	if required && explicitTextTokens(params) == 0 {
-		return problem(400, "output_limit_required", "此模型使用 Claude Messages，请填写最大输出 token 数")
-	}
-	return nil
 }
 
 func anthropicContent(parts any) string {

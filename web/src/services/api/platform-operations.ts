@@ -36,7 +36,7 @@ export type MonitoringConfig = { intervalMinutes: number; autoDisableAfter: numb
 export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable" | "unknown"; availableChannels: number; checkedAt: string | null };
 export const getPublicStatus = () => apiRequest<{ models: ModelAvailability[] }>("/api/status/models");
 export type Referral = { id: string; displayName: string; reward: string; createdAt: string };
-export const getReferrals = (offset = 0) => apiRequest<{ code: string; url: string; enabled: boolean; reward: string; summary: { invited: number; earned: string }; referrals: Referral[] }>(`/api/user/referrals?offset=${offset}`);
+export const getReferrals = (offset = 0) => apiRequest<{ code: string; url: string; enabled: boolean; percent: string; summary: { invited: number; earned: string }; referrals: Referral[] }>(`/api/user/referrals?offset=${offset}`);
 export const getAdminReferrals = (search = "", offset = 0) => apiRequest<{ referrals: Array<Referral & { username: string; inviterName: string }> }>(`/api/admin/referrals?${serializeApiParams({ search, offset })}`);
 export const saveMonitoring = (id: string, body: MonitoringConfig) => apiRequest<void>(`/api/admin/channels/${id}/monitoring`, { method: "PUT", body });
 export const checkChannel = (id: string) => apiRequest<{ queued: boolean }>(`/api/admin/channels/${id}/check`, { method: "POST" });

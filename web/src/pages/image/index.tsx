@@ -704,8 +704,7 @@ function GenerationSettings({ config, models, modelId, onModelChange, updateConf
                         placeholder={t("imageWorkbench.noModelHint")}
                         className="w-full"
                         options={models.map((model) => {
-                            const num = model.pricePerImage ? Number(model.pricePerImage) : null;
-                            const price = num !== null && !isNaN(num) ? ` (¥${Number.isInteger(num * 100) ? num.toFixed(2) : num}/张)` : "";
+                            const price = model.pricePerImage != null ? ` (¥${model.pricePerImage}/张)` : "";
                             return { value: model.id, label: `${model.displayName}${price}` };
                         })}
                     />

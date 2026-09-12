@@ -195,6 +195,9 @@ func (a *App) creditPayment(ctx context.Context, id string, result PaymentResult
 		if !credited {
 			return nil
 		}
+		if err = a.creditReferral(ctx, tx, str(order["userId"]), id, result.AmountCents*10000); err != nil {
+			return err
+		}
 		return a.notifyCredit(ctx, tx, str(order["userId"]), "recharge", result.AmountCents*10000)
 	})
 }

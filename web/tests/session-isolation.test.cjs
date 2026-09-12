@@ -257,6 +257,7 @@ test("personal configuration and delayed model hydration stay within the authent
     imports["zustand/middleware"] = { persist: (creator, options) => persist(creator, { ...options, storage: createJSONStorage(() => ({ getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) })) }) };
     const models = deferred();
     imports["@/services/api/models"] = { listModels: () => models.promise };
+    imports["@/lib/model-price"] = load("../lib/model-price.ts");
     const config = load("use-config-store.ts").useConfigStore;
     await login("A");
     config.getState().updateConfig("systemPrompt", "private A instructions");
