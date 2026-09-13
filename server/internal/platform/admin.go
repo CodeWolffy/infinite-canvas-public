@@ -54,7 +54,7 @@ func publicChannel(row Row) Row {
 }
 
 func validateChannelBinding(ctx context.Context, q querier, modelID, channelID string) error {
-	row, err := one(ctx, q, "SELECT m.capability,c.capability AS channel_capability,c.protocol FROM models m JOIN channels c ON c.id=$2 WHERE m.id=$1 AND m.deleted_at IS NULL AND c.deleted_at IS NULL", modelID, channelID)
+	row, err := one(ctx, q, "SELECT m.capability,c.capability AS channel_capability,c.protocol FROM models m JOIN channels c ON c.id=$2 WHERE m.id=$1 AND m.deleted_at IS NULL AND c.deleted_at IS NULL FOR SHARE OF c", modelID, channelID)
 	if err != nil {
 		return err
 	}
@@ -377,14 +377,18 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		if err = validateChannelBinding(c.Request.Context(), a.DB, id, channelID); err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(input.ID) != "" {
-			_, err = a.DB.Exec(c.Request.Context(), "UPDATE model_channels SET upstream_model=$3,priority=$4,weight=$5,enabled=$6,updated_at=now() WHERE id=$1 AND model_id=$2 AND channel_id=$7", input.ID, id, input.UpstreamModel, input.Priority, input.Weight, input.Enabled, channelID)
-		} else {
-			_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
-		}
+		ctx := c.Request.Context()
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := validateChannelBinding(ctx, tx, id, channelID); err != nil {
+				return err
+			}
+			if strings.TrimSpace(input.ID) != "" {
+				_, err = tx.Exec(ctx, "UPDATE model_channels SET upstream_model=$3,priority=$4,weight=$5,enabled=$6,updated_at=now() WHERE id=$1 AND model_id=$2 AND channel_id=$7", input.ID, id, input.UpstreamModel, input.Priority, input.Weight, input.Enabled, channelID)
+			} else {
+				_, err = tx.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
+			}
+			return err
+		})
 		return gin.H{"saved": true}, err
 	}))
 	admin.POST("/models/:id/channels/:channelId/batch", respond(func(c *gin.Context) (any, error) {
@@ -563,10 +567,16 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 					return err
 				}
 				if old["capability"] != input.Capability {
-					return problem(400, "capability_immutable", "渠道类型修改请创建新渠道")
+					var bound bool
+					if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels WHERE channel_id=$1)", id).Scan(&bound); err != nil {
+						return err
+					}
+					if bound {
+						return problem(400, "capability_immutable", "已有模型绑定的渠道不能修改类型，请先移除绑定或创建新渠道")
+					}
 				}
 			}
-			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET name=excluded.name,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability)
+			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET name=excluded.name,capability=excluded.capability,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability)
 			if err != nil {
 				return err
 			}

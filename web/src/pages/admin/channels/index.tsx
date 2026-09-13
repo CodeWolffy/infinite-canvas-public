@@ -36,7 +36,6 @@ export default function AdminChannelsPage() {
     const category = modelCapabilities.find((item) => item.value === searchParams.get("type")) || modelCapabilities[0];
     const [keyword, setKeyword] = useState("");
     const [editing, setEditing] = useState<AdminChannel | null | undefined>(undefined);
-    const formCapability = editing?.capability || category.value;
     const [monitoring, setMonitoring] = useState<AdminChannel | null>(null);
     const [modelResult, setModelResult] = useState<{ channel: AdminChannel; models: string[]; checkedAt: string } | null>(null);
     const [modelSearch, setModelSearch] = useState("");
@@ -44,6 +43,7 @@ export default function AdminChannelsPage() {
     const [batchOpen, setBatchOpen] = useState(false);
     const [configuringUpstream, setConfiguringUpstream] = useState<string | null>(null);
     const [form] = Form.useForm<ChannelValues>();
+    const formCapability: ModelCapability = Form.useWatch("capability", form) || editing?.capability || category.value;
     const protocol = Form.useWatch("protocol", form);
     const [quickModelForm] = Form.useForm<QuickModelValues>();
     const [batchForm] = Form.useForm<{ targetModelId: string; priority: number; weight: number; enabled: boolean }>();
@@ -53,7 +53,7 @@ export default function AdminChannelsPage() {
     const adaptersQuery = useQuery({ queryKey: ["admin", "task-adapters"], queryFn: getTaskAdapters, enabled: editing !== undefined && formCapability === "video" });
     const matchingPlatformModels = (modelsQuery.data || []).filter((model) => model.capability === modelResult?.channel.capability);
     const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin", "channels"] });
-    const saveMutation = useMutation({ mutationFn: (values: ChannelValues) => editing ? updateAdminChannel(editing.id, channelPayload(values)) : createAdminChannel(channelPayload(values) as ChannelInput), onSuccess: () => { void refresh(); setEditing(undefined); form.resetFields(); message.success(editing ? "渠道已更新" : "渠道已创建"); }, onError: notifyError(message.error) });
+    const saveMutation = useMutation({ mutationFn: (values: ChannelValues) => editing ? updateAdminChannel(editing.id, channelPayload(values)) : createAdminChannel(channelPayload(values) as ChannelInput), onSuccess: (channel) => { void refresh(); setSearchParams({ type: channel.capability }); setKeyword(""); setEditing(undefined); form.resetFields(); message.success(editing ? "渠道已更新" : "渠道已创建"); }, onError: notifyError(message.error) });
     const deleteMutation = useMutation({ mutationFn: deleteAdminChannel, onSuccess: () => { void refresh(); message.success("渠道已删除"); }, onError: notifyError(message.error) });
     const modelsMutation = useMutation({ mutationFn: (channel: AdminChannel) => fetchAdminChannelModels(channel.id).then((result) => ({ channel, ...result })), onSuccess: ({ channel, models, health }) => { void refresh(); setModelSearch(""); setSelectedModels([]); setModelResult({ channel, models, checkedAt: health.checkedAt }); message.success("渠道连接正常"); }, onError: (error) => { void refresh(); message.error(error.message || "渠道连接失败"); } });
     const balanceMutation = useMutation({ mutationFn: (id: string) => queryChannelBalance(id), onSuccess: (data, id) => { const channel = (channelsQuery.data || []).find((item) => item.id === id); message.info(`余额查询${data.balance !== undefined ? `：$${data.balance.toFixed(2)}（额度 $${data.quota?.toFixed(2)}，已用 $${data.used?.toFixed(2)}）` : data.quota !== undefined ? `：额度 $${data.quota.toFixed(2)}` : "成功"}${channel ? ` · ${channel.name}` : ""}`); }, onError: (error: Error) => message.error(error.message) });
@@ -149,7 +149,7 @@ export default function AdminChannelsPage() {
             <div className="overflow-hidden rounded-xl border border-border"><Table<AdminChannel> rowKey="id" columns={columns} dataSource={visibleChannels} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1365 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={keyword.trim() ? "没有匹配的渠道" : `暂无${category.label}渠道`} /> }} /></div>
             <Modal title={`${editing ? "编辑" : "创建"}${capabilityLabel(formCapability)}渠道`} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden width={600}>
                 <Form<ChannelValues> form={form} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveMutation.mutate(values)}>
-                    <Form.Item name="capability" hidden><Input /></Form.Item>
+                    {editing ? <Form.Item name="capability" label="渠道类型" extra="仅未绑定模型的渠道可修改类型；密钥与调度设置继续保留。" rules={[{ required: true }]}><Select options={modelCapabilities.map(({ value, label }) => ({ value, label }))} onChange={(value) => { form.setFieldValue("taskAdapter", ""); if (value !== "text" && form.getFieldValue("protocol") === "anthropic") form.setFieldValue("protocol", "openai"); }} /></Form.Item> : <Form.Item name="capability" hidden><Input /></Form.Item>}
                     <Form.Item name="name" label="渠道名称" rules={[{ required: true, message: "请输入渠道名称" }]}><Input placeholder={`例如 主用${capabilityLabel(formCapability)}渠道`} /></Form.Item>
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="接口协议" rules={[{ required: true }]}><Select onChange={() => form.setFieldValue("taskAdapter", "")} options={channelProtocolOptions.filter((item) => formCapability === "text" || item.value !== "anthropic")} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请输入 Base URL" }, { type: "url", message: "请输入有效 URL" }]}><Input placeholder="https://api.example.com/v1" /></Form.Item>

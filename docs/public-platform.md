@@ -144,13 +144,17 @@ Web Nginx 已关闭 `/api` 响应缓冲。生产环境的 1Panel 外层反代也
 3. 本机 HTTP 使用单独配置和专用 `.env.local`：`docker compose --env-file .env.local -f docker-compose.local.yml up -d --build`，默认打开 `http://localhost:3301`；如需更换宿主机端口，在 `.env.local` 中设置 `PUBLIC_WEB_PORT`。本地配置会覆盖站点地址与 Secure Cookie。
 4. 首次登录初始化管理员后修改初始密码，创建上游渠道并绑定发布模型，然后设置价格、签到、邀请码与支付渠道。
 
-Compose 项目名为 `infinite-canvas-public`，使用独立数据卷。首次运行使用空库；Go 数据库按内置迁移顺序升级，当前到 `014_channel_capability.sql`，新增必填渠道类型。按未上线的新结构约定，该迁移要求渠道表为空，不自动猜测或回填既有渠道的类型；有渠道记录时需先明确其分类与升级方案。发现公司版 `users` 表或未知版本时拒绝覆盖，不提供公司版数据迁移。升级前备份数据库、MinIO 数据、Redis AOF 和 `CHANNEL_ENCRYPTION_KEY`；渠道、订单、邮件与 TOTP 密文均依赖此密钥。主动检测配置按绑定 ID 保存。
+Compose 项目名为 `infinite-canvas-public`，使用独立数据卷。首次运行使用空库；Go 数据库按内置迁移顺序升级，当前到 `014_channel_capability.sql`，新增必填渠道类型。已有渠道按模型绑定填充类型，混用多种类型时拆成独立渠道并保留密钥、路由、成本与检测配置；各渠道继承原调度参数。未绑定渠道按 Claude 协议或视频适配器分类，其余先归图片，可在绑定模型前通过后台编辑更正。发现公司版 `users` 表或未知版本时拒绝覆盖，不提供公司版数据迁移。升级前备份数据库、MinIO 数据、Redis AOF 和 `CHANNEL_ENCRYPTION_KEY`；渠道、订单、邮件与 TOTP 密文均依赖此密钥。主动检测配置按绑定 ID 保存。
+
+如果升级曾报 `column "capability" of relation "channels" contains null values`，拉取修复后的代码并按上述更新命令重新构建启动。失败的迁移已由事务回滚，修复版会从原数据库版本继续升级。
 
 音频按秒计价需要 `ffprobe`。Go Dockerfile 已声明安装 ffmpeg；本地直接启动 Go 时，应先把 ffprobe 加入 PATH。时长读取限定本地文件协议和支持的音频容器，不允许媒体内容引导探测器访问网络。
 
 前端保留现有 Ant Design 6 与 Pro Components beta 组合；由于其 peer 声明仍要求 antd 5，npm 安装使用 `npm install --legacy-peer-deps`，Docker 使用对应的 `npm ci --legacy-peer-deps`。也可使用项目原有的 `bun install`。本地 Vite 支持 `VITE_API_TARGET` 指定独立 Go 开发服务地址。
 
 ## 验证范围
+
+已有渠道升级修复已通过 54 组后端测试（含子用例共 87 项）与 53 项前端回归。前后端镜像构建成功，带渠道、密钥及四类绑定的版本 13 数据库完成迁移后 API 健康，绑定元数据保留，再次启动不重复拆分。真实服务器的更新确认仍记录在待测试清单中。
 
 本轮分类型管理已完成本机前端/API 镜像构建与启动、数据库版本 14 升级及数据摘要核对，入口为 `http://localhost:3301`。独立 Docker 环境下，后端 52 组测试（含子用例共 85 项）与前端 53 项回归全部通过，无失败或跳过；同一镜像的隔离浏览器验收覆盖四类模型保存、分类表单与搜索、文本和按秒计费、协议及视频适配器筛选、深浅主题。真实渠道与生产环境仍需按待测试清单验收。
 
