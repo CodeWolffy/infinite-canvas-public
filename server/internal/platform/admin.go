@@ -640,7 +640,16 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		defer cancel()
 		names, err := a.channelModels(ctx, candidate)
 		if err != nil {
-			return nil, problem(502, "probe_failed", "渠道探测失败，请检查接口、协议和密钥")
+			detail := err.Error()
+			if failure, ok := err.(*upstreamError); ok {
+				if failure.Category == "upstream_error" && failure.Message == "" {
+					detail = "上游未返回有效的模型列表"
+				}
+				if failure.Status > 0 {
+					detail = fmt.Sprintf("HTTP %d：%s", failure.Status, detail)
+				}
+			}
+			return nil, problem(502, "probe_failed", "渠道探测失败："+(&upstreamTrace{secret: candidate.APIKey}).redact(detail))
 		}
 		return gin.H{"models": names, "health": gin.H{"ok": true, "checkedAt": time.Now()}}, nil
 	}))

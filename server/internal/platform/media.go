@@ -73,7 +73,7 @@ func makeSafeClient(allowPrivate bool) *http.Client {
 		}
 		for _, ip := range ips {
 			if !allowPrivate && !publicIP(ip) {
-				return nil, errors.New("禁止访问内网或保留地址")
+				return nil, fmt.Errorf("禁止访问内网或保留地址：%s 解析为 %s，请检查 DNS 或代理 Fake-IP 设置", host, ip)
 			}
 		}
 		var last error

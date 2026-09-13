@@ -78,27 +78,30 @@ func (a *App) upstreamJSON(req *http.Request) (map[string]any, error) {
 	var result map[string]any
 	decodeErr := json.Unmarshal(raw, &result)
 	rawText := string(raw)
+	failure := func(status int) *upstreamError {
+		return responseError(status, result, rawText, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), req.Header.Get("x-api-key"), req.Header.Get("x-goog-api-key"))
+	}
 	if response.StatusCode >= 300 {
-		return nil, responseError(response.StatusCode, result, rawText)
+		return nil, failure(response.StatusCode)
 	}
 	if decodeErr != nil {
 		return nil, &upstreamError{Category: "upstream_error"}
 	}
 	if result["error"] != nil {
-		return nil, responseError(400, result, rawText)
+		return nil, failure(400)
 	}
 	if feedback := object(result["promptFeedback"]); str(feedback["blockReason"]) != "" {
 		return nil, &upstreamError{Category: "content_policy", Message: "上游拒绝了此内容，请调整提示词"}
 	}
 	if envelope, ok := result["data"].(map[string]any); ok {
 		if code, exists := result["code"]; exists && str(code) != "0" && str(code) != "200" {
-			return nil, responseError(400, result, rawText)
+			return nil, failure(400)
 		}
 		result = envelope
 	}
 	return result, nil
 }
-func responseError(status int, payload map[string]any, raw ...string) *upstreamError {
+func responseError(status int, payload map[string]any, raw string, secrets ...string) *upstreamError {
 	e := object(payload["error"])
 	code := strings.ToLower(str(e["code"]))
 	kind := strings.ToLower(str(e["type"]))
@@ -112,8 +115,12 @@ func responseError(status int, payload map[string]any, raw ...string) *upstreamE
 	if msg == "" && str(payload["error"]) != "" {
 		msg = str(payload["error"])
 	}
-	if msg == "" && len(raw) > 0 {
-		msg = strings.TrimSpace(raw[0])
+	if msg == "" {
+		msg = strings.TrimSpace(raw)
+	}
+	// 先脱敏再沿用原有截断，避免截到密钥中间后无法匹配完整密钥。
+	for _, secret := range secrets {
+		msg = (&upstreamTrace{secret: secret}).redact(msg)
 	}
 	if len(msg) > 1000 {
 		msg = msg[:1000]
@@ -181,7 +188,7 @@ func (a *App) binaryRequest(req *http.Request) ([]byte, error) {
 	if response.StatusCode >= 300 {
 		var payload map[string]any
 		_ = json.Unmarshal(data, &payload)
-		return nil, responseError(response.StatusCode, payload, string(data))
+		return nil, responseError(response.StatusCode, payload, string(data), strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), req.Header.Get("x-api-key"), req.Header.Get("x-goog-api-key"))
 	}
 	if int64(len(data)) > a.Config.MaxGenerated {
 		return nil, &upstreamError{Category: "upstream_error"}

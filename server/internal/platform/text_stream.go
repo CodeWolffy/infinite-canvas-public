@@ -161,7 +161,7 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 		}
 		var payload map[string]any
 		_ = json.Unmarshal(raw, &payload)
-		return generationResult{}, responseError(response.StatusCode, payload, string(raw))
+		return generationResult{}, responseError(response.StatusCode, payload, string(raw), channel.APIKey)
 	}
 	result := generationResult{}
 	var content, pending strings.Builder
@@ -180,7 +180,7 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 	finished := false
 	consume := func(payload map[string]any, stream bool) error {
 		if payload["error"] != nil {
-			return responseError(400, payload)
+			return responseError(400, payload, "", channel.APIKey)
 		}
 		delta := ""
 		if channel.Protocol == "gemini" {
