@@ -26,48 +26,33 @@ Please include:
 - Clear reproduction steps.
 - Impact and attack scenario.
 - Any relevant logs, screenshots, or proof of concept, with secrets removed.
-- Whether the issue affects local-only usage, hosted deployments, browser
-  storage, WebDAV sync, AI provider configuration, or API proxy behavior.
+- Whether the issue affects public hosted deployments, session isolation,
+  wallet and payment integrity, SSRF protection, or upstream credential handling.
 
 ## Scope
 
-### Canvas node plugins
+### Public platform architecture
 
-The canvas supports third-party node plugins loaded from a remote URL. By
-design, an installed plugin's code runs directly inside the web app with full
-access to the page, including locally stored data such as AI API keys. This is
-an intentional trade-off for extensibility, and the installer shows a warning
-before installing. Therefore:
-
-- Only install plugins from sources you trust.
-- Reports that a *malicious plugin* can access page data or API keys are **out
-  of scope** — that is the documented behavior of the trust model.
-- Reports **in scope** include: the app loading/executing plugin code without
-  the install confirmation, a plugin escaping its declared node type to break
-  core app integrity in ways not implied by "runs in the page", or the plugin
-  source cache being writable by an unrelated origin.
+The platform uses a Go backend (`server/`) that centrally manages upstream AI
+credentials, user sessions, wallets, and asset storage (PostgreSQL and MinIO).
+Upstream AI API keys are encrypted at rest and never delivered to client browsers.
 
 Examples of in-scope reports:
 
-- Cross-site scripting or token exfiltration in the web app.
-- Exposure of locally stored API keys or synced canvas data caused by project
-  code.
-- Unsafe file handling, import/export behavior, or WebDAV proxy behavior.
-- Authentication, authorization, or access-control flaws in project-managed
-  features.
-- Supply-chain issues that are exploitable through this repository's shipped
-  code or default configuration.
+- Credential exposure (e.g. leaking upstream `Authorization`, `x-api-key`, or `x-goog-api-key` headers via redirect, logs, or responses).
+- Server-Side Request Forgery (SSRF) allowing access to local container networks or cloud metadata services.
+- Authentication, session, or role bypass (e.g. privilege escalation to admin, session hijacking, or cross-account data access).
+- Financial and wallet balance manipulation (e.g. race conditions in task settlement, payment callbacks, or balance deductions).
+- Cross-Site Scripting (XSS) or cross-tenant data leakage in canvas projects or media storage.
+- Unsafe file handling or object-storage path traversal.
 
 Examples that are usually out of scope:
 
-- Vulnerabilities in third-party AI providers, model APIs, hosting platforms,
-  or browser extensions outside this repository.
-- Compromise of a user's own API key outside the app.
-- Denial-of-service reports that require unrealistic traffic volume or physical
-  access to the user's device.
+- Vulnerabilities in third-party AI upstreams or hosting infrastructures outside this repository.
+- Denial-of-service reports that require unrealistic traffic volume or resource exhaustion beyond configured rate limits.
 - Missing security headers without a demonstrated exploit path.
-- Social engineering, phishing, spam, or account recovery requests.
-- Dependency reports without a practical impact on this project.
+- Social engineering, phishing, or brute-force attacks against accounts with weak passwords.
+- Dependency vulnerability reports without a proven exploitable path in this project.
 
 ## Disclosure
 

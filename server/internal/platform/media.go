@@ -32,7 +32,16 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-var restrictedPrefixes = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("240.0.0.0/4")}
+var restrictedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2002::/16"),
+}
 
 func publicIP(ip netip.Addr) bool {
 	ip = ip.Unmap()
@@ -93,7 +102,7 @@ func makeSafeClient(allowPrivate bool) *http.Client {
 		if req.URL.Scheme != "https" && req.URL.Scheme != "http" || req.URL.User != nil {
 			return errors.New("不支持的跳转地址")
 		}
-		if len(via) > 0 && (via[0].Header.Get("Authorization") != "" || via[0].Header.Get("x-goog-api-key") != "" || via[0].URL.RawQuery != "") {
+		if len(via) > 0 && (via[0].Header.Get("Authorization") != "" || via[0].Header.Get("x-goog-api-key") != "" || via[0].Header.Get("x-api-key") != "" || via[0].URL.RawQuery != "") {
 			return http.ErrUseLastResponse
 		}
 		return nil

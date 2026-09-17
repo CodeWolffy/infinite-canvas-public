@@ -107,6 +107,8 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [isReferenceDragActive, setIsReferenceDragActive] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
+    const [generating, setGenerating] = useState(false);
+    const generatingRef = useRef(false);
     const imageCommand = useWorkbenchAgentStore((state) => state.imageCommand);
     const clearImageCommand = useWorkbenchAgentStore((state) => state.clearImageCommand);
     const updateAgentTask = useWorkbenchAgentStore((state) => state.updateTask);
@@ -172,7 +174,7 @@ export default function ImagePage() {
     }, [activeBatchIds]);
 
     const activeModel = models.find((item) => item.id === modelId);
-    const canGenerate = Boolean(prompt.trim() && modelId);
+    const canGenerate = Boolean(prompt.trim() && modelId && !generating);
     const generationCount = Math.max(1, Math.min(20, Number(config.count) || 1));
     const failedResultIndexes = results.flatMap((item, index) => (item.status === "failed" ? [index] : []));
     const successImages = results.flatMap((item) => (item.status === "success" && item.image ? [item.image] : []));
@@ -280,16 +282,23 @@ export default function ImagePage() {
     };
 
     const generate = async () => {
+        if (generatingRef.current) return;
+        generatingRef.current = true;
+        setGenerating(true);
         const sessionVersion = useUserStore.getState().sessionVersion;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const text = prompt.trim();
         if (!text) {
+            generatingRef.current = false;
+            setGenerating(false);
             message.error(t("imageWorkbench.promptRequired"));
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.promptRequired") });
             return;
         }
         if (!modelId) {
+            generatingRef.current = false;
+            setGenerating(false);
             message.warning(t("imageWorkbench.noModelHint"));
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.noModelHint") });
             return;
@@ -313,6 +322,9 @@ export default function ImagePage() {
             const detail = error instanceof Error ? error.message : t("workbench.generationFailed");
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: detail });
             message.error(detail);
+        } finally {
+            generatingRef.current = false;
+            setGenerating(false);
         }
     };
 
@@ -610,7 +622,7 @@ export default function ImagePage() {
                         </div>
 
                         <div className="mt-auto pt-6">
-                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} disabled={!canGenerate} onClick={() => void generate()}>
+                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} onClick={() => void generate()}>
                                 {t("workbench.generate")}
                             </Button>
                         </div>

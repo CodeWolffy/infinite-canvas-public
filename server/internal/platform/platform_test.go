@@ -77,11 +77,19 @@ func testApp(t *testing.T) *App {
 	}
 	a := &App{DB: db, Config: Config{EncryptionKey: strings.Repeat("k", 32), CookieName: "test_session", SessionDays: 7, PublicURL: "http://localhost", Origins: []string{"http://localhost"}, MaxUpload: 50 * 1024 * 1024, MaxGenerated: 50 * 1024 * 1024, AllowPrivateHosts: true, TrustProxy: true, Bucket: strings.ReplaceAll(schema, "_", "-")}, startedAt: time.Now()}
 	if addr := os.Getenv("TEST_REDIS_ADDR"); addr != "" {
-		a.Redis = redis.NewClient(&redis.Options{Addr: addr})
+		a.Redis = redis.NewClient(&redis.Options{Addr: addr, Password: os.Getenv("TEST_REDIS_PASSWORD")})
 		t.Cleanup(func() { _ = a.Redis.Close() })
 	}
 	if addr := os.Getenv("TEST_MINIO_ADDR"); addr != "" {
-		a.S3, err = minio.New(addr, &minio.Options{Creds: credentials.NewStaticV4("canvas-test", "canvas-test-only", ""), Secure: false})
+		minioUser := os.Getenv("TEST_MINIO_USER")
+		if minioUser == "" {
+			minioUser = "canvas-test"
+		}
+		minioPass := os.Getenv("TEST_MINIO_PASSWORD")
+		if minioPass == "" {
+			minioPass = "canvas-test-only"
+		}
+		a.S3, err = minio.New(addr, &minio.Options{Creds: credentials.NewStaticV4(minioUser, minioPass, ""), Secure: false})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -382,7 +390,7 @@ func TestCancelAndLateSuccessCannotDoubleSettle(t *testing.T) {
 }
 
 func TestSSRFAndCredentialRedirect(t *testing.T) {
-	for _, address := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "100.100.100.200", "::1", "::ffff:127.0.0.1"} {
+	for _, address := range []string{"127.0.0.1", "0.0.0.1", "10.0.0.1", "169.254.169.254", "100.100.100.200", "::1", "::ffff:127.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::"} {
 		if publicIP(mustIP(address)) {
 			t.Fatalf("accepted %s", address)
 		}
@@ -401,6 +409,11 @@ func TestSSRFAndCredentialRedirect(t *testing.T) {
 	next := httptest.NewRequest("GET", "https://other.example", nil)
 	if err := safeClient(true).CheckRedirect(next, []*http.Request{first}); err != http.ErrUseLastResponse {
 		t.Fatalf("redirect err=%v", err)
+	}
+	firstAnthropic := httptest.NewRequest("GET", "https://upstream.example", nil)
+	firstAnthropic.Header.Set("x-api-key", "test-secret")
+	if err := safeClient(true).CheckRedirect(next, []*http.Request{firstAnthropic}); err != http.ErrUseLastResponse {
+		t.Fatalf("redirect x-api-key err=%v", err)
 	}
 }
 

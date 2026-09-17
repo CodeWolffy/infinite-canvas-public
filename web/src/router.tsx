@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Spin } from "antd";
-import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, useParams } from "react-router-dom";
 
 import { AdminGuard, AuthGuard } from "@/components/auth/auth-guard";
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
@@ -29,6 +29,10 @@ const UserStatsPage = lazy(() => import("@/pages/user/stats"));
 const UserLogsPage = lazy(() => import("@/pages/user/logs"));
 const UserAccountPage = lazy(() => import("@/pages/user/account"));
 const CanvasProjectPage = lazy(() => import("@/pages/canvas/project"));
+function CanvasProjectRoute() {
+    const { id } = useParams();
+    return <CanvasProjectPage key={id} />;
+}
 const ImagePage = lazy(() => import("@/pages/image"));
 const StudioPage = lazy(() => import("@/pages/studio"));
 const WalletPage = lazy(() => import("@/pages/user/wallet"));
@@ -77,7 +81,7 @@ export const router = createBrowserRouter([
                     { path: "/assets", element: <AssetsPage /> },
                     { path: "/prompts", element: <PromptsPage /> },
                     { path: "/canvas", element: <CanvasPage /> },
-                    { path: "/canvas/:id", element: <CanvasProjectPage /> },
+                    { path: "/canvas/:id", element: <CanvasProjectRoute /> },
                 ],
             },
             {
