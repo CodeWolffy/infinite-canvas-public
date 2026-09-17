@@ -4,7 +4,7 @@ import { Alert, Button, DatePicker, Segmented, Select, Table } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { saveAs } from "file-saver";
-import { Activity, CircleDollarSign, Clock3, Database, Download, Image, ListTodo, MessageSquareText, PieChart, Send, TrendingUp, Waypoints } from "lucide-react";
+import { Activity, BarChart3, CircleDollarSign, Clock3, Database, Download, Image, ListTodo, MessageSquareText, PieChart, Send, TrendingUp, Waypoints } from "lucide-react";
 
 import { getAdminUsers } from "@/services/api/admin-users";
 import { getAdminChannels, getAdminModels, getAdminStats } from "@/services/api/admin-platform";
@@ -32,9 +32,16 @@ export default function AdminStatsPage() {
     const rangeTag = dayjs().format("YYYYMMDD");
 
     return (
-        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-            <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Usage overview</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">用量统计</h1><p className="mt-1 text-sm text-stone-500">按时间、用户、模型和渠道查看四类生成任务与生成消费。</p></div>
-            <div className="mt-7 flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div>
+                <div className="flex items-center gap-2 text-stone-500 mb-1">
+                    <BarChart3 className="size-4 text-blue-500" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Usage & Analytics</span>
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">用量统计</h1>
+                <p className="mt-1 text-sm text-stone-500">按时间、用户、模型和渠道查看四类生成任务与生成消费。</p>
+            </div>
+            <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => setPreset(Number(value))} />
                 <DatePicker.RangePicker value={filters.range} allowClear={false} onChange={(range) => range && updateFilters("range", range as [Dayjs, Dayjs])} />
                 <Select allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => updateFilters("userId", userId)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />

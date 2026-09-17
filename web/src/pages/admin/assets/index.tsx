@@ -91,9 +91,16 @@ export default function AdminAssetsPage() {
     ];
 
     return (
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
-            <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Shared library</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">公共素材</h1><p className="mt-1 text-sm text-stone-500">管理全员可见的图片和文本素材，修订信息或移除不再共享的条目。</p></div>
-            <div className="mt-7 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div>
+                <div className="flex items-center gap-2 text-stone-500 mb-1">
+                    <ImageIcon className="size-4 text-emerald-500" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Shared Library</span>
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">公共素材</h1>
+                <p className="mt-1 text-sm text-stone-500">管理全员可见的图片和文本素材，修订信息或移除不再共享的条目。</p>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 p-4 dark:border-stone-800">
                     <div className="flex min-w-0 flex-1 flex-wrap gap-2"><Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索素材、创建者或标签" value={keyword} onChange={(event) => setKeyword(event.target.value)} className="max-w-sm" /><Select value={typeFilter} onChange={setTypeFilter} className="w-28" options={[{ value: "all", label: "全部类型" }, { value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></div>
                     <span className="text-xs text-stone-500">共 {assetsQuery.data?.length || 0} 条公共素材</span>

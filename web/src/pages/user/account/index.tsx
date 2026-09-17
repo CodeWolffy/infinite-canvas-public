@@ -59,11 +59,15 @@ export default function UserAccountPage() {
     };
 
     return (
-        <div className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6 lg:p-8">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
             <div>
-                <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">
+                <div className="flex items-center gap-2 text-stone-500 mb-1">
+                    <ShieldCheck className="size-4 text-emerald-500" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Account & Security</span>
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">
                     {t("userCenter.accountTitle")}
-                </h2>
+                </h1>
                 <p className="mt-1 text-sm text-stone-500">
                     {t("userCenter.accountDesc")}
                 </p>

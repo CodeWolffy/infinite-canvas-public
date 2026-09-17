@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { App, Button, Card, Progress, Spin } from "antd";
-import { Database, FolderHeart, HardDrive, Image as ImageIcon, MessageSquare, RefreshCw, ShieldCheck } from "lucide-react";
+import { BarChart3, Database, FolderHeart, HardDrive, Image as ImageIcon, MessageSquare, RefreshCw, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { formatBytes } from "@/lib/image-utils";
@@ -46,12 +46,16 @@ export default function UserStatsPage() {
     const permanentPercent = totalMedia > 0 ? Math.min(100, Math.round((permanentCount / totalMedia) * 100)) : 100;
 
     return (
-        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 lg:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
-                    <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <BarChart3 className="size-4 text-blue-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Usage & Analytics</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">
                         {t("userCenter.statsTitle")}
-                    </h2>
+                    </h1>
                     <p className="mt-1 text-sm text-stone-500">
                         {t("userCenter.statsDesc")}
                     </p>

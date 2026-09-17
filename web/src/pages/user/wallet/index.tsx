@@ -60,8 +60,20 @@ export default function WalletPage() {
         saveAs(new Blob([`\ufeff${lines.join("\n")}`], { type: "text/csv;charset=utf-8" }), `余额明细-${dayjs().format("YYYYMMDD")}.csv`);
     };
 
-    return <div className="mx-auto w-full max-w-6xl px-5 py-8 lg:px-10 lg:py-10">
-        <div className="flex items-start justify-between gap-4"><div><p className="text-xs tracking-[0.2em] text-muted-foreground">创作账户</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">我的余额</h1></div><Wallet className="size-6 text-muted-foreground" /></div>
+    return (
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Wallet className="size-4 text-amber-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Balance & Check-in</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">我的余额</h1>
+                    <p className="mt-1 text-sm text-stone-500">
+                        账户余额充值、每日签到领额度与兑换码核销，余额永久有效不按周期清零。
+                    </p>
+                </div>
+            </div>
         {overview.error ? <Alert className="mt-6" type="error" title={overview.error.message} action={<Button onClick={() => void overview.refetch()}>重试</Button>} /> : null}
         <div className="my-8 grid gap-8 border-y border-border py-8 md:grid-cols-[1.3fr_1fr]">
             <div><p className="text-sm text-muted-foreground">可用余额 · 人民币</p><p className="mt-3 font-mono text-4xl tracking-tight sm:text-5xl">¥ {wallet?.balance ?? "—"}</p><p className="mt-3 text-sm text-muted-foreground">生成中冻结 ¥{wallet?.frozen ?? "—"}</p><Button className="mt-6" type="primary" size="large" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button><Button className="ml-2" size="large" icon={<Ticket className="size-4" />} onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>{!channels.length && !overview.isPending ? <p className="mt-2 text-xs text-muted-foreground">充值渠道暂未开放</p> : null}</div>
@@ -108,5 +120,6 @@ export default function WalletPage() {
                 {payment.status === "pending" ? <Space className="mt-6"><Button icon={<RefreshCw className="size-4" />} loading={refresh.isPending} onClick={() => refresh.mutate()}>我已支付，刷新状态</Button></Space> : null}
             </> : order.error ? <Alert type="error" title={order.error.message} /> : <Empty description="正在读取订单" />}
         </Drawer>
-    </div>;
+    </div>
+    );
 }

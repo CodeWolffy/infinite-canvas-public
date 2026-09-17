@@ -34,7 +34,8 @@ export const decideModeration = (id: string, body: { decision: "approved" | "rej
 
 export type MonitoringConfig = { intervalMinutes: number; autoDisableAfter: number; bindingIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
 
-export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable" | "unknown"; availableChannels: number; checkedAt: string | null };
+export type ModelCheck = { status: "succeeded" | "failed"; durationMs: number | null; finishedAt: string };
+export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable" | "unknown"; availableChannels: number; checkedAt: string | null; uptime: number | null; checks: ModelCheck[] };
 export const getPublicStatus = () => apiRequest<{ models: ModelAvailability[] }>("/api/status/models");
 export type Referral = { id: string; displayName: string; reward: string; createdAt: string };
 export const getReferrals = (offset = 0) => apiRequest<{ code: string; url: string; enabled: boolean; percent: string; summary: { invited: number; earned: string }; referrals: Referral[] }>(`/api/user/referrals?offset=${offset}`);

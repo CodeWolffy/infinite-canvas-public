@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { App, Button, Card, Select, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, History, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 
@@ -133,12 +133,16 @@ export default function UserLogsPage() {
     ];
 
     return (
-        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 lg:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
-                    <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <History className="size-4 text-violet-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Call Logs</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">
                         {t("userCenter.logsTitle")}
-                    </h2>
+                    </h1>
                     <p className="mt-1 text-sm text-stone-500">
                         {t("userCenter.logsDesc")}
                     </p>

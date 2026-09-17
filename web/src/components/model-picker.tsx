@@ -60,7 +60,6 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             >
                 <ModelIcon config={config} model={current} />
                 <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : pickerPlaceholder}</span>
-                {currentPrice ? <span className="max-w-[45%] truncate font-mono text-xs text-muted-foreground/80">{currentPrice}</span> : null}
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom

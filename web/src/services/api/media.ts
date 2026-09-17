@@ -1,4 +1,4 @@
-import { apiRequest, ApiError } from "@/services/api/request";
+import { ApiError } from "@/services/api/request";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type MediaRecord = {
@@ -11,13 +11,6 @@ export type MediaRecord = {
     createdAt: string;
     url: string;
 };
-
-export type StorageUsage = { totalCount: number; totalBytes: number; quotaBytes: number };
-
-export async function getMyStorageUsage() {
-    const stats = await apiRequest<StorageUsage>("/api/media/stats");
-    return { totalCount: Number(stats.totalCount), totalBytes: Number(stats.totalBytes), quotaBytes: Number(stats.quotaBytes || 0) };
-}
 
 export function mediaId(storageKey: string) {
     return storageKey.replace(/^(?:image|media):/, "");

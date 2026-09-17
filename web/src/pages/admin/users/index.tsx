@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus } from "lucide-react";
+import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { createAdminUser, getAdminUsers, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
@@ -72,12 +72,19 @@ export default function AdminUsersPage() {
     ];
 
     return (
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
-                <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Access control</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">用户管理</h1><p className="mt-1 text-sm text-stone-500">创建内部账号，控制账号状态和首次改密流程。</p></div>
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Users className="size-4 text-blue-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Access Control</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">用户管理</h1>
+                    <p className="mt-1 text-sm text-stone-500">创建内部账号，控制账号状态和首次改密流程。</p>
+                </div>
                 <Button type="primary" icon={<Plus className="size-4" />} onClick={() => setCreateOpen(true)}>创建用户</Button>
             </div>
-            <div className="mt-7 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
+            <div className="overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 p-4 dark:border-stone-800">
                     <div className="flex flex-wrap items-center gap-2">
                         <Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索姓名或用户名" value={keyword} onChange={(event) => setKeyword(event.target.value)} className="max-w-xs" />

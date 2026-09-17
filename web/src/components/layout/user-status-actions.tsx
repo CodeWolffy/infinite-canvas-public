@@ -1,5 +1,4 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
 import { Dropdown, Tooltip } from "antd";
 import { Activity, BookOpen, CircleUserRound, Keyboard, LogOut, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -11,10 +10,8 @@ import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { NotificationCenter } from "@/components/layout/notification-center";
 import { DOCS_URL } from "@/constant/env";
 import { changeAppLocale, type AppLocale } from "@/i18n";
-import { formatBytes } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { getMyStorageUsage } from "@/services/api/media";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -39,19 +36,12 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const locale = i18n.resolvedLanguage as AppLocale;
     const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
     const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
-    const [storageUsage, setStorageUsage] = useState("");
-
-    const loadStorageUsage = (open: boolean) => {
-        if (!open || storageUsage) return;
-        void getMyStorageUsage()
-            .then(({ totalCount, totalBytes, quotaBytes }) => setStorageUsage(`${totalCount} 个文件 · ${formatBytes(totalBytes) || "0 B"}${quotaBytes > 0 ? ` / ${formatBytes(quotaBytes)}` : ""}`))
-            .catch(() => undefined);
-    };
+    const modelStatusLabel = t("topNav.modelStatus");
 
     return (
         <div className="inline-flex shrink-0 items-center gap-1">
-            <Link to="/status" className={cn(naturalIconClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} aria-label="模型状态" title="模型状态">
-                <Activity className="size-4" /><span className="hidden text-xs md:inline">模型状态</span>
+            <Link to="/status" className={cn(naturalIconClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} aria-label={modelStatusLabel} title={modelStatusLabel}>
+                <Activity className="size-4" /><span className="hidden text-xs md:inline">{modelStatusLabel}</span>
             </Link>
             <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.docs")} title={t("topNav.docs")}>
                 <BookOpen className="size-4" />
@@ -67,19 +57,18 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
             <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
             <Dropdown
                 trigger={["click"]}
-                onOpenChange={loadStorageUsage}
+                placement="bottomRight"
                 menu={{
                     items: [
                         { key: "identity", disabled: true, label: <div className="min-w-32"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
-                        ...(storageUsage ? [{ key: "storage", disabled: true, label: <div className="min-w-32 text-xs opacity-55">我的占用：{storageUsage}</div> }] : []),
                         { type: "divider" as const },
                         { key: "userCenter", icon: <CircleUserRound className="size-4" />, label: t("userCenter.title"), onClick: () => navigate("/user/generations") },
-                        ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: "平台管理", onClick: () => navigate("/admin/stats") }] : []),
-                        { key: "logout", icon: <LogOut className="size-4" />, label: "退出登录", onClick: () => void logout().then(() => navigate("/login", { replace: true })) },
+                        ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: t("topNav.admin"), onClick: () => navigate("/admin/stats") }] : []),
+                        { key: "logout", icon: <LogOut className="size-4" />, label: t("userCenter.logout"), onClick: () => void logout().then(() => navigate("/login", { replace: true })) },
                     ],
                 }}
             >
-                <button type="button" className={naturalIconClass} style={iconStyle} aria-label="账号菜单" title={user?.displayName || "账号菜单"}><CircleUserRound className="size-4" /></button>
+                <button type="button" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.accountMenu")} title={user?.displayName || t("topNav.accountMenu")}><CircleUserRound className="size-4" /></button>
             </Dropdown>
             {onOpenShortcuts ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>

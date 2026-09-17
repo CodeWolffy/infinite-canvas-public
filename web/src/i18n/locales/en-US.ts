@@ -382,6 +382,9 @@ export default {
         shortcuts: "Keyboard shortcuts",
         lightTheme: "Switch to light theme",
         darkTheme: "Switch to dark theme",
+        modelStatus: "Model status",
+        admin: "Platform admin",
+        accountMenu: "Account menu",
     },
     announcement: {
         open: "View announcements",

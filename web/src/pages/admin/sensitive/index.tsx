@@ -31,8 +31,19 @@ export default function AdminSensitivePage() {
         { title: "操作", key: "actions", width: 90, render: (_, word) => <Popconfirm title={`删除敏感词 ${word.pattern}？`} onConfirm={() => remove.mutate(word.id)}><Button type="text" danger size="small">删除</Button></Popconfirm> },
     ];
 
-    return <div className="w-full px-5 py-8 lg:px-8">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><ShieldAlert className="mb-3 size-5 text-muted-foreground" /><h1 className="text-2xl font-semibold">敏感词与内容审核</h1><p className="mt-2 text-sm text-muted-foreground">检查文本、图片、视频、音频提示词及文本参数；支持拦截、人工审核或仅记录。</p></div><Button type="primary" icon={<Plus className="size-4" />} onClick={() => { form.resetFields(); setOpen(true); }}>添加敏感词</Button></div>
+    return (
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <ShieldAlert className="size-4 text-rose-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Content Safety & Moderation</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">敏感词与内容审核</h1>
+                    <p className="mt-1 text-sm text-stone-500">检查文本、图片、视频、音频提示词及文本参数；支持拦截、人工审核或仅记录。</p>
+                </div>
+                <Button type="primary" icon={<Plus className="size-4" />} onClick={() => { form.resetFields(); setOpen(true); }}>添加敏感词</Button>
+            </div>
         <ModerationQueue />
         {query.error ? <Alert className="mb-5" type="error" title={query.error.message} /> : null}
         <Table<SensitiveWord> rowKey="id" columns={columns} dataSource={query.data?.words || []} loading={query.isPending} pagination={false} />
@@ -48,5 +59,6 @@ export default function AdminSensitivePage() {
                 <Space className="flex justify-end"><Button onClick={() => setOpen(false)}>取消</Button><Button type="primary" htmlType="submit" loading={save.isPending}>保存</Button></Space>
             </Form>
         </Modal>
-    </div>;
+        </div>
+    );
 }

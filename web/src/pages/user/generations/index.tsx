@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { App, Button, Card, Empty, Image, Input, Popconfirm, Select, Spin, Tag, Tooltip } from "antd";
-import { Clock, Copy, Download, FolderPlus, FolderSync, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Clock, Copy, Download, FolderPlus, FolderSync, Images, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -65,12 +65,15 @@ export default function UserGenerationsPage() {
             return true;
         });
     }, [batches, searchPrompt, statusFilter]);
-
     return (
-        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 lg:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
-                    <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">{t("userCenter.generationsTitle")}</h2>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Images className="size-4 text-emerald-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Creation History</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">{t("userCenter.generationsTitle")}</h1>
                     <p className="mt-1 text-sm text-stone-500">{t("userCenter.generationsDesc")}</p>
                 </div>
                 <div className="flex items-center gap-2">

@@ -382,6 +382,9 @@ export default {
         shortcuts: "快捷键",
         lightTheme: "切换到浅色主题",
         darkTheme: "切换到深色主题",
+        modelStatus: "模型状态",
+        admin: "平台管理",
+        accountMenu: "账号菜单",
     },
     announcement: {
         open: "查看公告",

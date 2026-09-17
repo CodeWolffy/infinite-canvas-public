@@ -19,8 +19,19 @@ export default function InvitationsPage() {
     const create = useMutation({ mutationFn: createInvitation, onSuccess: (data) => { setCode(data.code); setOpen(false); void refresh(); }, onError: (error: Error) => message.error(error.message) });
     const toggle = useMutation({ mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) => setInvitationDisabled(id, disabled), onSuccess: () => { void refresh(); }, onError: (error: Error) => message.error(error.message) });
 
-    return <div className="w-full px-5 py-8 lg:px-8">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><Ticket className="mb-3 size-5 text-muted-foreground" /><h1 className="text-2xl font-semibold">邀请注册</h1><p className="mt-2 text-sm text-muted-foreground">控制新成员加入，按用途设置名额和有效期。</p></div><Button type="primary" icon={<Plus className="size-4" />} onClick={() => { form.resetFields(); setOpen(true); }}>创建邀请码</Button></div>
+    return (
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Ticket className="size-4 text-amber-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Invitations & Referrals</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">邀请注册</h1>
+                    <p className="mt-1 text-sm text-stone-500">控制新成员加入，按用途设置名额和有效期。</p>
+                </div>
+                <Button type="primary" icon={<Plus className="size-4" />} onClick={() => { form.resetFields(); setOpen(true); }}>创建邀请码</Button>
+            </div>
         {query.error ? <Alert className="mb-5" type="error" title={query.error.message} /> : null}
         {code ? <Alert className="mb-5" type="success" closable onClose={() => setCode("")} title="邀请码已创建，请复制保存" description={<><Typography.Paragraph copyable className="!mb-1 mt-2 font-mono break-all">{code}</Typography.Paragraph><span>完整邀请码仅在本次创建后显示。</span></>} /> : null}
         <Table<Invitation> rowKey="id" dataSource={query.data?.invitations || []} loading={query.isPending} scroll={{ x: 850 }} pagination={false} columns={[
@@ -41,5 +52,6 @@ export default function InvitationsPage() {
             </Form>
         </Modal>
         <ReferralRecords />
-    </div>;
+        </div>
+    );
 }

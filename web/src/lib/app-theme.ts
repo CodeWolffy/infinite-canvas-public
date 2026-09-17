@@ -13,6 +13,11 @@ const neutral = {
         itemText: "#171717",
         tableSelectedBg: "rgba(17, 17, 17, 0.05)",
         tableSelectedHoverBg: "rgba(17, 17, 17, 0.08)",
+        // colorInfo 沿用近黑主色，其派生浅色面在极暗基础色下会被算成中灰，需单独覆盖
+        infoBg: "rgba(23, 23, 23, 0.04)",
+        infoBgHover: "rgba(23, 23, 23, 0.07)",
+        infoBorder: "rgba(23, 23, 23, 0.09)",
+        infoBorderHover: "rgba(23, 23, 23, 0.15)",
     },
     dark: {
         primary: "#fafafa",
@@ -25,6 +30,10 @@ const neutral = {
         itemText: "#fafafa",
         tableSelectedBg: "rgba(255, 255, 255, 0.08)",
         tableSelectedHoverBg: "rgba(255, 255, 255, 0.12)",
+        infoBg: "rgba(250, 250, 249, 0.05)",
+        infoBgHover: "rgba(250, 250, 249, 0.09)",
+        infoBorder: "rgba(250, 250, 249, 0.12)",
+        infoBorderHover: "rgba(250, 250, 249, 0.2)",
     },
 };
 
@@ -42,6 +51,10 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
             colorLinkActive: color.primary,
             colorTextLightSolid: color.primaryText,
             colorBgElevated: color.elevatedBg,
+            colorInfoBg: color.infoBg,
+            colorInfoBgHover: color.infoBgHover,
+            colorInfoBorder: color.infoBorder,
+            colorInfoBorderHover: color.infoBorderHover,
             controlItemBgHover: color.itemHoverBg,
             controlItemBgActive: color.itemSelectedBg,
             controlItemBgActiveHover: color.itemSelectedHoverBg,

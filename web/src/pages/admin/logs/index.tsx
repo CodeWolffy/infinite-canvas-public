@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, DatePicker, Segmented, Select, Table, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { History, RefreshCw, Trash2 } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { clearAdminRequestLogs, getAdminChannels, getAdminModels, getAdminRequestLogs, type RequestLog } from "@/services/api/admin-platform";
@@ -67,15 +67,22 @@ export default function AdminRequestLogsPage() {
     ];
 
     return (
-        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
-                <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Request observability</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">请求日志</h1><p className="mt-1 text-sm text-stone-500">记录每次上游模型调用，含失败重试与手动探测；默认保留 30 天。</p></div>
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <History className="size-4 text-violet-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Request Observability</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">请求日志</h1>
+                    <p className="mt-1 text-sm text-stone-500">记录每次上游模型调用，含失败重试与手动探测；默认保留 30 天。</p>
+                </div>
                 <div className="flex gap-2">
                     <Button icon={<RefreshCw className="size-4" />} onClick={() => void logsQuery.refetch()}>刷新</Button>
                     <Button danger icon={<Trash2 className="size-4" />} loading={clearMutation.isPending} onClick={() => modal.confirm({ title: "清空全部请求日志？", content: "将删除所有历史日志，正在运行的记录不受影响。", okText: "清空", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => clearMutation.mutateAsync() })}>清空日志</Button>
                 </div>
             </div>
-            <div className="mt-6 flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
+            <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => { const days = Number(value); setPreset(days); setPage(1); setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs()] })); }} />
                 <DatePicker.RangePicker value={filters.range} allowClear={false} showTime={{ format: "HH:mm" }} onChange={(range) => range && setFilter("range", range as [Dayjs, Dayjs])} />
                 <Select allowClear placeholder="全部用户" className="min-w-36" value={filters.userId} onChange={(value) => setFilter("userId", value)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />

@@ -12,8 +12,19 @@ export default function AdminStatusPage() {
         { icon: Server, label: "Redis", ok: data?.redis },
         { icon: HardDrive, label: "对象存储", ok: data?.storage },
     ];
-    return <div className="w-full px-5 py-8 lg:px-8">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><Activity className="mb-3 size-5 text-muted-foreground" /><h1 className="text-2xl font-semibold">平台状态</h1><p className="mt-2 text-sm text-muted-foreground">查看队列、邮件积压、渠道冷却和存储依赖，不替代用量统计。</p></div><Button onClick={() => void query.refetch()}>刷新</Button></div>
+    return (
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Activity className="size-4 text-emerald-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Platform Health & Status</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">平台状态</h1>
+                    <p className="mt-1 text-sm text-stone-500">查看队列、邮件积压、渠道冷却和存储依赖，不替代用量统计。</p>
+                </div>
+                <Button onClick={() => void query.refetch()}>刷新</Button>
+            </div>
         {query.error ? <Alert className="mb-5" type="error" title={query.error.message} /> : null}
         <div className="grid gap-4 sm:grid-cols-3">{items.map(({ icon: Icon, label, ok }) => <div key={label} className="rounded-xl border border-border p-4"><div className="flex items-center gap-2 text-sm text-muted-foreground"><Icon className="size-4" />{label}</div><Tag className="mt-3" color={ok ? "green" : "red"}>{ok ? "可用" : "不可用"}</Tag></div>)}</div>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -26,7 +37,8 @@ export default function AdminStatusPage() {
             <section className="rounded-xl border border-border p-5"><h2 className="mb-4 flex items-center gap-2 font-medium"><Waypoints className="size-4" />渠道</h2><p className="text-sm text-muted-foreground">启用 {data?.channels.active ?? "—"} · 冷却中 {data?.channels.cooling ?? "—"} · 检测失败 {data?.channels.monitorFailed ?? "—"} · 正在检测 {data?.channels.checking ?? "—"}</p></section>
             <section className="rounded-xl border border-border p-5"><h2 className="mb-4 flex items-center gap-2 font-medium"><Mail className="size-4" />邮件积压</h2><p className="text-sm text-muted-foreground">排队 {data?.mail.queued ?? "—"} · 发送中 {data?.mail.sending ?? "—"} · 失败 {data?.mail.failed ?? "—"}</p></section>
         </div>
-    </div>;
+        </div>
+    );
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {

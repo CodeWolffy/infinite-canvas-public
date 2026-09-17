@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Spin } from "antd";
-import { Activity, BarChart3, History, Images, LayoutDashboard, LogOut, ShieldCheck, Users, Wallet } from "lucide-react";
+import { BarChart3, History, Images, LayoutDashboard, LogOut, ShieldCheck, Users, Wallet } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -25,7 +25,6 @@ export default function UserCenterLayout() {
         { to: "/user/generations", label: t("userCenter.navGenerations"), icon: Images },
         { to: "/user/stats", label: t("userCenter.navStats"), icon: BarChart3 },
         { to: "/user/logs", label: t("userCenter.navLogs"), icon: History },
-        { to: "/status", label: "模型状态", icon: Activity },
         { to: "/user/account", label: t("userCenter.navAccount"), icon: ShieldCheck },
     ];
 

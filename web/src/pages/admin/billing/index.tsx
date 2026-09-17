@@ -38,8 +38,22 @@ export default function BillingPage() {
     const openChannel = (channel: PaymentChannel | null) => { setEditing(channel); form.resetFields(); form.setFieldsValue(channel || { name: "", provider: "epay", methods: ["alipay", "wxpay"], enabled: false, config: {} }); };
     const currentError = tab === "channels" ? channels.error : tab === "orders" ? orders.error : ledger.error;
 
-    return <div className="w-full px-5 py-8 lg:px-8">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><CreditCard className="mb-3 size-5 text-muted-foreground" /><h1 className="text-2xl font-semibold">充值与账务</h1><p className="mt-2 text-sm text-muted-foreground">统一管理支付渠道、充值订单和余额变动。</p></div><Space><Button onClick={() => { balanceForm.resetFields(); setAdjustmentID(crypto.randomUUID()); setAdjustmentOpen(true); }}>调整用户余额</Button><Button type="primary" icon={<Plus className="size-4" />} onClick={() => openChannel(null)}>添加支付渠道</Button></Space></div>
+    return (
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <CreditCard className="size-4 text-emerald-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Billing & Finance</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">充值与账务</h1>
+                    <p className="mt-1 text-sm text-stone-500">统一管理支付渠道、充值订单和余额变动。</p>
+                </div>
+                <Space>
+                    <Button onClick={() => { balanceForm.resetFields(); setAdjustmentID(crypto.randomUUID()); setAdjustmentOpen(true); }}>调整用户余额</Button>
+                    <Button type="primary" icon={<Plus className="size-4" />} onClick={() => openChannel(null)}>添加支付渠道</Button>
+                </Space>
+            </div>
         {currentError ? <Alert className="mb-5" type="error" title={currentError.message} /> : null}
         <Tabs activeKey={tab} onChange={(key) => { setTab(key); setPage(1); }} items={[
             { key: "costs", label: "成本与公益补贴", children: <CostReport /> },
@@ -73,5 +87,6 @@ export default function BillingPage() {
         <Modal title="调整用户余额" open={adjustmentOpen} onCancel={() => setAdjustmentOpen(false)} footer={null} destroyOnHidden>
             <Form form={balanceForm} layout="vertical" onFinish={(values) => adjust.mutate(values)}><Form.Item name="userId" label="用户" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" loading={users.isPending} options={(users.data || []).map((user) => ({ value: user.id, label: `${user.displayName} · ${user.username}` }))} /></Form.Item><Form.Item name="amount" label="调整金额（元）" extra="正数增加可用余额，负数扣减可用余额，不影响已冻结金额。" rules={[{ required: true }]}><InputNumber<string> stringMode precision={6} className="!w-full" /></Form.Item><Form.Item name="note" label="调整原因" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item><Button type="primary" htmlType="submit" block loading={adjust.isPending}>确认调整</Button></Form>
         </Modal>
-    </div>;
+        </div>
+    );
 }

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Alert, App, Button, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag } from "antd";
 import type { TableColumnsType } from "antd";
-import { Cable, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Cable, Pencil, Plus, Search, Shapes, Trash2 } from "lucide-react";
 
 import { createAdminModel, deleteAdminModel, deleteModelBinding, getAdminChannels, getAdminModels, getModelChannelBindings, saveModelChannelBinding, updateAdminModel, updateAdminModelStatus, type AdminModel, type BindingInput, type ModelInput } from "@/services/api/admin-platform";
 import ChannelCosts from "./components/channel-costs";
@@ -67,8 +67,21 @@ export default function AdminModelsPage() {
     ];
 
     return (
-        <div className="w-full px-6 py-6 lg:px-8 lg:py-8">
-            <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-2xl font-semibold tracking-tight">模型管理</h1><p className="mt-2 text-sm text-muted-foreground">按类型管理模型发布、计费与上游渠道绑定。</p></div><Space><Link to={`/admin/channels?type=${category.value}`}><Button icon={<Cable className="size-4" />}>{category.label}渠道</Button></Link><Button type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建{category.label}模型</Button></Space></div>
+        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-stone-500 mb-1">
+                        <Shapes className="size-4 text-purple-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wider">Models & Pricing</span>
+                    </div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">模型管理</h1>
+                    <p className="mt-1 text-sm text-stone-500">按类型管理模型发布、计费与上游渠道绑定。</p>
+                </div>
+                <Space>
+                    <Link to={`/admin/channels?type=${category.value}`}><Button icon={<Cable className="size-4" />}>{category.label}渠道</Button></Link>
+                    <Button type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建{category.label}模型</Button>
+                </Space>
+            </div>
             <Tabs className="mt-6" activeKey={category.value} onChange={(value) => { setSearchParams({ type: value }); setKeyword(""); }} items={modelCapabilities.map(({ value, label, icon: Icon }) => ({ key: value, label: <span className="inline-flex items-center gap-2"><Icon className="size-4" />{label}<span className="text-xs tabular-nums text-muted-foreground">{(modelsQuery.data || []).filter((model) => model.capability === value).length}</span></span> }))} />
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-medium">{category.label}模型</h2><p className="mt-1 text-sm text-muted-foreground">{category.description}</p></div><Input className="!w-full sm:!w-72" prefix={<Search className="size-4 text-muted-foreground" />} allowClear placeholder={`搜索${category.label}模型名称、标识或说明`} value={keyword} onChange={(event) => setKeyword(event.target.value)} /></div>
             {modelsQuery.error ? <Alert className="mb-4" type="error" showIcon title={modelsQuery.error.message} /> : null}
