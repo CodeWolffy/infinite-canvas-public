@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import * as assetApi from "@/services/api/assets";
 import { mediaId, mediaUrl } from "@/services/api/media";
+import { ensureImagePreview, previewUrlFor } from "@/services/image-storage";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type AssetKind = "text" | "image" | "video" | "audio";
@@ -52,6 +53,13 @@ function numberMetadata(metadata: Record<string, unknown>, key: string) {
     return typeof metadata[key] === "number" ? (metadata[key] as number) : 0;
 }
 
+// 卡片用缩略图渲染，自定义封面（远程地址或单独上传的封面）保持原样。
+export function assetCoverUrl(asset: Asset) {
+    const own = asset.kind === "image" ? asset.data.dataUrl : "";
+    const cover = asset.coverUrl || own;
+    return asset.kind === "image" && cover === own ? previewUrlFor(asset.data.storageKey) || cover : cover;
+}
+
 function normalizeAsset(record: assetApi.AssetRecord): Asset {
     const metadata = record.metadata || {};
     const user = useUserStore.getState().user;
@@ -80,13 +88,15 @@ function normalizeAsset(record: assetApi.AssetRecord): Asset {
     const url = mediaUrl(record.mediaId || "");
     if (record.type === "audio") return { ...common, kind: "audio", coverUrl: "", data: { url, storageKey: `media:${record.mediaId}`, width: 0, height: 0, bytes: numberMetadata(metadata, "bytes"), mimeType: stringMetadata(metadata, "mimeType") || "audio/mpeg" } };
     if (record.type === "video") return { ...common, kind: "video", coverUrl: "", data: { url, storageKey: `media:${record.mediaId}`, width: numberMetadata(metadata, "width"), height: numberMetadata(metadata, "height"), bytes: numberMetadata(metadata, "bytes"), mimeType: stringMetadata(metadata, "mimeType") || "video/mp4" } };
+    const storageKey = `image:${record.mediaId}`;
+    if (record.mediaId) void ensureImagePreview(storageKey);
     return {
         ...common,
         kind: "image",
         coverUrl: url,
         data: {
             dataUrl: url,
-            storageKey: `image:${record.mediaId}`,
+            storageKey,
             width: numberMetadata(metadata, "width"),
             height: numberMetadata(metadata, "height"),
             bytes: numberMetadata(metadata, "bytes"),

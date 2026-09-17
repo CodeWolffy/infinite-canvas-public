@@ -51,6 +51,8 @@ test("image metadata reading cannot upload an old account's bytes after switchin
         "@/stores/use-user-store": auth,
         "@/i18n": { __esModule: true, default: { t: (key) => key } },
         "@/lib/image-utils": { readImageMeta: () => new Promise((resolve) => { finish = resolve; }) },
+        "@/lib/image-thumbnail": { createImageThumbnail: async () => undefined },
+        localforage: { default: { createInstance: () => ({ getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined, iterate: async () => undefined }) }, createInstance: () => ({ getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined, iterate: async () => undefined }) },
         "@/services/api/media": { uploadMedia: async () => { uploads++; return { id: "new-account-image", url: "/api/media/new-account-image", width: 1, height: 1, byteSize: 13, mimeType: "image/png" }; } },
         "@/stores/use-config-store": { withLocalProxy: (url) => url },
     });

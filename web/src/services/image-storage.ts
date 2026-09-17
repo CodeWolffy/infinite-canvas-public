@@ -1,9 +1,10 @@
+import localforage from "localforage";
 import i18n from "@/i18n";
+import { createImageThumbnail } from "@/lib/image-thumbnail";
 import { readImageMeta } from "@/lib/image-utils";
 import { mediaUrl, readMedia, uploadMedia } from "@/services/api/media";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
-
 
 export type UploadedImage = {
     url: string;
@@ -13,6 +14,24 @@ export type UploadedImage = {
     bytes: number;
     mimeType: string;
 };
+
+const previewStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_previews" });
+const previewUrls = new Map<string, string>();
+const previewListeners = new Set<() => void>();
+let previewRevision = 0;
+let previewQueue: Promise<unknown> = Promise.resolve();
+const IMAGE_PREVIEW_VERSION = 1;
+
+type StoredImagePreview = { version: number; blob?: Blob };
+
+useUserStore.subscribe((state, prevState) => {
+    if (state.sessionVersion !== prevState.sessionVersion) {
+        previewUrls.forEach((url) => URL.revokeObjectURL(url));
+        previewUrls.clear();
+        previewRevision += 1;
+        previewListeners.forEach((listener) => listener());
+    }
+});
 
 type ImageReadOptions = { signal?: AbortSignal };
 
@@ -26,10 +45,14 @@ export async function uploadImage(input: string | Blob, options?: ImageReadOptio
     if (options?.signal?.aborted) throw abortReason(options.signal);
     const existingId = typeof input === "string" ? input.match(/\/api\/media\/([0-9a-f-]{36})(?:\b|\/|\?|#)/i)?.[1] : undefined;
     if (existingId) {
-        return { url: mediaUrl(existingId), storageKey: `image:${existingId}`, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
+        const storageKey = `image:${existingId}`;
+        await storeImagePreview(storageKey, blob);
+        return { url: mediaUrl(existingId), storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
     }
     const media = await uploadMedia(blob, input instanceof File ? input.name : `image.${meta.mimeType.split("/")[1] || "png"}`);
-    return { url: media.url, storageKey: `image:${media.id}`, width: media.width || meta.width, height: media.height || meta.height, bytes: media.byteSize, mimeType: media.mimeType || meta.mimeType };
+    const storageKey = `image:${media.id}`;
+    await storeImagePreview(storageKey, blob);
+    return { url: media.url, storageKey, width: media.width || meta.width, height: media.height || meta.height, bytes: media.byteSize, mimeType: media.mimeType || meta.mimeType };
 }
 
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
@@ -73,6 +96,66 @@ function abortReason(signal: AbortSignal) {
     return signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
 }
 
+// 缩略图按图片的 storageKey 另存一份 WebP，只放在本地 IndexedDB 里，不写进节点数据，也不参与导出和 WebDAV 同步。
+export function previewUrlFor(storageKey?: string) {
+    return storageKey ? previewUrls.get(storageKey) : undefined;
+}
+
+// 缩略图在后台补，生成完成后再让用到它的界面重渲染一次。
+export function subscribeImagePreviews(listener: () => void) {
+    previewListeners.add(listener);
+    return () => {
+        previewListeners.delete(listener);
+    };
+}
+
+export function getImagePreviewRevision() {
+    return previewRevision;
+}
+
+export async function ensureImagePreview(storageKey?: string) {
+    if (!storageKey) return undefined;
+    const cached = previewUrls.get(storageKey);
+    if (cached) return cached;
+    const stored = await previewStore.getItem<StoredImagePreview>(storageKey).catch(() => null);
+    if (stored?.version === IMAGE_PREVIEW_VERSION) return stored.blob ? cacheImagePreview(storageKey, stored.blob) : undefined;
+    queueImagePreview(storageKey);
+    return undefined;
+}
+
+// 缩略图生成排成一队，避免一次打开大量图片时同时解码。
+function queueImagePreview(storageKey: string) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    previewQueue = previewQueue
+        .then(async () => {
+            const original = await getImageBlob(storageKey);
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+            if (original) await storeImagePreview(storageKey, original);
+        })
+        .catch(() => undefined);
+}
+
+async function storeImagePreview(storageKey: string, original: Blob) {
+    const preview = await createImageThumbnail(original).catch(() => undefined);
+    await previewStore.setItem<StoredImagePreview>(storageKey, { version: IMAGE_PREVIEW_VERSION, blob: preview }).catch(() => undefined);
+    return preview ? cacheImagePreview(storageKey, preview) : undefined;
+}
+
+function cacheImagePreview(storageKey: string, preview: Blob) {
+    const url = URL.createObjectURL(preview);
+    previewUrls.set(storageKey, url);
+    previewRevision += 1;
+    previewListeners.forEach((listener) => listener());
+    return url;
+}
+
+async function deleteImagePreview(storageKey: string) {
+    const url = previewUrls.get(storageKey);
+    if (url) URL.revokeObjectURL(url);
+    previewUrls.delete(storageKey);
+    await previewStore.removeItem(storageKey).catch(() => undefined);
+}
+
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
     return storageKey ? mediaUrl(storageKey) : fallback;
 }
@@ -92,10 +175,17 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {
-    void keys;
+    await Promise.all(Array.from(new Set(keys)).map(deleteImagePreview));
 }
 
-export async function cleanupUnusedImages(_usedData: unknown) {}
+export async function cleanupUnusedImages(usedData: unknown) {
+    const usedKeys = collectImageStorageKeys(usedData);
+    const orphanPreviews: string[] = [];
+    await previewStore.iterate((_value, key) => {
+        if (!usedKeys.has(key)) orphanPreviews.push(key);
+    });
+    await Promise.all(orphanPreviews.map(deleteImagePreview));
+}
 
 export function collectImageStorageKeys(value: unknown, keys = new Set<string>()) {
     if (!value || typeof value !== "object") return keys;

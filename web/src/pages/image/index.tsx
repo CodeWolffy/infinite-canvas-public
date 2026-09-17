@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Select, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { saveAs } from "file-saver";
@@ -18,7 +18,7 @@ import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { createGenerationBatch, deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { platformImageParameters, resolvePlatformImageModelId } from "@/services/api/image";
-import { uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
@@ -61,6 +61,7 @@ type GenerationLog = {
     status: "pending" | "success" | "failed";
     images: GeneratedImage[];
     thumbnails: string[];
+    thumbnailMediaIds?: string[];
     results: GenerationResult[];
     referenceMediaIds: string[];
     modelId: string;
@@ -75,6 +76,7 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
 
 export default function ImagePage() {
     const { message, modal } = App.useApp();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const { t } = useTranslation();
     const location = useLocation();
     const remixState = location.state as { prompt?: string; modelId?: string } | null;
@@ -149,6 +151,9 @@ export default function ImagePage() {
             for (const key of ["quality", "size", "count", "background"] as const) {
                 if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
             }
+            batches.forEach((batch) => {
+                batch.summary.thumbnailMediaIds.forEach((id) => void ensureImagePreview(id));
+            });
             setLogs(batches.map((batch) => summaryToLog(batch, imageModels)));
             const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
             if (!activeBatches.length) return;
@@ -207,6 +212,10 @@ export default function ImagePage() {
 
     const applyDetail = (detail: GenerationBatchDetail) => {
         const log = detailToLog(detail, modelsRef.current);
+        detail.tasks.forEach((t) => {
+            if (t.image?.mediaId) void ensureImagePreview(t.image.mediaId);
+        });
+        detail.referenceMediaIds.forEach((id) => void ensureImagePreview(id));
         setLogs((current) => [log, ...current.filter((item) => item.id !== log.id)].sort((a, b) => b.createdAt - a.createdAt));
         const active = log.status === "pending";
         setActiveBatchIds((current) => {
@@ -245,6 +254,7 @@ export default function ImagePage() {
             const nextReferences = await Promise.all(
                 imageFiles.map(async (file) => {
                     const media = await uploadGenerationMedia(file, file.name);
+                    void ensureImagePreview(media.id);
                     return { id: nanoid(), name: file.name, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
@@ -269,6 +279,7 @@ export default function ImagePage() {
             const nextReferences = await Promise.all(
                 blobs.map(async (blob, index) => {
                     const media = await uploadGenerationMedia(blob, `clipboard-${index + 1}.png`);
+                    void ensureImagePreview(media.id);
                     return { id: nanoid(), name: media.originalName, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
@@ -368,6 +379,7 @@ export default function ImagePage() {
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
+        if (image.storageKey) void ensureImagePreview(image.storageKey);
         setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: image.mimeType || "image/png", dataUrl: image.dataUrl, storageKey: image.storageKey }]);
         message.success(t("imageWorkbench.addedReference"));
     };
@@ -590,7 +602,7 @@ export default function ImagePage() {
                                 >
                                     {references.map((item, index) => (
                                         <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button
@@ -747,9 +759,10 @@ function ResultImageCard({
     onSaveAsset: (image: GeneratedImage, index: number) => void;
 }) {
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <Image src={image.dataUrl} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
+            <Image src={previewUrlFor(image.storageKey) || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     {image.width && image.height ? <span>{image.width}x{image.height}</span> : null}
@@ -848,6 +861,7 @@ function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): Ge
         status: batch.summary.activeCount > 0 ? "pending" : batch.summary.succeededCount > 0 ? "success" : batch.summary.failedCount > 0 ? "failed" : "success",
         images: [],
         results: [],
+        thumbnailMediaIds: batch.summary.thumbnailMediaIds,
         thumbnails: batch.summary.thumbnailMediaIds.map((mediaId) => `/api/media/${mediaId}`),
     };
 }
@@ -911,7 +925,19 @@ function LogPanel({
 
 function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
     const { t } = useTranslation();
-    const thumbnails = (log.thumbnails || []).filter(Boolean).slice(0, 4);
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
+    const thumbnails = (log.thumbnailMediaIds && log.thumbnailMediaIds.length > 0)
+        ? log.thumbnailMediaIds.slice(0, 4).map((id) => ({ key: id, src: previewUrlFor(id) || `/api/media/${id}` }))
+        : (log.images && log.images.length > 0)
+            ? log.images.slice(0, 4).map((img) => ({ key: img.storageKey, src: (img.storageKey ? previewUrlFor(img.storageKey) : undefined) || img.dataUrl }))
+            : (log.thumbnails || []).filter(Boolean).slice(0, 4).map((src) => ({ key: undefined, src }));
+
+    useEffect(() => {
+        (log.thumbnailMediaIds || []).slice(0, 4).forEach((id) => void ensureImagePreview(id));
+        (log.images || []).slice(0, 4).forEach((img) => {
+            if (img.storageKey) void ensureImagePreview(img.storageKey);
+        });
+    }, [log.thumbnailMediaIds, log.images]);
 
     return (
         <button
@@ -926,8 +952,8 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                         <div className="truncate text-sm font-semibold leading-5">{log.title}</div>
                         {thumbnails.length ? (
                             <div className="mt-2 flex gap-1 overflow-hidden">
-                                {thumbnails.map((image, index) => (
-                                    <img key={`${log.id}-${index}`} src={image} alt="" className="size-8 shrink-0 rounded-md object-cover" />
+                                {thumbnails.map((item, index) => (
+                                    <img key={`${log.id}-${index}`} src={item.src} alt="" className="size-8 shrink-0 rounded-md object-cover" />
                                 ))}
                             </div>
                         ) : null}
@@ -1005,6 +1031,7 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
         status: active ? "pending" : successCount ? "success" : "failed",
         images,
         results,
+        thumbnailMediaIds: images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)),
         thumbnails: images.map((image) => image.dataUrl),
     };
 }

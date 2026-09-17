@@ -32,6 +32,7 @@ function setup(t) {
         "@/services/api/assets": assetApi,
         "@/services/api/media": { mediaId: (id) => id, mediaUrl: (id) => `/api/media/${id}` },
         "@/lib/utils": { randomId: require("nanoid").nanoid },
+        "@/services/image-storage": { ensureImagePreview: async () => undefined, previewUrlFor: () => undefined },
     };
     // Load production stores and real Zustand, replacing only their browser/API dependencies.
     const load = (file) => {
