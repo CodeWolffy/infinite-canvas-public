@@ -193,7 +193,7 @@
 | `BOOTSTRAP_ADMIN_PASSWORD` | *(初始化密码)* | 系统初次初始化时的管理员密码，初次登录后建议修改 |
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` | PostgreSQL 权威数据库连接串 |
 | `REDIS_URL` | `redis://:pass@host:6379/0` | Redis 实例连接串，用于跨实例频控与渠道并发控制 |
-| `IMAGE_WORKER_CONCURRENCY` | `20` | 本机异步图像生成并发协程工作池上限 |
+| `WORKER_CONCURRENCY` | `50` (默认 20) | 本机异步生成与流式任务并发协程工作池上限（兼顾图文音视所有类型） |
 | `TRUST_PROXY` | `true` (生产) / `false` (本地) | 是否信任反向代理传递的 `X-Forwarded-*` 标头 |
 
 ---

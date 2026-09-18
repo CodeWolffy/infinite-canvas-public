@@ -38,13 +38,13 @@ export default function SecuritySettings() {
     const open = (next: NonNullable<typeof action>) => { form.resetFields(); setCode(""); setSetup(null); setAction(next); };
     const current = security.data?.security;
     return <>
-        <Card title={<span className="inline-flex items-center gap-2"><ShieldCheck className="size-4" />账号保护</span>} loading={security.isPending}>
+        <Card title={<span className="inline-flex items-center gap-2"><ShieldCheck className="size-4" />账号保护</span>} loading={security.isPending} className="flex flex-col" classNames={{ body: "flex flex-1 flex-col justify-center" }}>
             {security.error ? <Alert type="error" title={security.error.message} /> : <div className="space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-4"><div><div className="flex items-center gap-2"><Mail className="size-4" /><span>找回邮箱</span>{current?.emailVerifiedAt ? <Tag color="green">已验证</Tag> : <Tag>未绑定</Tag>}</div><p className="mt-2 text-sm text-muted-foreground">{current?.email || "绑定后可自助找回密码，并接收相关通知。"}</p></div><Button onClick={() => open("email")}>{current?.email ? "更换邮箱" : "绑定邮箱"}</Button></div>
                 <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6"><div><div className="flex items-center gap-2"><ShieldCheck className="size-4" /><span>两步验证</span><Tag color={current?.mfaEnabled ? "green" : "default"}>{current?.mfaEnabled ? "已启用" : "未启用"}</Tag></div><p className="mt-2 max-w-lg text-sm text-muted-foreground">登录时同时验证密码和验证器验证码，建议所有管理员开启。</p></div><Button danger={current?.mfaEnabled} onClick={() => open(current?.mfaEnabled ? "disable" : "setup")}>{current?.mfaEnabled ? "关闭两步验证" : "绑定验证器"}</Button></div>
             </div>}
         </Card>
-        <Card title={<span className="inline-flex items-center gap-2"><Monitor className="size-4" />登录设备</span>} extra={<Button type="text" disabled={(devices.data?.sessions.length || 0) < 2} loading={revokeOthers.isPending} onClick={() => modal.confirm({ title: "退出其他所有设备？", content: "当前设备将保持登录。", onOk: () => revokeOthers.mutateAsync() })}>退出其他设备</Button>}>
+        <Card title={<span className="inline-flex items-center gap-2"><Monitor className="size-4" />登录设备</span>} className="xl:col-span-2" extra={<Button type="text" disabled={(devices.data?.sessions.length || 0) < 2} loading={revokeOthers.isPending} onClick={() => modal.confirm({ title: "退出其他所有设备？", content: "当前设备将保持登录。", onOk: () => revokeOthers.mutateAsync() })}>退出其他设备</Button>}>
             {devices.error ? <Alert type="error" title={devices.error.message} /> : <Table rowKey="id" loading={devices.isPending} dataSource={devices.data?.sessions || []} pagination={false} scroll={{ x: 650 }} columns={[
                 { title: "设备", dataIndex: "userAgent", ellipsis: true, render: (value: string, item) => <span>{item.current ? <Tag color="green">当前</Tag> : null}{value || "未记录设备信息"}</span> },
                 { title: "IP", dataIndex: "ip", width: 150 }, { title: "登录时间", dataIndex: "createdAt", width: 150, render: (value: string) => dayjs(value).format("MM-DD HH:mm") },

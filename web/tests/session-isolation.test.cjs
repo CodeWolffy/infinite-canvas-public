@@ -326,7 +326,7 @@ test("local Agent credentials survive same-user login while platform messages an
     assert.equal(workbench.getState().imageCommand.config.model, "platform::image-model");
     assert.equal(workbench.getState().imageCommand.config.quality, "high");
     await assert.rejects(runSiteTool("workbench_video_generate", {}, () => assert.fail("Invalid video input must not navigate")), /请输入视频提示词/);
-    const videoResult = await runSiteTool("workbench_video_generate", { prompt: "platform video" }, (path) => assert.equal(path, "/studio?type=video&batch=video-batch"));
+    const videoResult = await runSiteTool("workbench_video_generate", { prompt: "platform video" }, (path) => assert.equal(path, "/video?batch=video-batch"));
     assert.equal(videoResult.taskId, "video-task");
     assert.equal(videoSubmissions[0].modelId, "video-model");
     assert.equal(videoSubmissions[0].apiKey, undefined);
@@ -346,6 +346,7 @@ test("local Agent fragment survives login and required password change without l
     const destination = "/canvas/project?mode=new#agentUrl=http%3A%2F%2F127.0.0.1%3A17371&agentToken=test-only";
     const { authReturnPath } = load("../lib/auth-return-path.ts");
     imports["@/lib/auth-return-path"] = { authReturnPath };
+    imports["@/lib/affiliate"] = { affiliateCodeFromSearch: () => "", getAffiliateCode: () => "", saveAffiliateCode: () => {} };
     imports.react = { useEffect() {}, useState: (value) => [value, () => {}] };
     imports["react/jsx-runtime"] = require("react/jsx-runtime");
     let location = { pathname: "/canvas/project", search: "?mode=new", hash: destination.slice(destination.indexOf("#")), state: null };

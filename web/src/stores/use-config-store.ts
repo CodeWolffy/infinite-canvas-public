@@ -155,8 +155,10 @@ type ConfigStore = {
 
 const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "wan", "hailuo"];
 
-export function boolConfig(value: string, fallback: boolean) {
-    return value ? value === "true" : fallback;
+export function boolConfig(value: unknown, fallback: boolean) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") return value ? value === "true" : fallback;
+    return fallback;
 }
 const AUDIO_KEYWORDS = ["audio", "tts", "speech", "voice", "music", "sound"];
 const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "imagen", "flux", "sdxl", "stable-diffusion", "midjourney"];

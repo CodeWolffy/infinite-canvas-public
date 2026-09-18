@@ -17,6 +17,7 @@ export type PublicModel = ModelReasoning & {
     groupDiscount?: string;
     sortOrder: number;
     description: string | null;
+    imageInput?: boolean;
 };
 
 export type GenerationBatch = {

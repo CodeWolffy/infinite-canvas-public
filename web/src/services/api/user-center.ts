@@ -29,25 +29,49 @@ export type UserStats = {
     adjustment?: string;
 };
 
+export type UserLogFundKind = "recharge" | "checkin" | "referral" | "grant" | "adjustment";
+export type UserLogType = "image" | "text" | "video" | "audio" | "probe" | UserLogFundKind;
+
 export type UserRequestLog = {
     id: string;
-    type: "image" | "text" | "video" | "audio" | "probe";
+    source?: "request" | "wallet";
+    type: UserLogType;
     taskId: string | null;
     textRequestId: string | null;
     modelDisplayName: string | null;
-    status: "running" | "succeeded" | "failed";
+    status: "running" | "succeeded" | "failed" | null;
     httpStatus: number | null;
     errorCategory: string | null;
     errorMessage: string | null;
+    billedAmount: string | null;
+    firstTokenMs: number | null;
+    outputTokens: number | null;
+    promptTokens: number | null;
+    cachedTokens: number | null;
+    completionTokens: number | null;
     startedAt: string;
     finishedAt: string | null;
     durationMs: number | null;
+    deltaBalance?: string | null;
+    deltaFrozen?: string | null;
+    balanceAfter?: string | null;
+    frozenAfter?: string | null;
+    note?: string | null;
+    reference?: string | null;
+};
+
+export type UserLogTotals = {
+    total: number;
+    succeeded: number;
+    failed: number;
+    running: number;
+    billedAmount: string;
 };
 
 export type UserLogsQuery = {
     from?: string;
     to?: string;
-    type?: "image" | "text" | "video" | "audio" | "probe";
+    type?: UserLogType;
     status?: "running" | "succeeded" | "failed";
     limit?: number;
     offset?: number;
@@ -56,6 +80,7 @@ export type UserLogsQuery = {
 export type UserLogsResult = {
     logs: UserRequestLog[];
     total: number;
+    totals?: UserLogTotals | null;
     limit: number;
     offset: number;
 };

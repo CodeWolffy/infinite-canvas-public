@@ -54,6 +54,15 @@ var moderationAndRewards string
 //go:embed migrations/014_channel_capability.sql
 var channelCapability string
 
+//go:embed migrations/015_conversation_soft_delete.sql
+var conversationSoftDelete string
+
+//go:embed migrations/016_channel_endpoint.sql
+var channelEndpoint string
+
+//go:embed migrations/017_referral_code_ci_unique.sql
+var referralCodeCiUnique string
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
 		response, err := http.Get("http://127.0.0.1:3001/health")
@@ -68,7 +77,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability})
+	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability, conversationSoftDelete, channelEndpoint, referralCodeCiUnique})
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)

@@ -9,11 +9,30 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func (a *App) generateReferralCode(ctx context.Context, q querier) (string, error) {
+	for _, length := range []int{4, 6} {
+		for attempt := 0; attempt < 10; attempt++ {
+			code, err := randomAlphanumeric(length)
+			if err != nil {
+				return "", err
+			}
+			var exists bool
+			if err = q.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE lower(referral_code)=lower($1))", code).Scan(&exists); err != nil {
+				return "", err
+			}
+			if !exists {
+				return code, nil
+			}
+		}
+	}
+	return "", errors.New("failed to generate unique referral code")
+}
+
 func (a *App) bindReferral(ctx context.Context, tx pgx.Tx, userID, code string) error {
 	if code == "" {
 		return nil
 	}
-	inviter, err := one(ctx, tx, "SELECT id FROM users WHERE referral_code=$1 AND status='active' AND id<>$2", code, userID)
+	inviter, err := one(ctx, tx, "SELECT id FROM users WHERE lower(referral_code)=lower($1) AND status='active' AND id<>$2", code, userID)
 	if errors.Is(err, notFound) {
 		return problem(400, "invalid_referral", "推荐码无效，请核对邀请链接")
 	}
@@ -67,6 +86,13 @@ func (a *App) referralRoutes(api, admin *gin.RouterGroup) {
 		if err = a.DB.QueryRow(ctx, "SELECT referral_code FROM users WHERE id=$1", u.ID).Scan(&code); err != nil {
 			return nil, err
 		}
+		if len(code) > 8 || code == "" {
+			if newCode, genErr := a.generateReferralCode(ctx, a.DB); genErr == nil {
+				if _, upErr := a.DB.Exec(ctx, "UPDATE users SET referral_code=$1 WHERE id=$2", newCode, u.ID); upErr == nil {
+					code = newCode
+				}
+			}
+		}
 		summary, err := one(ctx, a.DB, "SELECT count(*) AS invited,coalesce(sum(reward_micros),0)::bigint AS earned FROM referrals WHERE inviter_id=$1", u.ID)
 		if err != nil {
 			return nil, err
@@ -78,7 +104,7 @@ func (a *App) referralRoutes(api, admin *gin.RouterGroup) {
 			item["reward"] = money(integer(item["rewardMicros"]))
 			delete(item, "rewardMicros")
 		}
-		return gin.H{"code": code, "url": a.Config.PublicURL + "/login?ref=" + code, "enabled": settings.ReferralEnabled, "percent": settings.ReferralPercent, "summary": summary, "referrals": items}, err
+		return gin.H{"code": code, "enabled": settings.ReferralEnabled, "percent": settings.ReferralPercent, "summary": summary, "referrals": items}, err
 	}))
 	admin.GET("/referrals", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)

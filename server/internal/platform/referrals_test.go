@@ -2,9 +2,11 @@ package platform
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestReferralUsesPaidAmountAndCurrentRateAtomically(t *testing.T) {
@@ -100,4 +102,91 @@ func TestReferralUsesPaidAmountAndCurrentRateAtomically(t *testing.T) {
 	}
 	testBalance(t, a, inviter, earned+moneyScale, 0)
 	testBalance(t, a, friend, paid+2*moneyScale, 0)
+}
+
+func TestReferralShortCodeGenerationAndCaseInsensitiveBinding(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	inviter, _ := testUser(t, a, 0)
+	if _, err := a.DB.Exec(ctx, "UPDATE users SET referral_code=$2 WHERE id=$1", inviter, "i4X8"); err != nil {
+		t.Fatal(err)
+	}
+	// 新用户注册生成 4 位字母数字短码。
+	owner, _ := testUser(t, a, 0)
+	code, err := a.generateReferralCode(ctx, a.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(code) != 4 {
+		t.Fatalf("expected 4-char code, got %q", code)
+	}
+	for _, r := range code {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			t.Fatalf("code %q contains non-alphanumeric", code)
+		}
+	}
+	if _, err := a.DB.Exec(ctx, "UPDATE users SET referral_code=$2 WHERE id=$1", owner, code); err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := a.generateReferralCode(ctx, a.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate == code {
+		t.Fatal("duplicate referral code generated")
+	}
+	// 大小写不敏感精确匹配：大小写混合输入也能绑定推荐人。
+	if err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		return a.bindReferral(ctx, tx, owner, "I4x8")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var inviterID string
+	if err := a.DB.QueryRow(ctx, "SELECT inviter_id::text FROM referrals WHERE user_id=$1", owner).Scan(&inviterID); err != nil || inviterID != inviter {
+		t.Fatalf("binding=%s error=%v", inviterID, err)
+	}
+	// 不存在的推荐码与含通配符的输入都必须拒绝，不能命中任意用户。
+	for _, bad := range []string{"%25", "_", "i4x9", "i4X8 "} {
+		friend, _ := testUser(t, a, 0)
+		if err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			return a.bindReferral(ctx, tx, friend, bad)
+		}); err == nil {
+			var bound int
+			_ = a.DB.QueryRow(ctx, "SELECT count(*) FROM referrals WHERE user_id=$1", friend).Scan(&bound)
+			if bound > 0 || bad == "i4X8 " {
+				t.Fatalf("referral code %q should not bind", bad)
+			}
+		}
+	}
+	// 版本 17 迁移的大小写不敏感唯一索引：同码不同大小写插入必须失败。
+	if _, err := a.DB.Exec(ctx, "INSERT INTO users(id,username,password_hash,display_name,referral_code) VALUES($1,$2,'unused','dup',$3)", uuid.NewString(), uuid.NewString(), strings.ToUpper(code)); err == nil {
+		t.Fatal("case-insensitive unique index did not reject duplicate code")
+	}
+}
+
+func TestReferralCodeUpgradeAndLookup(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	user, cookie := testUser(t, a, 0)
+	legacy := uuid.NewString()
+	if _, err := a.DB.Exec(ctx, "UPDATE users SET referral_code=$2 WHERE id=$1", user, legacy); err != nil {
+		t.Fatal(err)
+	}
+	// 存量 36 位 UUID 码用户访问邀请信息时自动升级为 4 位短码。
+	summary := testRequest(a.Router(), "GET", "/api/user/referrals", nil, cookie)
+	if summary.Code != 200 {
+		t.Fatalf("referrals: %d %s", summary.Code, summary.Body.String())
+	}
+	row := responseRow(t, summary)
+	upgraded := str(row["code"])
+	if len(upgraded) != 4 {
+		t.Fatalf("legacy code was not upgraded: %q", upgraded)
+	}
+	if _, exists := row["url"]; exists {
+		t.Fatal("referral response should not embed a backend-generated url")
+	}
+	var stored string
+	if err := a.DB.QueryRow(ctx, "SELECT referral_code FROM users WHERE id=$1", user).Scan(&stored); err != nil || stored != upgraded {
+		t.Fatalf("stored=%q error=%v", stored, err)
+	}
 }

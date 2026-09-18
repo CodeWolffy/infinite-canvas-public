@@ -1,8 +1,6 @@
-import { FileText, ImagePlus, Images, Maximize2, MessageSquare, Sparkles } from "lucide-react";
+import { FileText, ImagePlus, Images, Maximize2, MessageSquare, Video } from "lucide-react";
 
 export const navigationTools = [
-    { slug: "studio", icon: Sparkles },
-    { slug: "text", icon: MessageSquare },
     {
         slug: "canvas",
         icon: Maximize2,
@@ -10,6 +8,14 @@ export const navigationTools = [
     {
         slug: "image",
         icon: ImagePlus,
+    },
+    {
+        slug: "video",
+        icon: Video,
+    },
+    {
+        slug: "text",
+        icon: MessageSquare,
     },
     {
         slug: "prompts",
@@ -22,3 +28,4 @@ export const navigationTools = [
 ] as const;
 
 export type NavigationToolSlug = (typeof navigationTools)[number]["slug"];
+

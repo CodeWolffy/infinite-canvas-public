@@ -34,7 +34,7 @@ function CanvasProjectRoute() {
     return <CanvasProjectPage key={id} />;
 }
 const ImagePage = lazy(() => import("@/pages/image"));
-const StudioPage = lazy(() => import("@/pages/studio"));
+const VideoPage = lazy(() => import("@/pages/video"));
 const WalletPage = lazy(() => import("@/pages/user/wallet"));
 const AdminInvitationsPage = lazy(() => import("@/pages/admin/invitations"));
 const AdminBillingPage = lazy(() => import("@/pages/admin/billing"));
@@ -46,10 +46,11 @@ const AdminSensitivePage = lazy(() => import("@/pages/admin/sensitive"));
 const AdminStatusPage = lazy(() => import("@/pages/admin/status"));
 const StatusPage = lazy(() => import("@/pages/status"));
 const TextPage = lazy(() => import("@/pages/text"));
-const ReferralsPage = lazy(() => import("@/pages/user/referrals"));
 
 export const router = createBrowserRouter([
     { path: "/login", element: <LoginPage /> },
+    { path: "/sign-up", element: <LoginPage /> },
+    { path: "/register", element: <LoginPage /> },
     { path: "/forgot-password", element: <AccountRecoveryPage /> },
     { path: "/reset-password", element: <AccountRecoveryPage /> },
     { path: "/verify-email", element: <AccountRecoveryPage /> },
@@ -73,9 +74,10 @@ export const router = createBrowserRouter([
                 children: [
                     { path: "/", element: <HomePage /> },
                     { path: "/image", element: <ImagePage /> },
-                    { path: "/studio", element: <StudioPage /> },
-                    { path: "/video", element: <Navigate to="/studio?type=video" replace /> },
-                    { path: "/audio", element: <Navigate to="/studio?type=audio" replace /> },
+                    { path: "/video", element: <VideoPage /> },
+                    { path: "/studio", element: <Navigate to="/video" replace /> },
+                    { path: "/audio", element: <Navigate to="/video" replace /> },
+                    { path: "/config", element: <Navigate to="/video" replace /> },
                     { path: "/text", element: <TextPage /> },
                     { path: "/status", element: <StatusPage /> },
                     { path: "/assets", element: <AssetsPage /> },
@@ -94,7 +96,6 @@ export const router = createBrowserRouter([
                     { path: "logs", element: <UserLogsPage /> },
                     { path: "account", element: <UserAccountPage /> },
                     { path: "wallet", element: <WalletPage /> },
-                    { path: "referrals", element: <ReferralsPage /> },
                 ],
             },
             {

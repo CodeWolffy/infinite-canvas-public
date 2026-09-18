@@ -70,6 +70,52 @@ func TestSettlementRegression(t *testing.T) {
 	}
 }
 
+func TestUserLogsScopeAndTotals(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	user, cookie := testUser(t, a, 0)
+	other, _ := testUser(t, a, 0)
+	model, _ := capabilityModel(t, a, "text", "https://example.invalid", moneyScale)
+	task := uuid.NewString()
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO generation_tasks(id,user_id,model_id,capability,model_name,model_display_name,prompt,price_micros,status,prompt_tokens,cached_tokens,completion_tokens,finished_at) VALUES($1,$2,$3,'text','m','M','hi',0,'succeeded',120,30,456,now())", []any{task, user, model}},
+		{"INSERT INTO request_logs(user_id,type,task_id,model_id,model_display_name_snapshot,channel_name_snapshot,upstream_model,status,billed_amount,first_token_ms,output_tokens,finished_at,duration_ms) VALUES($1,'text',$2,$3,'M','internal-channel','real-upstream','succeeded','0.012345',88,456,now(),900)", []any{user, task, model}},
+		{"INSERT INTO request_logs(user_id,type,status,error_message,finished_at) VALUES($1,'image','failed','other user',now())", []any{other}},
+	} {
+		if _, err := a.DB.Exec(ctx, query.sql, query.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := testRequest(a.Router(), "GET", "/api/user/logs", nil, cookie)
+	body := responseRow(t, response)
+	if response.Code != 200 {
+		t.Fatalf("user logs: %d %s", response.Code, response.Body.String())
+	}
+	items, ok := body["logs"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected only own log: %s", response.Body.String())
+	}
+	entry := items[0].(map[string]any)
+	if entry["promptTokens"] != float64(120) || entry["cachedTokens"] != float64(30) || entry["completionTokens"] != float64(456) || entry["outputTokens"] != float64(456) || entry["firstTokenMs"] != float64(88) {
+		t.Fatalf("token fields: %v", entry)
+	}
+	if entry["billedAmount"] != "0.012345" {
+		t.Fatalf("billed amount: %v", entry["billedAmount"])
+	}
+	for _, hidden := range []string{"channelId", "channelNameSnapshot", "upstreamModel", "keyId", "userId", "modelId", "username"} {
+		if _, leaked := entry[hidden]; leaked {
+			t.Fatalf("user log leaked %s", hidden)
+		}
+	}
+	totals, ok := body["totals"].(map[string]any)
+	if !ok || totals["total"] != float64(1) || totals["succeeded"] != float64(1) || totals["failed"] != float64(0) || totals["billedAmount"] != "0.012345" {
+		t.Fatalf("totals: %v", body["totals"])
+	}
+}
+
 func TestRedeemDifferentCodesRegression(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()

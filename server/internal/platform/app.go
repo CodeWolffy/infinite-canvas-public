@@ -109,12 +109,20 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		return nil, errors.New("Secure Cookie 需要 HTTPS PUBLIC_URL；本地 HTTP 请设置 COOKIE_SECURE=false")
 	}
 	cfg.Origins = strings.Split(env("CORS_ORIGIN", cfg.PublicURL), ",")
-	for key, target := range map[string]*int{"SESSION_DAYS": &cfg.SessionDays, "IMAGE_WORKER_CONCURRENCY": &cfg.WorkerConcurrency, "ORPHAN_MEDIA_GRACE_DAYS": &cfg.OrphanDays, "REQUEST_LOG_RETENTION_DAYS": &cfg.LogDays} {
-		defaults := map[string]int{"SESSION_DAYS": 7, "IMAGE_WORKER_CONCURRENCY": 20, "ORPHAN_MEDIA_GRACE_DAYS": 45, "REQUEST_LOG_RETENTION_DAYS": 30}
+	for key, target := range map[string]*int{"SESSION_DAYS": &cfg.SessionDays, "ORPHAN_MEDIA_GRACE_DAYS": &cfg.OrphanDays, "REQUEST_LOG_RETENTION_DAYS": &cfg.LogDays} {
+		defaults := map[string]int{"SESSION_DAYS": 7, "ORPHAN_MEDIA_GRACE_DAYS": 45, "REQUEST_LOG_RETENTION_DAYS": 30}
 		*target, err = envInt(key, defaults[key])
 		if err != nil {
 			return nil, err
 		}
+	}
+	workerKey := "WORKER_CONCURRENCY"
+	if os.Getenv("WORKER_CONCURRENCY") == "" && os.Getenv("IMAGE_WORKER_CONCURRENCY") != "" {
+		workerKey = "IMAGE_WORKER_CONCURRENCY"
+	}
+	cfg.WorkerConcurrency, err = envInt(workerKey, 20)
+	if err != nil {
+		return nil, err
 	}
 	upload, err := envInt("MAX_UPLOAD_BYTES", 50*1024*1024)
 	if err != nil {

@@ -400,9 +400,14 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 				return generationResult{}, &upstreamError{Category: "storage", Message: "对话附件暂时无法读取，请检查文件后重试"}
 			}
 		}
-		parts := []any{map[string]any{"text": m["content"]}}
-		openParts := []any{map[string]any{"type": "text", "text": m["content"]}}
-		claudeParts := []any{map[string]any{"type": "text", "text": m["content"]}}
+		parts := []any{}
+		openParts := []any{}
+		claudeParts := []any{}
+		if str(m["content"]) != "" {
+			parts = append(parts, map[string]any{"text": m["content"]})
+			openParts = append(openParts, map[string]any{"type": "text", "text": m["content"]})
+			claudeParts = append(claudeParts, map[string]any{"type": "text", "text": m["content"]})
+		}
 		for _, ref := range refs {
 			if !strings.HasPrefix(ref.MIME, "image/") {
 				return generationResult{}, &upstreamError{Category: "invalid_request"}
@@ -412,7 +417,11 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			openParts = append(openParts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:" + ref.MIME + ";base64," + encoded}})
 			claudeParts = append(claudeParts, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": ref.MIME, "data": encoded}})
 		}
-		messages = append(messages, map[string]any{"role": m["role"], "content": openParts})
+		var openAIContent any = m["content"]
+		if len(refs) > 0 {
+			openAIContent = openParts
+		}
+		messages = append(messages, map[string]any{"role": m["role"], "content": openAIContent})
 		anthropicMessages = append(anthropicMessages, map[string]any{"role": m["role"], "content": claudeParts})
 		role := str(m["role"])
 		if role == "assistant" {
@@ -455,6 +464,18 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			body["system"] = system
 		}
 		req, err = c.jsonRequest(ctx, "messages", body)
+	} else if strings.Trim(c.EndpointPath, "/") == "responses" {
+		body := selectedParams(params, "temperature", "top_p")
+		body["model"] = c.UpstreamModel
+		body["input"] = messages
+		body["stream"] = true
+		if effort != "" {
+			body["reasoning"] = Row{"effort": effort}
+		}
+		if limit := explicitTextTokens(params); limit > 0 {
+			body["max_output_tokens"] = limit
+		}
+		req, err = c.jsonRequest(ctx, "responses", body)
 	} else {
 		body := selectedParams(params, "temperature", "top_p", "max_tokens", "max_completion_tokens")
 		if effort != "" {

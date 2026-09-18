@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -527,6 +528,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 			APIKeys         []string `json:"apiKeys"`
 			KeyStrategy     string `json:"keyStrategy" binding:"required,oneof=round_robin random"`
 			TaskAdapter     string `json:"taskAdapter"`
+			EndpointPath    string `json:"endpointPath" binding:"max=200"`
 			Status          string `json:"status" binding:"required,oneof=active disabled needs_attention"`
 			TimeoutMS       int    `json:"timeoutMs" binding:"required,min=1000"`
 			MaxConcurrency  int    `json:"maxConcurrency" binding:"required,min=1"`
@@ -543,6 +545,9 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		}
 		if err = validateTaskAdapter(input.TaskAdapter, input.Protocol); err != nil {
 			return nil, err
+		}
+		if endpoint := strings.Trim(input.EndpointPath, "/"); endpoint != "" && (input.Protocol != "openai" || input.Capability != "text" || (endpoint != "chat/completions" && endpoint != "responses")) {
+			return nil, problem(400, "invalid_endpoint_path", "接口端点仅支持文本 OpenAI 渠道的 /chat/completions 或 /responses")
 		}
 		u, err := url.Parse(input.BaseURL)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Scheme != "https" && u.Scheme != "http" {
@@ -576,7 +581,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 					}
 				}
 			}
-			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET name=excluded.name,capability=excluded.capability,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability)
+			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability,endpoint_path) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,capability=excluded.capability,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,endpoint_path=excluded.endpoint_path,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability, strings.Trim(input.EndpointPath, "/ "))
 			if err != nil {
 				return err
 			}
@@ -743,18 +748,100 @@ func logFilter(c *gin.Context, admin bool) (string, []any) {
 	}
 	return where, args
 }
+// 用户端使用日志把钱包到账类变动并入同一时间线；冻结/结算/退回属调用自身账务环节，不单独展示。
+var fundLogKinds = []string{"recharge", "checkin", "referral", "grant", "adjustment"}
+
+// userLogSelect 与 fundLogSelect 的列一一对应，供统一时间线 UNION 使用。
+const userLogSelect = "SELECT l.id,'request' AS source,l.type,l.task_id,l.status,l.http_status,l.error_category,l.error_message,l.billed_amount,l.first_token_ms,l.output_tokens,l.started_at,l.finished_at,l.duration_ms,l.model_display_name_snapshot AS model_display_name,CASE WHEN l.type='text' THEN l.task_id END AS text_request_id,t.prompt_tokens,t.cached_tokens,t.completion_tokens,NULL AS delta_balance,NULL AS delta_frozen,NULL AS balance_after,NULL AS frozen_after,NULL AS note,NULL AS reference"
+const fundLogSelect = "SELECT e.id,'wallet' AS source,e.kind AS type,NULL AS task_id,NULL AS status,NULL AS http_status,NULL AS error_category,NULL AS error_message,NULL AS billed_amount,NULL AS first_token_ms,NULL AS output_tokens,e.created_at AS started_at,NULL AS finished_at,NULL AS duration_ms,NULL AS model_display_name,NULL AS text_request_id,NULL AS prompt_tokens,NULL AS cached_tokens,NULL AS completion_tokens,e.delta_balance,e.delta_frozen,e.balance_after,e.frozen_after,e.note,e.reference"
+
 func (a *App) listLogs(c *gin.Context, admin bool) (any, error) {
-	where, args := logFilter(c, admin)
 	ctx := c.Request.Context()
-	var total int64
-	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM request_logs l WHERE "+where, args...).Scan(&total); err != nil {
+	limit, offset := pagination(c)
+	if !admin && slices.Contains(fundLogKinds, c.Query("type")) {
+		return a.listFundLogs(c, limit, offset)
+	}
+	where, args := logFilter(c, admin)
+	totals, err := one(ctx, a.DB, "SELECT count(*)::bigint AS total,count(*) FILTER(WHERE l.status='succeeded')::int AS succeeded,count(*) FILTER(WHERE l.status='failed')::int AS failed,count(*) FILTER(WHERE l.status='running')::int AS running,coalesce(sum(l.billed_amount),0)::text AS billed_amount FROM request_logs l WHERE "+where, args...)
+	if err != nil {
 		return nil, err
 	}
-	limit, offset := pagination(c)
+	if !admin && c.Query("type") == "" && c.Query("status") == "" && c.Query("modelId") == "" && c.Query("channelId") == "" {
+		return a.listMergedLogs(c, where, args, totals, limit, offset)
+	}
 	args = append(args, limit, offset)
-	query := "SELECT l.*,u.username,u.display_name AS user_display_name,l.model_display_name_snapshot AS model_display_name,CASE WHEN l.type='text' THEN l.task_id END AS text_request_id FROM request_logs l LEFT JOIN users u ON u.id=l.user_id WHERE " + where + " ORDER BY l.started_at DESC,l.id LIMIT $" + str(len(args)-1) + " OFFSET $" + str(len(args))
+	// 用户端只下发公开列；渠道、上游与密钥编号属于管理端信息。
+	query := "SELECT l.*,u.username,u.display_name AS user_display_name,l.model_display_name_snapshot AS model_display_name,CASE WHEN l.type='text' THEN l.task_id END AS text_request_id FROM request_logs l LEFT JOIN users u ON u.id=l.user_id"
+	if !admin {
+		query = userLogSelect + " FROM request_logs l LEFT JOIN generation_tasks t ON t.id=l.task_id"
+	}
+	items, err := rows(ctx, a.DB, query+" WHERE "+where+" ORDER BY l.started_at DESC,l.id LIMIT $"+str(len(args)-1)+" OFFSET $"+str(len(args)), args...)
+	return gin.H{"logs": items, "total": totals["total"], "totals": totals, "limit": limit, "offset": offset}, err
+}
+
+// 资金类筛选：只查账本，行结构与调用日志一致。
+func (a *App) listFundLogs(c *gin.Context, limit, offset int) (any, error) {
+	ctx := c.Request.Context()
+	from, err := queryTime(c, "from")
+	if err != nil {
+		return nil, err
+	}
+	to, err := queryTime(c, "to")
+	if err != nil {
+		return nil, err
+	}
+	where := "e.user_id=$1 AND e.kind=$2 AND ($3::timestamptz IS NULL OR e.created_at>=$3) AND ($4::timestamptz IS NULL OR e.created_at<=$4)"
+	args := []any{currentUser(c).ID, c.Query("type"), from, to}
+	var total int64
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries e WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+	args = append(args, limit, offset)
+	items, err := rows(ctx, a.DB, fundLogSelect+" FROM wallet_entries e WHERE "+where+" ORDER BY e.created_at DESC,e.id LIMIT $5 OFFSET $6", args...)
+	if err != nil {
+		return nil, err
+	}
+	formatFundLogs(items)
+	return gin.H{"logs": items, "total": total, "totals": nil, "limit": limit, "offset": offset}, nil
+}
+
+// 全部类型：调用记录与到账类账本按时间混排，调用类筛选条件存在时不并入账本。
+func (a *App) listMergedLogs(c *gin.Context, where string, args []any, totals Row, limit, offset int) (any, error) {
+	ctx := c.Request.Context()
+	from, err := queryTime(c, "from")
+	if err != nil {
+		return nil, err
+	}
+	to, err := queryTime(c, "to")
+	if err != nil {
+		return nil, err
+	}
+	uid := currentUser(c).ID
+	var walletCount int64
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries e WHERE e.user_id=$1 AND e.kind=ANY($2) AND ($3::timestamptz IS NULL OR e.created_at>=$3) AND ($4::timestamptz IS NULL OR e.created_at<=$4)", uid, fundLogKinds, from, to).Scan(&walletCount); err != nil {
+		return nil, err
+	}
+	base := len(args)
+	walletWhere := fmt.Sprintf("e.user_id=$%d AND e.kind=ANY($%d) AND ($%d::timestamptz IS NULL OR e.created_at>=$%d) AND ($%d::timestamptz IS NULL OR e.created_at<=$%d)", base+1, base+2, base+3, base+3, base+4, base+4)
+	query := "SELECT * FROM (" + userLogSelect + " FROM request_logs l LEFT JOIN generation_tasks t ON t.id=l.task_id WHERE " + where + " UNION ALL " + fundLogSelect + " FROM wallet_entries e WHERE " + walletWhere + ") merged ORDER BY started_at DESC,id LIMIT $" + str(base+5) + " OFFSET $" + str(base+6)
+	args = append(args, uid, fundLogKinds, from, to, limit, offset)
 	items, err := rows(ctx, a.DB, query, args...)
-	return gin.H{"logs": items, "total": total, "limit": limit, "offset": offset}, err
+	if err != nil {
+		return nil, err
+	}
+	formatFundLogs(items)
+	return gin.H{"logs": items, "total": integer(totals["total"]) + walletCount, "totals": totals, "limit": limit, "offset": offset}, nil
+}
+
+func formatFundLogs(items []Row) {
+	for _, row := range items {
+		if row["source"] != "wallet" {
+			continue
+		}
+		for _, key := range []string{"deltaBalance", "deltaFrozen", "balanceAfter", "frozenAfter"} {
+			row[key] = money(integer(row[key]))
+		}
+	}
 }
 
 func (a *App) adminStats(c *gin.Context) (any, error) {

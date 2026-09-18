@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -35,6 +36,9 @@ type User struct {
 }
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{2,63}$`)
+
+// 推荐码只允许字母数字与连字符（覆盖 4/6 位短码与存量 36 位 UUID），避免 LIKE 通配符等异常输入进入查询。
+var referralCodePattern = regexp.MustCompile(`^[0-9A-Za-z-]{1,36}$`)
 
 const userColumns = "u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.password_hash,u.group_id,g.name AS group_name"
 
@@ -268,14 +272,18 @@ func (a *App) authRoutes(r *gin.Engine) {
 			DisplayName    string `json:"displayName" binding:"required,max=80"`
 			Password       string `json:"password" binding:"required,min=10,max=128"`
 			InvitationCode string `json:"invitationCode" binding:"required"`
-			ReferralCode   string `json:"referralCode" binding:"omitempty,uuid"`
+			ReferralCode   string `json:"referralCode" binding:"omitempty,max=64"`
 		}](c)
 		if err != nil {
 			return nil, err
 		}
 		input.Username = strings.ToLower(strings.TrimSpace(input.Username))
+		input.ReferralCode = strings.TrimSpace(input.ReferralCode)
 		if !usernamePattern.MatchString(input.Username) {
 			return nil, problem(400, "invalid_username", "用户名需为 3–64 位字母、数字、点、横线或下划线")
+		}
+		if input.ReferralCode != "" && !referralCodePattern.MatchString(input.ReferralCode) {
+			return nil, problem(400, "invalid_referral", "推荐码无效，请核对邀请链接")
 		}
 		// 注册复用登录的账号/IP 频控边界。
 		if err = a.rate(c, "login:ip:"+hash(a.clientIP(c)), 30, 5*time.Minute); err != nil {
@@ -301,7 +309,11 @@ func (a *App) authRoutes(r *gin.Engine) {
 			if err != nil {
 				return err
 			}
-			user, err = scanUser(tx.QueryRow(ctx, "INSERT INTO users(id,username,password_hash,display_name) VALUES($1,$2,$3,$4) RETURNING id,username,display_name,role,status,must_change_password,last_login_at,created_at,password_hash,NULL,NULL", id, input.Username, passwordHash, strings.TrimSpace(input.DisplayName)))
+			referralCode, err := a.generateReferralCode(ctx, tx)
+			if err != nil {
+				return err
+			}
+			user, err = scanUser(tx.QueryRow(ctx, "INSERT INTO users(id,username,password_hash,display_name,referral_code) VALUES($1,$2,$3,$4,$5) RETURNING id,username,display_name,role,status,must_change_password,last_login_at,created_at,password_hash,NULL,NULL", id, input.Username, passwordHash, strings.TrimSpace(input.DisplayName), referralCode))
 			if err != nil {
 				return err
 			}
@@ -318,6 +330,13 @@ func (a *App) authRoutes(r *gin.Engine) {
 			return err
 		})
 		if err != nil {
+			var pg *pgconn.PgError
+			if errors.As(err, &pg) && pg.Code == "23505" {
+				if strings.Contains(pg.ConstraintName, "username") {
+					return nil, problem(409, "username_taken", "用户名已被使用，请换一个")
+				}
+				return nil, problem(409, "register_conflict", "注册冲突，请稍后重试")
+			}
 			return nil, err
 		}
 		a.setCookie(c, token)

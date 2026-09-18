@@ -12,7 +12,8 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 			CASE WHEN c.status<>'active' OR c.auto_disabled_at IS NOT NULL OR c.cooldown_until>now()
 				OR NOT EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active') THEN 'unavailable'
 			WHEN h.binding_id IS NULL OR (coalesce((c.monitoring->>'intervalMinutes')::int,0)>0
-				AND h.checked_at+((c.monitoring->>'intervalMinutes')::int*interval '1 minute')<now()) THEN 'unknown'
+				AND c.monitor_token IS NULL
+				AND h.checked_at+((c.monitoring->>'intervalMinutes')::int*2*interval '1 minute')<now()) THEN 'unknown'
 			WHEN h.error_category='authentication' THEN 'unknown'
 			WHEN h.status='healthy' THEN 'available' ELSE 'unavailable' END AS state
 		FROM model_channels b JOIN channels c ON c.id=b.channel_id LEFT JOIN channel_binding_checks h ON h.binding_id=b.id
@@ -31,7 +32,7 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 	// 以任务最终结果为可用性口径：故障转移后成功记为成功；内容拒绝、参数错误等非平台故障不计入。
 	stats, err := rows(ctx, a.DB, `SELECT model_id,count(*) AS total,count(*) FILTER(WHERE status='succeeded') AS ok
 		FROM generation_tasks WHERE finished_at>now()-interval '24 hours'
-			AND (status='succeeded' OR (status='failed' AND coalesce(error_code,'') NOT IN('content_policy','invalid_request','canceled','account_disabled','model_forbidden','storage_quota','insufficient_balance')))
+			AND (status='succeeded' OR (status='failed' AND coalesce(error_code,'') NOT IN('content_policy','invalid_request','canceled','account_disabled','model_forbidden','storage_quota','insufficient_balance','moderation_rejected')))
 		GROUP BY model_id`)
 	if err != nil {
 		return nil, err
@@ -39,15 +40,16 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 	checks, err := rows(ctx, a.DB, `SELECT model_id,status,(extract(epoch FROM(finished_at-started_at))*1000)::bigint AS duration_ms,finished_at FROM(
 		SELECT model_id,status,started_at,finished_at,row_number() OVER(PARTITION BY model_id ORDER BY finished_at DESC) rn
 		FROM generation_tasks WHERE finished_at>now()-interval '24 hours'
-			AND (status='succeeded' OR (status='failed' AND coalesce(error_code,'') NOT IN('content_policy','invalid_request','canceled','account_disabled','model_forbidden','storage_quota','insufficient_balance')))) t
+			AND (status='succeeded' OR (status='failed' AND coalesce(error_code,'') NOT IN('content_policy','invalid_request','canceled','account_disabled','model_forbidden','storage_quota','insufficient_balance','moderation_rejected')))) t
 		WHERE rn<=40 ORDER BY finished_at`)
 	if err != nil {
 		return nil, err
 	}
-	uptime, history := map[string]float64{}, map[string][]Row{}
+	uptime, totals, history := map[string]float64{}, map[string]int64{}, map[string][]Row{}
 	for _, row := range stats {
 		if total := integer(row["total"]); total > 0 {
 			uptime[str(row["modelId"])] = float64(integer(row["ok"])) / float64(total)
+			totals[str(row["modelId"])] = total
 		}
 	}
 	for _, row := range checks {
@@ -63,6 +65,7 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 		}
 		if value, ok := uptime[id]; ok {
 			item["uptime"] = value
+			item["taskCount"] = totals[id]
 		}
 	}
 	return gin.H{"models": items}, nil

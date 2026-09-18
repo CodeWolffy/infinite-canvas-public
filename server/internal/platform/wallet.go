@@ -3,9 +3,9 @@ package platform
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
@@ -198,27 +198,6 @@ func (a *App) walletRoutes(api *gin.RouterGroup) {
 		}
 		return gin.H{"reward": money(reward), "alreadyCheckedIn": repeated}, nil
 	}))
-	api.GET("/user/wallet/entries", respond(func(c *gin.Context) (any, error) {
-		ctx := c.Request.Context()
-		limit, offset := pagination(c)
-		kind := c.Query("kind")
-		from, err := queryTime(c, "from")
-		if err != nil {
-			return nil, err
-		}
-		to, err := queryTime(c, "to")
-		if err != nil {
-			return nil, err
-		}
-		filter := "user_id=$1 AND ($2='' OR kind=$2) AND ($3::timestamptz IS NULL OR created_at>=$3) AND ($4::timestamptz IS NULL OR created_at<=$4)"
-		items, err := rows(ctx, a.DB, "SELECT * FROM wallet_entries WHERE "+filter+" ORDER BY created_at DESC,id LIMIT $5 OFFSET $6", currentUser(c).ID, kind, from, to, limit, offset)
-		if err != nil {
-			return nil, err
-		}
-		var count int64
-		err = a.DB.QueryRow(ctx, "SELECT count(*) FROM wallet_entries WHERE "+filter, currentUser(c).ID, kind, from, to).Scan(&count)
-		return gin.H{"entries": ledgerView(items), "total": count}, err
-	}))
 	api.POST("/user/payment-orders", respond(a.createPaymentOrder))
 	api.GET("/user/payment-orders", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)
@@ -280,6 +259,7 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		input, err := body[struct {
 			Note      string     `json:"note"`
 			MaxUses   int        `json:"maxUses" binding:"required,min=1"`
+			Count     int        `json:"count"`
 			ExpiresAt *time.Time `json:"expiresAt"`
 		}](c)
 		if err != nil {
@@ -288,22 +268,40 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		if input.ExpiresAt != nil && !input.ExpiresAt.After(time.Now()) {
 			return nil, problem(400, "invalid_expiry", "邀请码有效期必须晚于现在")
 		}
-		codeBytes := make([]byte, 24)
-		if _, err = rand.Read(codeBytes); err != nil {
+		count := input.Count
+		if count <= 0 {
+			count = 1
+		}
+		if count > 100 {
+			return nil, problem(400, "invalid_count", "单次最多批量生成 100 张邀请码")
+		}
+		ctx := c.Request.Context()
+		secrets := make([]string, 0, count)
+		items := make([]Row, 0, count)
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			for i := 0; i < count; i++ {
+				code := strings.ReplaceAll(uuid.NewString(), "-", "")
+				invitation, err := one(ctx, tx, "INSERT INTO invitations(code_hash,code_hint,created_by,note,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, input.MaxUses, input.ExpiresAt)
+				if err != nil {
+					return err
+				}
+				secrets = append(secrets, code)
+				items = append(items, invitation)
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "invitation.create", fmt.Sprintf("count:%d", count), gin.H{"maxUses": input.MaxUses, "count": count})
+		})
+		if err != nil {
 			return nil, err
 		}
-		code := base64.RawURLEncoding.EncodeToString(codeBytes)
-		ctx := c.Request.Context()
-		var invitation Row
-		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			var err error
-			invitation, err = one(ctx, tx, "INSERT INTO invitations(code_hash,code_hint,created_by,note,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:6]+"…", currentUser(c).ID, input.Note, input.MaxUses, input.ExpiresAt)
-			if err != nil {
-				return err
-			}
-			return a.audit(ctx, tx, currentUser(c).ID, "invitation.create", str(invitation["id"]), gin.H{"maxUses": input.MaxUses})
-		})
-		return gin.H{"invitation": invitation, "code": code}, err
+		firstCode := ""
+		if len(secrets) > 0 {
+			firstCode = secrets[0]
+		}
+		var firstItem Row
+		if len(items) > 0 {
+			firstItem = items[0]
+		}
+		return gin.H{"invitation": firstItem, "code": firstCode, "invitations": items, "codes": secrets}, nil
 	}))
 	admin.PATCH("/invitations/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

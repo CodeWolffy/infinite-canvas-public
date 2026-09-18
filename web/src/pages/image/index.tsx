@@ -1,26 +1,29 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Select, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { saveAs } from "file-saver";
 import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { createZip } from "@/lib/zip";
-import { modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { createGenerationBatch, deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
-import { platformImageParameters, resolvePlatformImageModelId } from "@/services/api/image";
+import { createGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { platformImageParameters } from "@/services/api/image";
+import { selectedPlatformModel } from "@/services/api/tasks";
 import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { useGenerationBatches, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
@@ -88,25 +91,25 @@ export default function ImagePage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const [models, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
+    const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
+        toLog: (detail) => ({ log: detailToLog(detail, modelsRef.current), results: detail.tasks.map(taskToResult) }),
+        onDetail: (detail) => {
+            detail.tasks.forEach((task) => {
+                if (task.image?.mediaId) void ensureImagePreview(task.image.mediaId);
+            });
+            detail.referenceMediaIds.forEach((id) => void ensureImagePreview(id));
+        },
+        notifyKeys: { success: "imageWorkbench.generated", title: "imageWorkbench.notificationTitle" },
+    });
     const [modelId, setModelId] = useState(remixState?.modelId || "");
     const [initialized, setInitialized] = useState(false);
     const [prompt, setPrompt] = useState(remixState?.prompt || "");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
-    const [results, setResults] = useState<GenerationResult[]>([]);
-    const [logs, setLogs] = useState<GenerationLog[]>([]);
-    const [activeBatchIds, setActiveBatchIds] = useState<string[]>([]);
-    const activeBatchIdsRef = useRef<string[]>([]);
-    const previewLogIdRef = useRef("");
-    const agentTasksRef = useRef(new Map<string, string>());
-    const watchedBatchesRef = useRef(new Set<string>());
-    const defaultTitleRef = useRef(document.title);
-    const pollRef = useRef<() => void>(() => {});
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
-    const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [isReferenceDragActive, setIsReferenceDragActive] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
     const [generating, setGenerating] = useState(false);
@@ -119,24 +122,6 @@ export default function ImagePage() {
     const preferencesRef = useRef<Record<string, unknown>>({});
 
     useEffect(() => {
-        activeBatchIdsRef.current = activeBatchIds;
-    }, [activeBatchIds]);
-
-    useEffect(() => {
-        const syncTitle = () => {
-            const count = activeBatchIdsRef.current.length;
-            document.title = count ? t("imageWorkbench.runningTabTitle", { count }) : defaultTitleRef.current;
-        };
-        if (!document.hidden) syncTitle();
-        document.addEventListener("visibilitychange", syncTitle);
-        return () => document.removeEventListener("visibilitychange", syncTitle);
-    }, [activeBatchIds.length, t]);
-
-    useEffect(() => {
-        previewLogIdRef.current = previewLog?.id ?? "";
-    }, [previewLog]);
-
-    useEffect(() => {
         const sessionVersion = useUserStore.getState().sessionVersion;
         let disposed = false;
         void Promise.all([getPublicModels(), listGenerationBatches(), getGenerationPreferences()]).then(async ([availableModels, batchPage, preferences]) => {
@@ -147,7 +132,9 @@ export default function ImagePage() {
             modelsRef.current = imageModels;
             setModels(imageModels);
             const preferredModelId = typeof preferences.imageModelId === "string" && imageModels.some((item) => item.id === preferences.imageModelId) ? preferences.imageModelId : imageModels[0]?.id || "";
-            setModelId((current) => current || preferredModelId);
+            const initialModel = remixState?.modelId || preferredModelId;
+            setModelId(initialModel);
+            if (initialModel) updateConfig("imageModel", initialModel);
             for (const key of ["quality", "size", "count", "background"] as const) {
                 if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
             }
@@ -172,80 +159,11 @@ export default function ImagePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    useEffect(() => {
-        if (!activeBatchIds.length) return;
-        const timer = window.setInterval(() => pollRef.current(), 1800);
-        return () => window.clearInterval(timer);
-    }, [activeBatchIds]);
-
-    const activeModel = models.find((item) => item.id === modelId);
-    const canGenerate = Boolean(prompt.trim() && modelId && !generating);
+    const model = modelId || effectiveConfig.imageModel || effectiveConfig.model;
+    const canGenerate = Boolean(prompt.trim() && model && !generating);
     const generationCount = Math.max(1, Math.min(20, Number(config.count) || 1));
     const failedResultIndexes = results.flatMap((item, index) => (item.status === "failed" ? [index] : []));
     const successImages = results.flatMap((item) => (item.status === "success" && item.image ? [item.image] : []));
-
-    const ensureNotifyPermission = () => {
-        if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
-    };
-
-    const notifyCompletion = (detail: GenerationBatchDetail) => {
-        const successCount = detail.tasks.filter((task) => task.status === "succeeded").length;
-        if (successCount) message.success(t("imageWorkbench.generated"));
-        else message.error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || t("workbench.generationFailed"));
-        if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-            document.title = t("imageWorkbench.completedTabTitle");
-            const notification = new Notification(t("imageWorkbench.notificationTitle"), { body: detail.batch.prompt.slice(0, 80), icon: "/logo.svg" });
-            notification.onclick = () => {
-                window.focus();
-                notification.close();
-            };
-        }
-    };
-
-    const settleAgentTask = (batchId: string, detail: GenerationBatchDetail) => {
-        const agentTaskId = agentTasksRef.current.get(batchId);
-        if (!agentTaskId) return;
-        agentTasksRef.current.delete(batchId);
-        const successCount = detail.tasks.filter((task) => task.status === "succeeded").length;
-        updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount: detail.tasks.filter((task) => task.status === "failed" || task.status === "canceled").length, error: successCount ? undefined : detail.tasks.find((task) => task.errorMessage)?.errorMessage ?? undefined });
-    };
-
-    const applyDetail = (detail: GenerationBatchDetail) => {
-        const log = detailToLog(detail, modelsRef.current);
-        detail.tasks.forEach((t) => {
-            if (t.image?.mediaId) void ensureImagePreview(t.image.mediaId);
-        });
-        detail.referenceMediaIds.forEach((id) => void ensureImagePreview(id));
-        setLogs((current) => [log, ...current.filter((item) => item.id !== log.id)].sort((a, b) => b.createdAt - a.createdAt));
-        const active = log.status === "pending";
-        setActiveBatchIds((current) => {
-            const rest = current.filter((id) => id !== log.id);
-            return active ? [...rest, log.id] : rest;
-        });
-        if (active) watchedBatchesRef.current.add(log.id);
-        else if (watchedBatchesRef.current.delete(log.id)) {
-            settleAgentTask(log.id, detail);
-            notifyCompletion(detail);
-        }
-        return { log, results: detail.tasks.map(taskToResult) };
-    };
-
-    const pollActiveBatches = async () => {
-        await Promise.all(
-            activeBatchIdsRef.current.map(async (batchId) => {
-                try {
-                    const applied = applyDetail(await getGenerationBatch(batchId));
-                    if (previewLogIdRef.current === batchId) {
-                        setPreviewLog(applied.log);
-                        setResults(applied.results);
-                    }
-                } catch {
-                    return;
-                }
-            }),
-        );
-    };
-    pollRef.current = () => void pollActiveBatches();
 
     const addReferences = async (files?: FileList | null) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
@@ -307,7 +225,8 @@ export default function ImagePage() {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.promptRequired") });
             return;
         }
-        if (!modelId) {
+        const currentModel = model;
+        if (!currentModel) {
             generatingRef.current = false;
             setGenerating(false);
             message.warning(t("imageWorkbench.noModelHint"));
@@ -317,15 +236,15 @@ export default function ImagePage() {
         try {
             ensureNotifyPermission();
             const referenceMediaIds = references.map((item) => item.storageKey).filter((id): id is string => Boolean(id));
-            const resolvedModelId = await resolvePlatformImageModelId(modelId);
+            const targetModelId = selectedPlatformModel(modelsRef.current, currentModel, "image");
             assertCurrentSession(sessionVersion);
-            const created = await createGenerationBatch({ modelId: resolvedModelId, prompt: text, count: generationCount, parameters: generationParameters(effectiveConfig), referenceMediaIds });
+            const created = await createGenerationBatch({ modelId: targetModelId, prompt: text, count: generationCount, parameters: platformImageParameters(effectiveConfig), referenceMediaIds });
             assertCurrentSession(sessionVersion);
             const applied = applyDetail({ ...created, referenceMediaIds });
             setPreviewLog(applied.log);
             setResults(applied.results);
             if (agentTaskId) {
-                agentTasksRef.current.set(created.batch.id, agentTaskId);
+                registerAgentTask(created.batch.id, agentTaskId);
                 updateAgentTask(agentTaskId, { status: "running", error: undefined });
             }
         } catch (error) {
@@ -344,7 +263,11 @@ export default function ImagePage() {
         if (!initialized || !imageCommand || imageCommand.nonce === processedCommandRef.current) return;
         processedCommandRef.current = imageCommand.nonce;
         clearImageCommand();
-        if (imageCommand.config?.model) setModelId(modelOptionName(imageCommand.config.model));
+        if (imageCommand.config?.model) {
+            const nextModel = modelOptionName(imageCommand.config.model);
+            setModelId(nextModel);
+            updateConfig("imageModel", nextModel);
+        }
         for (const key of ["quality", "size", "count"] as const) {
             const value = imageCommand.config?.[key];
             if (typeof value === "string") updateConfig(key, value);
@@ -449,17 +372,11 @@ export default function ImagePage() {
             cancelText: "取消",
             okButtonProps: { danger: true },
             onOk: async () => {
-                const results = await Promise.allSettled(selected.map((log) => deleteGenerationBatch(log.id)));
-                const deletedIds = selected.flatMap((log, index) => results[index]?.status === "fulfilled" ? [log.id] : []);
+                const deletedIds = await deleteBatches(selected.map((log) => log.id));
                 if (deletedIds.length) {
-                    const deleted = new Set(deletedIds);
-                    setLogs((current) => current.filter((log) => !deleted.has(log.id)));
-                    setSelectedLogIds((current) => current.filter((id) => !deleted.has(id)));
-                    if (previewLog && deleted.has(previewLog.id)) createSession();
-                    message.success(`已删除 ${deletedIds.length} 条生成记录`);
+                    setSelectedLogIds((current) => current.filter((id) => !deletedIds.includes(id)));
+                    if (previewLog && deletedIds.includes(previewLog.id)) createSession();
                 }
-                const failure = results.find((result) => result.status === "rejected");
-                if (failure?.status === "rejected") message.error(failure.reason instanceof Error ? failure.reason.message : "部分记录删除失败");
             },
         });
     };
@@ -470,6 +387,11 @@ export default function ImagePage() {
             const applied = applyDetail(await getGenerationBatch(log.id));
             setPreviewLog(applied.log);
             setResults(applied.results);
+            if (applied.log.config.imageModel || applied.log.modelId) {
+                const loadedModel = applied.log.config.imageModel || applied.log.modelId;
+                setModelId(loadedModel);
+                updateConfig("imageModel", loadedModel);
+            }
             if (applied.log.status !== "pending") {
                 updateConfig("quality", applied.log.quality || "auto");
                 updateConfig("size", applied.log.size || "auto");
@@ -486,27 +408,21 @@ export default function ImagePage() {
         const retriedIds = new Set(settled.flatMap((result, position) => (result.status === "fulfilled" ? [targets[position]!.id] : [])));
         if (retriedIds.size) {
             setResults((value) => value.map((item) => (retriedIds.has(item.id) ? { ...item, status: "queued" as const, error: undefined, image: undefined } : item)));
-            const batchId = previewLogIdRef.current;
-            if (batchId) {
-                watchedBatchesRef.current.add(batchId);
-                setActiveBatchIds((current) => (current.includes(batchId) ? current : [...current, batchId]));
-            }
+            if (previewLogIdRef.current) watchBatch(previewLogIdRef.current);
         }
         const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
         if (failure) message.error(failure.reason instanceof Error ? failure.reason.message : t("workbench.generationFailed"));
     };
 
-    const selectModel = (value: string) => {
-        setModelId(value);
-        const preferences = { ...preferencesRef.current, imageModelId: value };
-        preferencesRef.current = preferences;
-        void updateGenerationPreferences(preferences).catch(() => undefined);
-    };
+    const selectModel = (value: string) => updateGenerationConfig("imageModel", value);
 
     const updateGenerationConfig: UpdateAiConfig = (key, value) => {
         updateConfig(key, value);
-        if (!["quality", "size", "count", "background"].includes(key)) return;
-        const preferences = { ...preferencesRef.current, [key]: value };
+        if (key === "imageModel" && typeof value === "string") {
+            setModelId(value);
+        }
+        if (!["quality", "size", "count", "background", "imageModel"].includes(key)) return;
+        const preferences = { ...preferencesRef.current, [key === "imageModel" ? "imageModelId" : key]: key === "imageModel" && typeof value === "string" ? modelOptionName(value) : value };
         preferencesRef.current = preferences;
         void updateGenerationPreferences(preferences).catch(() => undefined);
     };
@@ -621,15 +537,15 @@ export default function ImagePage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {activeModel?.displayName || "请选择模型"} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                    {modelOptionLabel(effectiveConfig, model)} · {effectiveConfig.size} · {effectiveConfig.quality}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     {t("workbench.adjust")}
                                 </Button>
                             </div>
 
-                            <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} models={models} modelId={modelId} onModelChange={selectModel} updateConfig={updateGenerationConfig} />
+                            <div className="hidden space-y-4 sm:block">
+                                <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} />
                             </div>
                         </div>
 
@@ -702,9 +618,9 @@ export default function ImagePage() {
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
             </Drawer>
-            <Drawer title={t("workbench.settings")} placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-                <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} models={models} modelId={modelId} onModelChange={selectModel} updateConfig={updateGenerationConfig} />
+            <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+                <div className="space-y-4 pb-4">
+                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} />
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
@@ -713,35 +629,19 @@ export default function ImagePage() {
     );
 }
 
-function GenerationSettings({ config, models, modelId, onModelChange, updateConfig }: { config: AiConfig; models: PublicModel[]; modelId: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig }) {
+function GenerationSettings({ config, model, updateConfig }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig }) {
+    const { message } = App.useApp();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
 
     return (
-        <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
+        <div className="space-y-4">
+            <label className="block min-w-0">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                {models.length ? (
-                    <Select
-                        value={modelId || undefined}
-                        onChange={onModelChange}
-                        placeholder={t("imageWorkbench.noModelHint")}
-                        className="w-full"
-                        options={models.map((model) => {
-                            const price = model.pricePerImage != null ? ` (¥${model.pricePerImage}/张)` : "";
-                            return { value: model.id, label: `${model.displayName}${price}` };
-                        })}
-                    />
-                ) : (
-                    <Typography.Text type="warning" className="block text-xs leading-5">
-                        {t("imageWorkbench.noModelHint")}
-                    </Typography.Text>
-                )}
+                <ModelPicker config={config} value={model} onChange={(value) => updateConfig("imageModel", value)} capability="image" fullWidth onMissingConfig={() => message.warning(t("imageWorkbench.noModelHint"))} />
             </label>
-            <div className="col-span-2">
-                <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" maxCount={20} />
-            </div>
-        </>
+            <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="w-full space-y-4" maxCount={20} />
+        </div>
     );
 }
 
@@ -987,17 +887,9 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
     );
 }
 
-function generationParameters(config: AiConfig) {
-    return platformImageParameters(config);
-}
-
-function isActiveTask(task: GenerationTask) {
-    return task.status === "reviewing" || task.status === "queued" || task.status === "running";
-}
-
 function taskToResult(task: GenerationTask): GenerationResult {
     if (task.status === "succeeded" && task.image) {
-        return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: taskDuration(task), width: 0, height: 0, bytes: 0 } };
+        return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: generationTaskDuration(task), width: 0, height: 0, bytes: 0 } };
     }
     if (task.status === "failed" || task.status === "canceled") return { id: task.id, status: "failed", error: task.errorMessage || task.errorCode || i18n.t("workbench.generationFailed") };
     return { id: task.id, status: task.status === "reviewing" ? "reviewing" : task.status === "running" ? "running" : "queued" };
@@ -1009,7 +901,7 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
     const images = results.flatMap((result) => result.image ? [result.image] : []);
     const successCount = detail.tasks.filter((task) => task.status === "succeeded").length;
     const failCount = detail.tasks.filter((task) => task.status === "failed" || task.status === "canceled").length;
-    const active = detail.tasks.some(isActiveTask);
+    const active = detail.tasks.some(isActiveGenerationTask);
     const model = models.find((item) => item.id === detail.batch.modelId);
     return {
         id: detail.batch.id,
@@ -1022,7 +914,7 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
         config: { model: detail.batch.modelId, imageModel: detail.batch.modelId, quality: String(parameters.quality || "auto"), size: String(parameters.size || "auto"), count: String(detail.batch.requestedCount) },
         references: detail.referenceMediaIds.map((mediaId, index) => ({ id: mediaId, name: `reference-${index + 1}`, type: "image", dataUrl: `/api/media/${mediaId}`, storageKey: mediaId })),
         referenceMediaIds: detail.referenceMediaIds,
-        durationMs: Math.max(0, ...detail.tasks.map(taskDuration)),
+        durationMs: Math.max(0, ...detail.tasks.map(generationTaskDuration)),
         successCount,
         failCount,
         imageCount: detail.batch.requestedCount,
@@ -1034,12 +926,6 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
         thumbnailMediaIds: images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)),
         thumbnails: images.map((image) => image.dataUrl),
     };
-}
-
-function taskDuration(task: GenerationTask) {
-    const startedAt = task.startedAt || task.queuedAt;
-    const finishedAt = task.finishedAt || (isActiveTask(task) ? new Date().toISOString() : startedAt);
-    return Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime());
 }
 
 function moveListItem<T>(items: T[], index: number, offset: number) {

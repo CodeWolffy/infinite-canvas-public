@@ -7,6 +7,7 @@ import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { authReturnPath } from "@/lib/auth-return-path";
+import { affiliateCodeFromSearch, getAffiliateCode, saveAffiliateCode } from "@/lib/affiliate";
 
 type LoginValues = { username: string; password: string; displayName?: string; invitationCode?: string; code?: string; referralCode?: string };
 
@@ -22,8 +23,10 @@ export default function LoginPage() {
     const login = useUserStore((state) => state.login);
     const completeMfa = useUserStore((state) => state.completeMfa);
     const register = useUserStore((state) => state.register);
-    const referralCode = new URLSearchParams(location.search).get("ref") || "";
-    const [registering, setRegistering] = useState(Boolean(referralCode));
+    const affParam = affiliateCodeFromSearch(location.search);
+    const referralCode = affParam || getAffiliateCode();
+    const isSignUpRoute = location.pathname === "/sign-up" || location.pathname === "/register";
+    const [registering, setRegistering] = useState(isSignUpRoute || Boolean(affParam));
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
     const [challenge, setChallenge] = useState("");
@@ -31,6 +34,12 @@ export default function LoginPage() {
     useEffect(() => {
         void initialize();
     }, [initialize]);
+
+    useEffect(() => {
+        if (affParam) {
+            saveAffiliateCode(affParam);
+        }
+    }, [affParam]);
 
     if (user) return <Navigate to={user.mustChangePassword ? "/change-password" : target} replace state={{ from: target }} />;
 
@@ -83,7 +92,7 @@ export default function LoginPage() {
                             <Input.Password size="large" prefix={<LockKeyhole className="size-4 text-stone-400" />} autoComplete={registering ? "new-password" : "current-password"} placeholder="请输入密码" />
                         </Form.Item>
                         {registering ? <Form.Item name="invitationCode" label="邀请码" rules={[{ required: true, message: "请输入邀请码" }]}><Input size="large" autoComplete="off" placeholder="请输入管理员提供的邀请码" /></Form.Item> : null}
-                        {registering ? <Form.Item name="referralCode" label="好友推荐码（选填）" extra="推荐码用于记录邀请关系，注册仍需填写上方邀请码。"><Input autoComplete="off" placeholder="通过好友推荐链接可自动填入" /></Form.Item> : null}
+                        {registering ? <Form.Item name="referralCode" label="好友邀请码（选填）" extra="邀请码用于记录邀请返利关系，注册仍需填写上方邀请码。"><Input autoComplete="off" placeholder="通过好友邀请链接可自动填入" /></Form.Item> : null}
                         </>}
                         <Button type="primary" size="large" htmlType="submit" loading={submitting || status === "loading"} block className="mt-2" iconPlacement="end" icon={<ArrowRight className="size-4" />}>{challenge ? "验证并登录" : registering ? "注册并开始创作" : "登录"}</Button>
                     </Form>

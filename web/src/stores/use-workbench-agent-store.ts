@@ -10,7 +10,7 @@ export type WorkbenchCommand = {
     taskId?: string;
     prompt?: string;
     run: boolean;
-    config?: { model?: string; quality?: string; size?: string; count?: string };
+    config?: { model?: string; quality?: string; size?: string; count?: string; seconds?: number | string; resolution?: string; mode?: string };
 };
 
 export type WorkbenchGenerationTask = {

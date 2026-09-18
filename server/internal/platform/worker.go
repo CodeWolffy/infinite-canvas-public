@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -145,13 +146,13 @@ func classify(err error) *upstreamError {
 
 type channel struct {
 	ID, Name, Protocol, BaseURL, APIKey, UpstreamModel, BindingID string
-	KeyID, KeyStrategy, TaskAdapter                             string
+	KeyID, KeyStrategy, TaskAdapter, EndpointPath               string
 	TimeoutMS, MaxConcurrency, CooldownSeconds, Priority, Weight int
 	CostConfig                                                   map[string]any
 }
 
 func (a *App) channelFromRow(row Row) (channel, error) {
-	c := channel{ID: str(row["id"]), BindingID: str(row["bindingId"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"]))}
+	c := channel{ID: str(row["id"]), BindingID: str(row["bindingId"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"])), EndpointPath: str(row["endpointPath"])}
 	c.CostConfig = object(row["costConfig"])
 	c.KeyStrategy, c.TaskAdapter = str(row["keyStrategy"]), str(row["taskAdapter"])
 	return c, nil
@@ -231,7 +232,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 			for ctx.Err() == nil {
 				task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=coalesce(started_at,now()),deadline=coalesce(deadline,now()+interval '480 seconds') WHERE id=(SELECT id FROM generation_tasks WHERE status='queued' AND available_at<=now() ORDER BY available_at,queued_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", uuid.NewString())
 				if err == nil {
-					a.executeTask(ctx, task)
+					a.executeGuarded(ctx, task)
 					continue
 				}
 				if !errors.Is(err, notFound) && ctx.Err() == nil {
@@ -289,6 +290,21 @@ func (a *App) StartWorkers(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// 任务执行 panic 不打崩进程：提前到期租约，交由既有恢复循环接管重试或退款。
+func (a *App) executeGuarded(ctx context.Context, task Row) {
+	a.guardExecution(ctx, task, func() { a.executeTask(ctx, task) })
+}
+
+func (a *App) guardExecution(ctx context.Context, task Row, run func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("任务执行异常，等待恢复循环接管", "task", str(task["id"]), "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			_, _ = a.DB.Exec(context.WithoutCancel(ctx), "UPDATE generation_tasks SET deadline=now() WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
+		}
+	}()
+	run()
 }
 
 func (a *App) executeTask(root context.Context, task Row) {

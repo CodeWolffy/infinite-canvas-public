@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Spin } from "antd";
-import { BarChart3, History, Images, LayoutDashboard, LogOut, ShieldCheck, Users, Wallet } from "lucide-react";
+import { BarChart3, History, Images, LayoutDashboard, LogOut, UserRound, Wallet } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -20,12 +20,11 @@ export default function UserCenterLayout() {
     const setTheme = useThemeStore((state) => state.setTheme);
 
     const userLinks = [
-        { to: "/user/wallet", label: "余额与签到", icon: Wallet },
-        { to: "/user/referrals", label: "邀请好友", icon: Users },
+        { to: "/user/wallet", label: t("userCenter.navWallet"), icon: Wallet },
         { to: "/user/generations", label: t("userCenter.navGenerations"), icon: Images },
         { to: "/user/stats", label: t("userCenter.navStats"), icon: BarChart3 },
         { to: "/user/logs", label: t("userCenter.navLogs"), icon: History },
-        { to: "/user/account", label: t("userCenter.navAccount"), icon: ShieldCheck },
+        { to: "/user/account", label: t("userCenter.navAccount"), icon: UserRound },
     ];
 
     return (

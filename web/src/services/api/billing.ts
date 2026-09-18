@@ -15,7 +15,6 @@ export const walletEntryLabels: Record<string, string> = { recharge: "充值 / �
 
 export const getWallet = () => apiRequest<WalletOverview>("/api/user/wallet");
 export const checkin = () => apiRequest<{ reward: string; alreadyCheckedIn: boolean }>("/api/user/checkin", { method: "POST", body: {} });
-export const getWalletEntries = (offset = 0, params: { kind?: string; from?: string; to?: string } = {}) => apiRequest<{ entries: WalletEntry[]; total: number }>(`/api/user/wallet/entries?${serializeApiParams({ limit: 50, offset, ...params })}`);
 export const getPaymentOrders = (offset = 0) => apiRequest<{ orders: PaymentOrder[] }>(`/api/user/payment-orders?limit=50&offset=${offset}`);
 export const createPaymentOrder = (body: { channelId: string; method: PaymentMethod; amount: string; requestId: string }) => apiRequest<{ order: PaymentOrder }>("/api/user/payment-orders", { method: "POST", body });
 export const getPaymentOrder = (id: string) => apiRequest<{ order: PaymentOrder }>(`/api/user/payment-orders/${id}`);
@@ -29,7 +28,7 @@ export const adjustBalance = (id: string, body: { amount: string; note: string; 
 export const getPlatformSettings = () => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings");
 export const savePlatformSettings = (body: PlatformSettings) => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings", { method: "PUT", body });
 export const getInvitations = (offset = 0) => apiRequest<{ invitations: Invitation[] }>(`/api/admin/invitations?limit=50&offset=${offset}`);
-export const createInvitation = (body: { note: string; maxUses: number; expiresAt?: string }) => apiRequest<{ invitation: Invitation; code: string }>("/api/admin/invitations", { method: "POST", body });
+export const createInvitation = (body: { note: string; maxUses: number; count?: number; expiresAt?: string }) => apiRequest<{ invitation?: Invitation; code?: string; invitations?: Invitation[]; codes?: string[] }>("/api/admin/invitations", { method: "POST", body });
 export const setInvitationDisabled = (id: string, disabled: boolean) => apiRequest<void>(`/api/admin/invitations/${id}`, { method: "PATCH", body: { disabled } });
 export const getAuditLogs = (offset = 0) => apiRequest<{ logs: Array<{ id: string; username: string; action: string; target: string; detail: Record<string, unknown>; createdAt: string }> }>(`/api/admin/audit-logs?limit=50&offset=${offset}`);
 

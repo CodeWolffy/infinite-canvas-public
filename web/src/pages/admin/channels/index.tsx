@@ -107,7 +107,7 @@ export default function AdminChannelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         form.resetFields();
-        form.setFieldsValue(editing ? { name: editing.name, capability: editing.capability, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKeysText: "", keyStrategy: editing.keyStrategy, taskAdapter: editing.taskAdapter } : { capability: category.value, protocol: "openai", status: "disabled", timeoutSeconds: 300, maxConcurrency: 20, cooldownSeconds: 120, keyStrategy: "round_robin", taskAdapter: "" });
+        form.setFieldsValue(editing ? { name: editing.name, capability: editing.capability, protocol: editing.protocol, endpointPath: editing.endpointPath || "chat/completions", baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKeysText: "", keyStrategy: editing.keyStrategy, taskAdapter: editing.taskAdapter } : { capability: category.value, protocol: "openai", endpointPath: "chat/completions", status: "disabled", timeoutSeconds: 300, maxConcurrency: 20, cooldownSeconds: 120, keyStrategy: "round_robin", taskAdapter: "" });
     }, [editing, form, category.value]);
 
     const columns: TableColumnsType<AdminChannel> = [
@@ -166,6 +166,7 @@ export default function AdminChannelsPage() {
                     {editing ? <Form.Item name="capability" label="渠道类型" extra="仅未绑定模型的渠道可修改类型；密钥与调度设置继续保留。" rules={[{ required: true }]}><Select options={modelCapabilities.map(({ value, label }) => ({ value, label }))} onChange={(value) => { form.setFieldValue("taskAdapter", ""); if (value !== "text" && form.getFieldValue("protocol") === "anthropic") form.setFieldValue("protocol", "openai"); }} /></Form.Item> : <Form.Item name="capability" hidden><Input /></Form.Item>}
                     <Form.Item name="name" label="渠道名称" rules={[{ required: true, message: "请输入渠道名称" }]}><Input placeholder={`例如 主用${capabilityLabel(formCapability)}渠道`} /></Form.Item>
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="接口协议" rules={[{ required: true }]}><Select onChange={() => form.setFieldValue("taskAdapter", "")} options={channelProtocolOptions.filter((item) => formCapability === "text" || item.value !== "anthropic")} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
+                    {protocol === "openai" && formCapability === "text" ? <Form.Item name="endpointPath" label="接口端点" extra="通用 OpenAI 兼容服务使用 /chat/completions；若上游为 Responses API 规范请选择 /responses。"><Select options={[{ value: "chat/completions", label: "/chat/completions（Chat Completions 兼容）" }, { value: "responses", label: "/responses（OpenAI Responses API）" }]} /></Form.Item> : null}
                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请输入 Base URL" }, { type: "url", message: "请输入有效 URL" }]}><Input placeholder="https://api.example.com/v1" /></Form.Item>
                     {editing ? <ChannelKeys channelId={editing.id} /> : null}
                     <Form.Item name="apiKeysText" label="添加 API Key（每行一个）" extra="只追加新密钥，留空保持不变；服务端加密保存，不回显明文。"><Input.TextArea rows={3} autoComplete="off" className="font-mono [-webkit-text-security:disc]" placeholder="粘贴一个或多个 API Key" /></Form.Item>
@@ -174,7 +175,7 @@ export default function AdminChannelsPage() {
                     {formCapability === "video" && adaptersQuery.error ? <Alert className="mb-4" type="error" showIcon title={adaptersQuery.error.message} /> : null}
                     <div className="grid grid-cols-3 gap-4">
                         <Form.Item name="timeoutSeconds" label="超时（秒）" extra={formCapability === "video" ? "按上游视频生成耗时配置。" : undefined} rules={[{ required: true }]}><InputNumber className="!w-full" min={1} precision={0} /></Form.Item>
-                        <Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={20} precision={0} /></Form.Item>
+                        <Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item>
                         <Form.Item name="cooldownSeconds" label="故障冷却（秒）" tooltip="遇到网络超时、5xx 或频控时渠道暂停调度的时长，0 表示不冷却" rules={[{ required: true }]}><InputNumber className="w-full" min={0} max={86400} precision={0} /></Form.Item>
                     </div>
                     <Space className="flex justify-end"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saveMutation.isPending}>保存</Button></Space>
@@ -284,7 +285,7 @@ export default function AdminChannelsPage() {
 
 function channelPayload(values: ChannelValues) {
     const { timeoutSeconds, apiKeysText, ...rest } = values;
-    return { ...rest, taskAdapter: values.capability === "video" ? values.taskAdapter || "" : "", timeoutMs: timeoutSeconds * 1000, apiKeys: (apiKeysText || "").split(/\r?\n/).map((key) => key.trim()).filter(Boolean) };
+    return { ...rest, taskAdapter: values.capability === "video" ? values.taskAdapter || "" : "", endpointPath: values.protocol === "openai" ? (values.endpointPath || "chat/completions") : "", timeoutMs: timeoutSeconds * 1000, apiKeys: (apiKeysText || "").split(/\r?\n/).map((key) => key.trim()).filter(Boolean) };
 }
 
 function notifyError(notify: (content: string) => void) { return (error: Error) => notify(error.message || "操作失败"); }

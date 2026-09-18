@@ -217,6 +217,19 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 			}
 			finished = finished || done
 		} else {
+			eventType := str(payload["type"])
+			if eventType == "response.output_text.delta" {
+				delta = str(payload["delta"])
+			} else if eventType == "response.output_text.done" {
+				if delta == "" && content.Len() == 0 {
+					delta = str(payload["text"])
+				}
+			} else if eventType == "response.completed" || eventType == "response.done" {
+				finished = true
+			} else if outText := str(payload["output_text"]); outText != "" && !stream {
+				delta = outText
+				finished = true
+			}
 			choices, _ := payload["choices"].([]any)
 			if len(choices) > 0 {
 				choice := object(choices[0])
@@ -230,10 +243,26 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 				delta = str(message["content"])
 				finished = finished || str(choice["finish_reason"]) != ""
 			}
-			if usage := object(payload["usage"]); len(usage) > 0 {
-				result.PromptTokens = integer(usage["prompt_tokens"])
-				result.CachedTokens = integer(object(usage["prompt_tokens_details"])["cached_tokens"])
-				result.CompletionTokens = integer(usage["completion_tokens"])
+			usage := object(payload["usage"])
+			if len(usage) == 0 {
+				usage = object(object(payload["response"])["usage"])
+			}
+			if len(usage) > 0 {
+				if prompt := integer(usage["prompt_tokens"]); prompt > 0 {
+					result.PromptTokens = prompt
+				} else if input := integer(usage["input_tokens"]); input > 0 {
+					result.PromptTokens = input
+				}
+				if cached := integer(object(usage["prompt_tokens_details"])["cached_tokens"]); cached > 0 {
+					result.CachedTokens = cached
+				} else if cached := integer(object(usage["input_token_details"])["cached_tokens"]); cached > 0 {
+					result.CachedTokens = cached
+				}
+				if comp := integer(usage["completion_tokens"]); comp > 0 {
+					result.CompletionTokens = comp
+				} else if out := integer(usage["output_tokens"]); out > 0 {
+					result.CompletionTokens = out
+				}
 			}
 		}
 		if int64(content.Len()+len(delta)) > a.Config.MaxGenerated*2 {

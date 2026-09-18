@@ -2,14 +2,13 @@ package platform
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
@@ -273,11 +272,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		items := make([]Row, 0, count)
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			for i := 0; i < count; i++ {
-				codeBytes := make([]byte, 24)
-				if _, err := rand.Read(codeBytes); err != nil {
-					return err
-				}
-				code := "CD-" + base64.RawURLEncoding.EncodeToString(codeBytes)
+				code := strings.ReplaceAll(uuid.NewString(), "-", "")
 				created, err := one(ctx, tx, "INSERT INTO redeem_codes(code_hash,code_hint,created_by,note,amount_micros,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, amount, input.MaxUses, input.ExpiresAt)
 				if err != nil {
 					return err

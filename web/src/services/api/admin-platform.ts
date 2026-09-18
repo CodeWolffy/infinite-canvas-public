@@ -35,6 +35,7 @@ export type AdminChannel = {
     activeKeyCount: number;
     keyStrategy: "round_robin" | "random";
     taskAdapter: string;
+    endpointPath?: string;
     autoDisabledAt: string | null;
     consecutiveCheckFailures: number;
     latency?: { samples: number; p50Ms: number | null; p95Ms: number | null };
@@ -82,7 +83,7 @@ export type ModelChannelBinding = {
 };
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; inputPricePerMillion?: string | null; cachedPricePerMillion?: string | null; outputPricePerMillion?: string | null; pricePerSecond?: string | null; description?: string | null; config?: Record<string, unknown> };
-export type ChannelInput = Pick<AdminChannel, "name" | "capability" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency" | "keyStrategy"> & { cooldownSeconds?: number; apiKeys?: string[]; taskAdapter?: string };
+export type ChannelInput = Pick<AdminChannel, "name" | "capability" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency" | "keyStrategy"> & { cooldownSeconds?: number; apiKeys?: string[]; taskAdapter?: string; endpointPath?: string };
 export type ChannelKey = { id: string; keyHint: string; status: "active" | "disabled"; disabledReason: string | null; lastUsedAt: string | null; lastErrorCode: string | null };
 export const getChannelKeys = (id: string) => apiRequest<{ keys: ChannelKey[] }>(`/api/admin/channels/${id}/keys`);
 export const setChannelKeyStatus = (id: string, keyId: string, status: ChannelKey["status"]) => apiRequest<void>(`/api/admin/channels/${id}/keys/${keyId}`, { method: "PATCH", body: { status } });

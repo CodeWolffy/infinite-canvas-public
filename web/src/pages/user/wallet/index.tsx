@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, DatePicker, Descriptions, Drawer, Empty, Form, Input, InputNumber, QRCode, Select, Space, Table, Tabs, Tag, Typography } from "antd";
-import { ArrowDownToLine, Gift, RefreshCw, Ticket, Wallet } from "lucide-react";
+import { Alert, App, Button, Descriptions, Drawer, Empty, Form, Input, InputNumber, QRCode, Select, Space, Table, Tabs, Tag, Typography } from "antd";
+import { ArrowDownToLine, Copy, RefreshCw, Ticket, Users, Wallet } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import dayjs, { type Dayjs } from "dayjs";
-import { saveAs } from "file-saver";
+import dayjs from "dayjs";
 
-import { checkin, createPaymentOrder, getPaymentOrder, getPaymentOrders, getWallet, getWalletEntries, paymentMethodLabels, redeemCode, refreshPaymentOrder, walletEntryLabels, type PaymentMethod, type PaymentOrder, type WalletEntry } from "@/services/api/billing";
+import { useCopyText } from "@/hooks/use-copy-text";
+import { createPaymentOrder, getPaymentOrder, getPaymentOrders, getWallet, paymentMethodLabels, redeemCode, refreshPaymentOrder, type PaymentMethod, type PaymentOrder } from "@/services/api/billing";
+import { getReferrals, type Referral } from "@/services/api/platform-operations";
+import { generateAffiliateLink } from "@/lib/affiliate";
 import { useUserStore } from "@/stores/use-user-store";
 
 type RechargeValues = { channelId: string; method: PaymentMethod; amount: string };
@@ -19,29 +21,26 @@ export default function WalletPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [rechargeOpen, setRechargeOpen] = useState(false);
     const [activeOrder, setActiveOrder] = useState<string | null>(searchParams.get("order"));
-    const [page, setPage] = useState(1);
     const [orderPage, setOrderPage] = useState(1);
+    const [referralPage, setReferralPage] = useState(1);
+    const copy = useCopyText();
     const [form] = Form.useForm<RechargeValues>();
     const selectedChannel = Form.useWatch("channelId", form);
     const request = useRef<{ fingerprint: string; id: string } | null>(null);
     const overview = useQuery({ queryKey: ["wallet", sessionVersion], queryFn: getWallet });
-    const [kind, setKind] = useState("");
-    const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
-    const ledgerParams = { kind, from: range?.[0].startOf("day").toISOString(), to: range?.[1].add(1, "day").startOf("day").toISOString() };
-    const ledger = useQuery({ queryKey: ["wallet-entries", sessionVersion, page, ledgerParams], queryFn: () => getWalletEntries((page - 1) * 50, ledgerParams) });
     const orders = useQuery({ queryKey: ["payment-orders", sessionVersion, orderPage], queryFn: () => getPaymentOrders((orderPage - 1) * 50) });
+    const referrals = useQuery({ queryKey: ["referrals", sessionVersion, referralPage], queryFn: () => getReferrals((referralPage - 1) * 50) });
     const order = useQuery({ queryKey: ["payment-order", sessionVersion, activeOrder], queryFn: () => getPaymentOrder(activeOrder!), enabled: Boolean(activeOrder), refetchInterval: (query) => query.state.data?.order.status === "pending" ? 2500 : false });
-    const invalidate = () => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["wallet-entries"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); };
+    const invalidate = () => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); };
     const [redeemOpen, setRedeemOpen] = useState(false);
     const [redeemForm] = Form.useForm<{ code: string }>();
-    const redeem = useMutation({ mutationFn: (code: string) => redeemCode(code), onSuccess: (result) => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["wallet-entries"] }); setRedeemOpen(false); redeemForm.resetFields(); message.success(`兑换成功，到账 ¥${result.amount}`); }, onError: (error: Error) => message.error(error.message) });
-    const claim = useMutation({ mutationFn: checkin, onSuccess: (result) => { invalidate(); message.success(result.alreadyCheckedIn ? "今天已经领过签到奖励了" : `签到成功，获得 ¥${result.reward}`); }, onError: (error: Error) => message.error(error.message) });
+    const redeem = useMutation({ mutationFn: (code: string) => redeemCode(code), onSuccess: (result) => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); setRedeemOpen(false); redeemForm.resetFields(); message.success(`兑换成功，到账 ¥${result.amount}`); }, onError: (error: Error) => message.error(error.message) });
     const create = useMutation({ mutationFn: createPaymentOrder, onSuccess: ({ order }) => { setActiveOrder(order.id); setRechargeOpen(false); request.current = null; invalidate(); }, onError: (error: Error) => message.error(error.message) });
     const refresh = useMutation({ mutationFn: () => refreshPaymentOrder(activeOrder!), onSuccess: () => { void order.refetch(); invalidate(); }, onError: (error: Error) => message.error(error.message) });
     const orderStatus = order.data?.order.status;
-    useEffect(() => { if (orderStatus === "paid") { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["wallet-entries"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); } }, [orderStatus, queryClient]);
+    useEffect(() => { if (orderStatus === "paid") { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); } }, [orderStatus, queryClient]);
     const previousSession = useRef(sessionVersion);
-    useEffect(() => { if (previousSession.current !== sessionVersion) { setActiveOrder(null); setRechargeOpen(false); request.current = null; previousSession.current = sessionVersion; } }, [sessionVersion]);
+    useEffect(() => { if (previousSession.current !== sessionVersion) { setActiveOrder(null); setRechargeOpen(false); setReferralPage(1); request.current = null; previousSession.current = sessionVersion; } }, [sessionVersion]);
 
     const submit = (values: RechargeValues) => {
         const body = { ...values, amount: String(values.amount) };
@@ -53,12 +52,8 @@ export default function WalletPage() {
     const channel = channels.find((item) => item.id === selectedChannel);
     const payment = order.data?.order;
     const wallet = overview.data?.wallet;
-    const reward = overview.data?.checkin;
+    const referral = referrals.data;
     const summary = overview.data?.summary;
-    const exportLedger = () => {
-        const lines = [["时间", "类型", "余额变动", "冻结变动", "变动后余额", "说明"].join(","), ...(ledger.data?.entries || []).map((item) => [item.createdAt, walletEntryLabels[item.kind] || item.kind, item.deltaBalance, item.deltaFrozen, item.balanceAfter, item.note].map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))];
-        saveAs(new Blob([`\ufeff${lines.join("\n")}`], { type: "text/csv;charset=utf-8" }), `余额明细-${dayjs().format("YYYYMMDD")}.csv`);
-    };
 
     return (
         <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
@@ -66,30 +61,61 @@ export default function WalletPage() {
                 <div>
                     <div className="flex items-center gap-2 text-stone-500 mb-1">
                         <Wallet className="size-4 text-amber-500" />
-                        <span className="text-xs font-semibold uppercase tracking-wider">Balance & Check-in</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider">Wallet</span>
                     </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">我的余额</h1>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">我的钱包</h1>
                     <p className="mt-1 text-sm text-stone-500">
-                        账户余额充值、每日签到领额度与兑换码核销，余额永久有效不按周期清零。
+                        余额充值、兑换码核销与邀请好友返利，到账金额永久有效不按周期清零。
                     </p>
                 </div>
             </div>
         {overview.error ? <Alert className="mt-6" type="error" title={overview.error.message} action={<Button onClick={() => void overview.refetch()}>重试</Button>} /> : null}
-        <div className="my-8 grid gap-8 border-y border-border py-8 md:grid-cols-[1.3fr_1fr]">
-            <div><p className="text-sm text-muted-foreground">可用余额 · 人民币</p><p className="mt-3 font-mono text-4xl tracking-tight sm:text-5xl">¥ {wallet?.balance ?? "—"}</p><p className="mt-3 text-sm text-muted-foreground">生成中冻结 ¥{wallet?.frozen ?? "—"}</p><Button className="mt-6" type="primary" size="large" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button><Button className="ml-2" size="large" icon={<Ticket className="size-4" />} onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>{!channels.length && !overview.isPending ? <p className="mt-2 text-xs text-muted-foreground">充值渠道暂未开放</p> : null}</div>
-            <div className="flex flex-col items-start justify-center md:border-l md:border-border md:pl-10"><Gift className="mb-4 size-6" /><h2 className="text-lg font-medium">每天来，给灵感加一点余额</h2><p className="mb-5 mt-2 text-sm leading-6 text-muted-foreground">{reward?.enabled ? `今日随机奖励 ¥${reward.rewardMin} – ¥${reward.rewardMax}` : "签到奖励暂未开放"}<br />每天按北京时间计算，领取后直接计入余额。</p><Button disabled={!reward?.enabled || reward.checkedIn} loading={claim.isPending} onClick={() => claim.mutate()}>{reward?.checkedIn ? "今天已签到" : "领取今日奖励"}</Button></div>
+        <div className="rounded-xl border border-border">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-4">
+                <div>
+                    <p className="text-xs text-muted-foreground">可用余额 · 人民币</p>
+                    <p className="mt-1 font-mono text-3xl tracking-tight">¥ {wallet?.balance ?? "—"}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">生成中冻结 ¥{wallet?.frozen ?? "—"}</p>
+                </div>
+                <div className="flex flex-col items-start gap-1.5">
+                    <Space>
+                        <Button type="primary" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button>
+                        <Button icon={<Ticket className="size-4" />} onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>
+                    </Space>
+                    {!channels.length && !overview.isPending ? <p className="text-xs text-muted-foreground">充值渠道暂未开放</p> : null}
+                </div>
+            </div>
+            {summary ? <div className="grid grid-cols-2 border-t border-border sm:grid-cols-4">{[["本月实付", summary.spent], ["本月充值 / 兑换", summary.recharge], ["本月公益 / 邀请", summary.grants], ["本月签到", summary.checkin]].map(([label, value]) => <div key={label} className="px-5 py-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 font-mono text-base">¥{value}</p></div>)}</div> : null}
         </div>
-        <p className="mb-6 text-sm text-muted-foreground">余额、签到奖励和兑换码到账金额永久保留，不按周期清零。</p>
-        {summary ? <div className="mb-8 grid gap-6 border-b border-border pb-8 sm:grid-cols-2 lg:grid-cols-4">{[["本月实付", summary.spent], ["本月充值 / 兑换", summary.recharge], ["本月公益 / 邀请", summary.grants], ["本月签到", summary.checkin]].map(([label, value]) => <div key={label}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 font-mono text-xl">¥{value}</p></div>)}</div> : null}
+        <div className="rounded-xl border border-border px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                        <Users className="size-4 text-indigo-500" />
+                        <span className="text-sm font-medium">邀请好友</span>
+                    </div>
+                    {referral?.code ? (
+                        <div className="flex items-center gap-2 rounded-md bg-stone-100 px-2.5 py-1 dark:bg-stone-800/80">
+                            <span className="text-xs text-muted-foreground">专属邀请码</span>
+                            <span className="font-mono text-sm font-bold tracking-wider text-foreground">{referral.code}</span>
+                            <Button type="text" size="small" className="!h-6 !w-6 !p-0 text-muted-foreground hover:text-foreground" onClick={() => copy(referral.code, "邀请码已复制")} title="复制邀请码"><Copy className="size-3.5" /></Button>
+                        </div>
+                    ) : null}
+                </div>
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span>已邀请 <span className="font-mono font-medium text-foreground">{referral?.summary.invited ?? "—"}</span></span>
+                    <span>累计返利 <span className="font-mono font-medium text-foreground">¥{referral?.summary.earned ?? "—"}</span></span>
+                    <span>返利比例 <span className="font-mono font-medium text-foreground">{referral ? (referral.enabled ? `${referral.percent}%` : "暂未开放") : "—"}</span></span>
+                </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Input readOnly value={referral?.code ? generateAffiliateLink(referral.code) : ""} className="max-w-lg font-mono text-xs" placeholder="邀请链接" />
+                <Button icon={<Copy className="size-4" />} disabled={!referral} onClick={() => referral?.code && copy(generateAffiliateLink(referral.code), "邀请链接已复制")}>复制链接</Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">好友通过邀请链接注册后，每笔实际支付的充值按当前比例返利到余额；注册仍需有效邀请码，签到和兑换码不参与返利。</p>
+            {referrals.error ? <Alert className="mt-3" type="error" title={referrals.error.message} /> : null}
+        </div>
         <Tabs items={[
-            { key: "ledger", label: "余额明细", children: <><Space wrap className="mb-4"><Select className="w-40" value={kind} onChange={(value) => { setKind(value); setPage(1); }} options={[{ value: "", label: "全部类型" }, ...Object.entries(walletEntryLabels).map(([value, label]) => ({ value, label }))]} /><DatePicker.RangePicker value={range} onChange={(value) => { setRange(value as [Dayjs, Dayjs] | null); setPage(1); }} /><Button disabled={!ledger.data?.entries.length} onClick={exportLedger}>导出当前页 CSV</Button></Space><Table<WalletEntry> rowKey="id" loading={ledger.isPending} dataSource={ledger.data?.entries || []} scroll={{ x: 760 }} pagination={{ current: page, pageSize: 50, total: ledger.data?.total || 0, showSizeChanger: false, onChange: setPage }} columns={[
-                { title: "时间", dataIndex: "createdAt", render: (value: string) => dayjs(value).format("MM-DD HH:mm:ss") },
-                { title: "类型", dataIndex: "kind", render: (kind: string) => walletEntryLabels[kind] || kind },
-                { title: "余额变动", dataIndex: "deltaBalance", render: (value: string) => <span className="font-mono">{Number(value) > 0 ? "+" : ""}{value}</span> },
-                { title: "冻结变动", dataIndex: "deltaFrozen", render: (value: string) => <span className="font-mono">{value}</span> },
-                { title: "变动后余额", dataIndex: "balanceAfter", render: (value: string) => <span className="font-mono">¥{value}</span> },
-                { title: "说明", dataIndex: "note" },
-            ]} />{ledger.error ? <Alert type="error" title={ledger.error.message} /> : null}</> },
             { key: "orders", label: "充值订单", children: <><Table<PaymentOrder> rowKey="id" loading={orders.isPending} dataSource={orders.data?.orders || []} pagination={false} scroll={{ x: 600 }} columns={[
                 { title: "创建时间", dataIndex: "createdAt", render: (value: string) => dayjs(value).format("MM-DD HH:mm") },
                 { title: "支付方式", dataIndex: "method", render: (value: PaymentMethod) => paymentMethodLabels[value] },
@@ -97,6 +123,11 @@ export default function WalletPage() {
                 { title: "状态", dataIndex: "status", render: (value: PaymentOrder["status"]) => <Tag color={value === "paid" ? "success" : "default"}>{statusLabels[value]}</Tag> },
                 { title: "", key: "actions", render: (_, row) => <Button type="text" onClick={() => setActiveOrder(row.id)}>查看订单</Button> },
             ]} /><div className="mt-4 flex justify-end gap-2"><Button disabled={orderPage === 1} onClick={() => setOrderPage((p) => p - 1)}>上一页</Button><Button disabled={(orders.data?.orders.length || 0) < 50} onClick={() => setOrderPage((p) => p + 1)}>下一页</Button></div>{orders.error ? <Alert type="error" title={orders.error.message} /> : null}</> },
+            { key: "referrals", label: "邀请记录", children: <><Table<Referral> rowKey="id" loading={referrals.isPending} dataSource={referral?.referrals || []} scroll={{ x: 520 }} pagination={{ current: referralPage, pageSize: 50, total: referral?.summary.invited || 0, showSizeChanger: false, showTotal: (total) => `共 ${total} 条`, onChange: setReferralPage }} columns={[
+                { title: "好友", dataIndex: "displayName" },
+                { title: "累计返利", dataIndex: "reward", width: 130, render: (value: string) => <span className="font-mono text-xs">¥{value}</span> },
+                { title: "注册时间", dataIndex: "createdAt", width: 160, render: (value: string) => <span className="font-mono text-xs text-muted-foreground">{dayjs(value).format("YYYY-MM-DD HH:mm")}</span> },
+            ]} /></> },
         ]} />
         <Drawer title="兑换码充值" open={redeemOpen} onClose={() => setRedeemOpen(false)} destroyOnHidden>
             <p className="mb-5 text-sm leading-6 text-muted-foreground">输入管理员发放的兑换码，金额直接计入余额；每个兑换码只能兑换一次。</p>

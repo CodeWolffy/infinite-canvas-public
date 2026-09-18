@@ -18,7 +18,7 @@ type textInput struct {
 	CanvasProjectID    string         `json:"canvasProjectId" binding:"omitempty,uuid"`
 	Title              string         `json:"title" binding:"max=200"`
 	ModelID            string         `json:"modelId" binding:"required,uuid"`
-	Content            string         `json:"content" binding:"required,max=100000"`
+	Content            string         `json:"content" binding:"max=100000"`
 	SystemPrompt       string         `json:"systemPrompt" binding:"max=100000"`
 	AttachmentMediaIDs []string       `json:"attachmentMediaIds" binding:"max=20,dive,uuid"`
 	Parameters         map[string]any `json:"parameters"`
@@ -84,8 +84,31 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 	}))
 	api.GET("/text/conversations", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT id,title,canvas_project_id,created_at,updated_at FROM conversations WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3", currentUser(c).ID, limit, offset)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT id,title,canvas_project_id,created_at,updated_at FROM conversations WHERE user_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT $2 OFFSET $3", currentUser(c).ID, limit, offset)
 		return gin.H{"conversations": items}, err
+	}))
+	api.DELETE("/text/conversations/:id", respond(func(c *gin.Context) (any, error) {
+		id, err := idParam(c, "id")
+		if err != nil {
+			return nil, err
+		}
+		u := currentUser(c)
+		ctx := c.Request.Context()
+		// 先联动取消进行中的任务再软删会话：取消失败时会话保留，用户可重试删除。
+		activeTasks, err := rows(ctx, a.DB, "SELECT id FROM generation_tasks WHERE conversation_id=$1 AND user_id=$2 AND status IN ('reviewing','queued','running')", id, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range activeTasks {
+			if err = a.cancelTask(ctx, str(task["id"]), u.ID, false); err != nil {
+				return nil, err
+			}
+		}
+		_, err = one(ctx, a.DB, "UPDATE conversations SET deleted_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL RETURNING id", id, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}))
 	api.GET("/text/conversations/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
@@ -93,13 +116,34 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			return nil, err
 		}
 		ctx := c.Request.Context()
-		conversation, err := one(ctx, a.DB, "SELECT id,title,canvas_project_id FROM conversations WHERE id=$1 AND user_id=$2", id, currentUser(c).ID)
+		conversation, err := one(ctx, a.DB, "SELECT id,title,canvas_project_id FROM conversations WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", id, currentUser(c).ID)
 		if err != nil {
 			return nil, err
 		}
 		messages, err := rows(ctx, a.DB, "SELECT id,role,content,created_at FROM messages WHERE conversation_id=$1 ORDER BY sequence", id)
 		if err != nil {
 			return nil, err
+		}
+		if len(messages) > 0 {
+			messageIDs := make([]string, 0, len(messages))
+			for _, m := range messages {
+				messageIDs = append(messageIDs, str(m["id"]))
+			}
+			refs, err := rows(ctx, a.DB, "SELECT mr.owner_id AS message_id,m.* FROM media_references mr JOIN media_objects m ON m.id=mr.media_id WHERE mr.owner_kind='message' AND mr.owner_id=ANY($1::uuid[]) ORDER BY mr.position", messageIDs)
+			if err != nil {
+				return nil, err
+			}
+			attachments := map[string][]Row{}
+			for _, ref := range refs {
+				owner := str(ref["messageId"])
+				delete(ref, "messageId")
+				attachments[owner] = append(attachments[owner], publicMedia(ref))
+			}
+			for _, m := range messages {
+				if items := attachments[str(m["id"])]; len(items) > 0 {
+					m["attachments"] = items
+				}
+			}
 		}
 		latest, err := one(ctx, a.DB, "SELECT id,conversation_id,model_id,parameters,status,error_code,error_message,response_message_id,partial_text,stream_sequence,run,attempt_count,max_attempts,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE conversation_id=$1 ORDER BY queued_at DESC LIMIT 1", id)
 		if errors.Is(err, notFound) {
@@ -130,7 +174,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if input.Parameters == nil {
 			input.Parameters = map[string]any{}
 		}
-		if strings.TrimSpace(input.Content) == "" {
+		if strings.TrimSpace(input.Content) == "" && len(input.AttachmentMediaIDs) == 0 {
 			return nil, problem(400, "invalid_prompt", "请输入文本内容")
 		}
 		digest := hash(string(jsonBytes(input)))
@@ -188,6 +232,9 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			if model["capability"] != "text" {
 				return problem(400, "invalid_capability", "请选择文本模型")
 			}
+			if len(input.AttachmentMediaIDs) > 0 && object(model["config"])["imageInput"] != true {
+				return problem(400, "image_input_unsupported", "此文本模型不支持图片输入，请移除图片或更换模型")
+			}
 			input.Parameters, err = modelTextParameters(model, input.Parameters)
 			if err != nil {
 				return err
@@ -205,7 +252,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 					return err
 				}
 			} else {
-				if _, err = one(ctx, tx, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2 FOR UPDATE", conversationID, u.ID); err != nil {
+				if _, err = one(ctx, tx, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", conversationID, u.ID); err != nil {
 					return err
 				}
 			}
@@ -222,6 +269,15 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			}
 			if err = syncMediaRefs(ctx, tx, "message", messageID, u.ID, input.AttachmentMediaIDs); err != nil {
 				return err
+			}
+			if len(input.AttachmentMediaIDs) > 0 {
+				var nonImage bool
+				if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM media_objects WHERE id=ANY($1::uuid[]) AND mime_type NOT LIKE 'image/%')", input.AttachmentMediaIDs).Scan(&nonImage); err != nil {
+					return err
+				}
+				if nonImage {
+					return problem(400, "invalid_media", "文本附件仅支持图片文件")
+				}
 			}
 			// token 计价模型按预估用量冻结；实际费用以结算为准，多退少补。
 			discount, err := a.groupDiscount(ctx, tx, &u)

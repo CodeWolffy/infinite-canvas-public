@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Card, Descriptions, Form, Input, Tag } from "antd";
-import { Lock, Save, ShieldCheck, User as UserIcon } from "lucide-react";
+import { Gift, Lock, Save, ShieldCheck, UserRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 
+import { checkin, getWallet } from "@/services/api/billing";
 import { useUserStore } from "@/stores/use-user-store";
 import SecuritySettings from "./components/security-settings";
 
@@ -16,12 +18,17 @@ export default function UserAccountPage() {
     const updateDisplayName = useUserStore((state) => state.updateDisplayName);
     const changePassword = useUserStore((state) => state.changePassword);
     const logout = useUserStore((state) => state.logout);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
+    const queryClient = useQueryClient();
 
     const [profileLoading, setProfileLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
     const [displayName, setDisplayName] = useState(user?.displayName || "");
 
     const [passwordForm] = Form.useForm();
+    const overview = useQuery({ queryKey: ["wallet", sessionVersion], queryFn: getWallet });
+    const reward = overview.data?.checkin;
+    const claim = useMutation({ mutationFn: checkin, onSuccess: (result) => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["wallet-entries"] }); message.success(result.alreadyCheckedIn ? "今天已经领过签到奖励了" : `签到成功，获得 ¥${result.reward}`); }, onError: (error: Error) => message.error(error.message) });
 
     const handleUpdateProfile = async () => {
         if (!displayName.trim()) {
@@ -59,11 +66,11 @@ export default function UserAccountPage() {
     };
 
     return (
-        <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
-            <div>
+        <div className="grid w-full grid-cols-1 gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8 xl:grid-cols-2">
+            <div className="xl:col-span-2">
                 <div className="flex items-center gap-2 text-stone-500 mb-1">
-                    <ShieldCheck className="size-4 text-emerald-500" />
-                    <span className="text-xs font-semibold uppercase tracking-wider">Account & Security</span>
+                    <UserRound className="size-4 text-emerald-500" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Profile</span>
                 </div>
                 <h1 className="text-2xl font-bold tracking-tight text-stone-950 dark:text-stone-100">
                     {t("userCenter.accountTitle")}
@@ -73,7 +80,7 @@ export default function UserAccountPage() {
                 </p>
             </div>
 
-            <Card title={<span className="inline-flex items-center gap-2"><UserIcon className="size-4" /> 个人信息</span>} className="border-stone-200 dark:border-stone-800">
+            <Card title={<span className="inline-flex items-center gap-2"><UserRound className="size-4" /> 个人信息</span>} className="border-stone-200 dark:border-stone-800">
                 <Descriptions column={{ xs: 1, sm: 2 }} className="mb-4">
                     <Descriptions.Item label={t("userCenter.username")}>
                         <span className="font-mono font-medium">{user?.username}</span>
@@ -110,6 +117,16 @@ export default function UserAccountPage() {
                     >
                         {t("userCenter.updateProfile")}
                     </Button>
+                </div>
+            </Card>
+
+            <Card title={<span className="inline-flex items-center gap-2"><Gift className="size-4" /> 每日签到</span>} className="flex flex-col border-stone-200 dark:border-stone-800" classNames={{ body: "flex flex-1 flex-col justify-center" }}>
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                        <p className="text-sm">{reward?.enabled ? `今日随机奖励 ¥${reward.rewardMin} – ¥${reward.rewardMax}` : "签到奖励暂未开放"}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">每天按北京时间计算，领取后直接计入余额，永久保留。</p>
+                    </div>
+                    <Button type="primary" disabled={!reward?.enabled || reward.checkedIn} loading={claim.isPending} onClick={() => claim.mutate()}>{reward?.checkedIn ? "今天已签到" : "领取今日奖励"}</Button>
                 </div>
             </Card>
 

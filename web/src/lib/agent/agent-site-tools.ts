@@ -122,12 +122,12 @@ async function runPlatformVideo(input: SiteToolInput, navigate: NavigateFunction
     const config = useConfigStore.getState().config;
     const modelId = selectedPlatformModel(await getPublicModels(), typeof input.model === "string" ? input.model : config.videoModel, "video");
     assertCurrentSession(session);
-    if (input.run === false) { navigate("/studio?type=video"); return { ok: true, modelId, navigated: "/studio?type=video" }; }
+    if (input.run === false) { navigate("/video"); return { ok: true, modelId, navigated: "/video" }; }
     const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
     if (!prompt) throw new Error("请输入视频提示词");
     const result = await createGenerationBatch({ modelId, prompt, count: Number(input.count || 1), referenceMediaIds: Array.isArray(input.referenceMediaIds) ? input.referenceMediaIds.filter((id): id is string => typeof id === "string") : [], parameters: { seconds: String(input.seconds || config.videoSeconds), size: typeof input.size === "string" ? input.size : "1280x720", mode: "frames" } });
     assertCurrentSession(session);
-    navigate(`/studio?type=video&batch=${result.batch.id}`);
+    navigate(`/video?batch=${result.batch.id}`);
     return { ok: true, batchId: result.batch.id, taskId: result.tasks[0]?.id, tasks: result.tasks };
 }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { App, Button, Card, Empty, Image, Input, Popconfirm, Select, Spin, Tag, Tooltip } from "antd";
-import { Clock, Copy, Download, FolderPlus, FolderSync, Images, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ChevronDown, Clock, Copy, Download, FolderPlus, FolderSync, Images, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { saveAs } from "file-saver";
 
 import { createZip } from "@/lib/zip";
 import { formatBytes } from "@/lib/image-utils";
+import { cn } from "@/lib/utils";
 import { useCopyText } from "@/hooks/use-copy-text";
 import {
     deleteGenerationBatch,
@@ -236,93 +237,105 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
         onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.downloadZipFailed")),
     });
 
+    const thumbnails = batch.summary?.thumbnailMediaIds ?? [];
+
     return (
         <Card className="overflow-hidden border-stone-200 transition-shadow hover:shadow-sm dark:border-stone-800" styles={{ body: { padding: "1rem" } }}>
-            <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs text-stone-500">{dayjs(batch.createdAt).format("YYYY-MM-DD HH:mm:ss")}</span>
-                        {isAllSaved ? (
-                            <Tag color="success">{t("userCenter.savedPermanent")}</Tag>
-                        ) : isExpired ? (
-                            <Tag color="error">{t("userCenter.expiresToday")}</Tag>
-                        ) : (
-                            <Tag color={remainingDays <= 3 ? "warning" : "default"} icon={<Clock className="size-3" />}>
-                                {t("userCenter.expiresInDays", { days: remainingDays })}
-                            </Tag>
-                        )}
-                        {batch.summary ? (
-                            <span className="text-xs text-stone-500">
-                                {t("userCenter.batchCounts", { total: batch.summary.totalCount, succeeded: batch.summary.succeededCount })}
-                            </span>
-                        ) : null}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                        <Tooltip title={t("userCenter.remixPrompt")}>
-                            <Button
-                                size="small"
-                                type="text"
-                                className="text-purple-600 hover:text-purple-700 dark:text-purple-400"
-                                icon={<Wand2 className="size-3.5" />}
-                                onClick={() => navigate("/image", { state: { prompt: batch.prompt, modelId: batch.modelId } })}
+            <div className="flex gap-3 sm:gap-4">
+                <div className="flex shrink-0 items-start gap-1.5">
+                    {thumbnails.length ? (
+                        thumbnails.slice(0, 3).map((mediaId, index) => (
+                            <img
+                                key={mediaId}
+                                src={`/api/media/${mediaId}`}
+                                alt={batch.prompt}
+                                className={cn("size-14 rounded-lg border border-stone-200 object-cover sm:size-16 dark:border-stone-800", index > 0 && "hidden sm:block")}
+                                loading="lazy"
                             />
-                        </Tooltip>
-                        <Tooltip title={t("common.copyPrompt")}>
-                            <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(batch.prompt, t("common.promptCopied"))} />
-                        </Tooltip>
-                        {detail && !isAllSaved ? (
-                            <Tooltip title={t("userCenter.saveAllToAsset")}>
+                        ))
+                    ) : (
+                        <div className="flex size-14 items-center justify-center rounded-lg border border-dashed border-stone-300 text-stone-300 sm:size-16 dark:border-stone-700 dark:text-stone-600">
+                            <Images className="size-5" />
+                        </div>
+                    )}
+                </div>
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="font-mono text-xs text-stone-500">{dayjs(batch.createdAt).format("YYYY-MM-DD HH:mm:ss")}</span>
+                            {isAllSaved ? (
+                                <Tag color="success">{t("userCenter.savedPermanent")}</Tag>
+                            ) : isExpired ? (
+                                <Tag color="error">{t("userCenter.expiresToday")}</Tag>
+                            ) : (
+                                <Tag color={remainingDays <= 3 ? "warning" : "default"} icon={<Clock className="size-3" />}>
+                                    {t("userCenter.expiresInDays", { days: remainingDays })}
+                                </Tag>
+                            )}
+                            {batch.summary ? (
+                                <span className="text-xs text-stone-500">
+                                    {t("userCenter.batchCounts", { total: batch.summary.totalCount, succeeded: batch.summary.succeededCount })}
+                                </span>
+                            ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                            <Tooltip title={t("userCenter.remixPrompt")}>
                                 <Button
                                     size="small"
                                     type="text"
-                                    className="text-amber-600 hover:text-amber-700 dark:text-amber-400"
-                                    icon={<FolderSync className="size-3.5" />}
-                                    loading={saveBatchMutation.isPending}
-                                    onClick={() => saveBatchMutation.mutate()}
+                                    className="text-purple-600 hover:text-purple-700 dark:text-purple-400"
+                                    icon={<Wand2 className="size-3.5" />}
+                                    onClick={() => navigate("/image", { state: { prompt: batch.prompt, modelId: batch.modelId } })}
                                 />
                             </Tooltip>
-                        ) : null}
-                        {detail ? (
-                            <Tooltip title={t("userCenter.downloadAllImages")}>
-                                <Button size="small" type="text" icon={<Download className="size-3.5" />} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()} />
+                            <Tooltip title={t("common.copyPrompt")}>
+                                <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(batch.prompt, t("common.promptCopied"))} />
                             </Tooltip>
-                        ) : null}
-                        <Popconfirm
-                            title={t("userCenter.deleteBatchConfirm")}
-                            description={t("userCenter.deleteBatchDesc")}
-                            onConfirm={() => deleteMutation.mutate()}
-                            okText={t("common.delete")}
-                            cancelText={t("common.cancel")}
-                            okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
-                        >
-                            <Button size="small" type="text" danger icon={<Trash2 className="size-3.5" />} />
-                        </Popconfirm>
-                    </div>
-                </div>
-
-                <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-800 dark:bg-stone-900/60 dark:text-stone-200">
-                    <span className="font-medium">{batch.prompt}</span>
-                </div>
-
-                {!detail ? (
-                    <div className="flex items-center justify-between pt-1">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                            {batch.summary?.thumbnailMediaIds.map((mediaId) => (
-                                <img
-                                    key={mediaId}
-                                    src={`/api/media/${mediaId}`}
-                                    alt={batch.prompt}
-                                    className="size-12 rounded-lg border border-stone-200 object-cover dark:border-stone-800"
-                                    loading="lazy"
-                                />
-                            ))}
+                            {detail && !isAllSaved ? (
+                                <Tooltip title={t("userCenter.saveAllToAsset")}>
+                                    <Button
+                                        size="small"
+                                        type="text"
+                                        className="text-amber-600 hover:text-amber-700 dark:text-amber-400"
+                                        icon={<FolderSync className="size-3.5" />}
+                                        loading={saveBatchMutation.isPending}
+                                        onClick={() => saveBatchMutation.mutate()}
+                                    />
+                                </Tooltip>
+                            ) : null}
+                            {detail ? (
+                                <Tooltip title={t("userCenter.downloadAllImages")}>
+                                    <Button size="small" type="text" icon={<Download className="size-3.5" />} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()} />
+                                </Tooltip>
+                            ) : null}
+                            <Popconfirm
+                                title={t("userCenter.deleteBatchConfirm")}
+                                description={t("userCenter.deleteBatchDesc")}
+                                onConfirm={() => deleteMutation.mutate()}
+                                okText={t("common.delete")}
+                                cancelText={t("common.cancel")}
+                                okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+                            >
+                                <Button size="small" type="text" danger icon={<Trash2 className="size-3.5" />} />
+                            </Popconfirm>
+                            <Button
+                                size="small"
+                                icon={<ChevronDown className={cn("size-3.5 transition-transform", expanded && "rotate-180")} />}
+                                iconPosition="end"
+                                loading={!detail && isLoadingDetail}
+                                onClick={() => setExpanded((current) => !current)}
+                            >
+                                {expanded ? t("userCenter.collapseDetail") : t("userCenter.viewDetail")}
+                            </Button>
                         </div>
-                        <Button size="small" loading={isLoadingDetail} onClick={() => setExpanded(true)}>
-                            {t("userCenter.viewDetail")}
-                        </Button>
                     </div>
-                ) : (
-                    <div className="grid grid-cols-2 gap-3 pt-2 sm:grid-cols-3 md:grid-cols-4">
+                    <p className={cn("mt-1.5 break-words text-sm leading-6 text-stone-700 dark:text-stone-300", !expanded && "line-clamp-2")}>{batch.prompt}</p>
+                </div>
+            </div>
+
+            {expanded ? (
+                detail ? (
+                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                         {detail.tasks.map((task) => (
                             <div
                                 key={task.id}
@@ -377,8 +390,12 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                             </div>
                         ))}
                     </div>
-                )}
-            </div>
+                ) : (
+                    <div className="flex justify-center py-8">
+                        <Spin />
+                    </div>
+                )
+            ) : null}
         </Card>
     );
 }

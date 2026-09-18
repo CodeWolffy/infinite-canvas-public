@@ -11,13 +11,14 @@ const states = {
     available: { text: "正常", dot: "bg-emerald-500", ping: "bg-emerald-400" },
     degraded: { text: "部分可用", dot: "bg-amber-500", ping: "bg-amber-400" },
     unavailable: { text: "不可用", dot: "bg-rose-500", ping: "bg-rose-400" },
-    unknown: { text: "待检测", dot: "bg-slate-400 dark:bg-zinc-500", ping: "bg-slate-300" },
+    unknown: { text: "待检测", dot: "bg-slate-400 dark:bg-zinc-500", ping: "bg-slate-300 dark:bg-zinc-400" },
 } as const;
 const capabilities: Record<string, string> = { image: "图片", video: "视频", text: "文本", audio: "音频" };
 const barLimit = 40;
 
 const percent = (value: number) => (value >= 1 ? "100%" : `${(value * 100).toFixed(1)}%`);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+const isModelWorking = (model: ModelAvailability) => model.status === "available" || (model.status === "unknown" && (model.uptime ?? 0) > 0);
 
 export default function StatusPage() {
     const session = useUserStore((state) => state.sessionVersion);
@@ -32,9 +33,9 @@ export default function StatusPage() {
     const models = query.data?.models || [];
     const filtered = models.filter((model) => capability === "all" || model.capability === capability);
 
-    const modelsWithUptime = models.filter((m) => m.uptime != null);
-    const overallUptime = modelsWithUptime.length > 0
-        ? modelsWithUptime.reduce((sum, m) => sum + (m.uptime || 0), 0) / modelsWithUptime.length
+    const totalTasks = models.reduce((sum, m) => sum + (m.taskCount ?? 0), 0);
+    const overallUptime = totalTasks > 0
+        ? models.reduce((sum, m) => sum + (m.uptime ?? 0) * (m.taskCount ?? 0), 0) / totalTasks
         : null;
 
     const allValidDurations = models.flatMap((m) => (m.checks || []).map((c) => c.durationMs).filter((d): d is number => d != null && d > 0));
@@ -55,7 +56,7 @@ export default function StatusPage() {
                 </p>
             </section>
 
-            {query.data ? <Banner models={models} /> : null}
+            {query.data && models.length > 0 ? <Banner models={models} /> : null}
 
             {query.data && models.length > 0 ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -66,7 +67,7 @@ export default function StatusPage() {
                     <div className="rounded-xl border border-border bg-card p-4 shadow-2xs">
                         <p className="text-xs text-muted-foreground">服务健康率</p>
                         <p className="mt-1.5 font-mono text-2xl font-semibold tracking-tight text-emerald-600 dark:text-emerald-400">
-                            {models.length > 0 ? percent(models.filter((m) => m.status !== "unavailable").length / models.length) : "100%"}
+                            {models.length > 0 ? percent(models.filter(isModelWorking).length / models.length) : "100%"}
                         </p>
                     </div>
                     <div className="rounded-xl border border-border bg-card p-4 shadow-2xs">
@@ -193,7 +194,7 @@ function Banner({ models }: { models: ModelAvailability[] }) {
 function ModelRow({ model }: { model: ModelAvailability }) {
     const checks = model.checks || [];
     const latest = checks[checks.length - 1];
-    const isWorking = model.status === "available" || ((model.uptime ?? 0) > 0);
+    const isWorking = isModelWorking(model);
     const state = isWorking ? states.available : states[model.status];
     const validDurations = checks.map((c) => c.durationMs).filter((d): d is number => d != null && d > 0);
     const avgMs = validDurations.length > 0 ? Math.round(validDurations.reduce((a, b) => a + b, 0) / validDurations.length) : null;
@@ -234,8 +235,10 @@ function ModelRow({ model }: { model: ModelAvailability }) {
                 ))
             ) : (
                 <>
-                    {Array.from({ length: barLimit - checks.length }).map((_, index) => (
-                        <span key={`empty-${index}`} className="h-7 sm:h-8 flex-1 min-w-[3px] max-w-[10px] rounded-[2px] border border-border/40 bg-zinc-100/90 dark:border-zinc-800 dark:bg-zinc-800/80" />
+                    {Array.from({ length: Math.max(0, barLimit - checks.length) }).map((_, index) => (
+                        <Tooltip key={`empty-${index}`} title="24 小时内暂无请求记录">
+                            <span className="h-7 sm:h-8 flex-1 min-w-[3px] max-w-[10px] rounded-[2px] border border-border/40 bg-zinc-100/90 hover:bg-zinc-200 dark:border-zinc-800 dark:bg-zinc-800/80 dark:hover:bg-zinc-700 transition-all" />
+                        </Tooltip>
                     ))}
                     {checks.map((check, index) => (
                         <Tooltip
