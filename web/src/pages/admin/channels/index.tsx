@@ -285,7 +285,8 @@ export default function AdminChannelsPage() {
 
 function channelPayload(values: ChannelValues) {
     const { timeoutSeconds, apiKeysText, ...rest } = values;
-    return { ...rest, taskAdapter: values.capability === "video" ? values.taskAdapter || "" : "", endpointPath: values.protocol === "openai" ? (values.endpointPath || "chat/completions") : "", timeoutMs: timeoutSeconds * 1000, apiKeys: (apiKeysText || "").split(/\r?\n/).map((key) => key.trim()).filter(Boolean) };
+    const textEndpoint = values.capability === "text" && values.protocol === "openai";
+    return { ...rest, taskAdapter: values.capability === "video" ? values.taskAdapter || "" : "", endpointPath: textEndpoint ? (values.endpointPath || "chat/completions") : "", timeoutMs: timeoutSeconds * 1000, apiKeys: (apiKeysText || "").split(/\r?\n/).map((key) => key.trim()).filter(Boolean) };
 }
 
 function notifyError(notify: (content: string) => void) { return (error: Error) => notify(error.message || "操作失败"); }

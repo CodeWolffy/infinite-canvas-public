@@ -75,6 +75,7 @@ description: Implemented changes that still need manual verification
 - 环境变量命名优化：全局异步生成与流式任务协程池上限环境变量更名为 `WORKER_CONCURRENCY`（兼顾图、文、音、视全部类型），在 `.env.example` 与 `.env.local` 中配置为 `50`；代码保留 `IMAGE_WORKER_CONCURRENCY` 作为兜底，保持向后兼容。
 - 渠道管理创建/编辑弹窗中，解除最大并发 20 的输入限制，仅保留最小 1；管理员可按上游承载能力配置 50、100 或更高并发。
 - 文本渠道支持选择 OpenAI 接口端点：通用服务使用 `/chat/completions`（默认），上游符合 Responses API 规范时选择 `/responses`；数据库版本 16 迁移新增 `channels.endpoint_path` 字段，平滑兼容旧数据；服务端校验端点仅限文本 OpenAI 渠道的两个合法取值。
+- 修复非文本渠道误带端点：此前创建/编辑图片、视频、音频渠道时前端会一并提交 `chat/completions`，导致保存报「接口端点仅支持文本 OpenAI 渠道」；现仅文本 OpenAI 渠道提交端点，其他类型统一提交空值。验收点：分别创建图片、视频、音频渠道（协议选 OpenAI）可直接保存成功；创建文本渠道仍可正常选择 `/chat/completions` 与 `/responses`。
 - 服务端对 `/responses` 请求体适配（`input` 消息数组、`reasoning` 结构、`max_output_tokens`），只发送 Responses 规范字段，不再与 chat/completions 字段双写；SSE 流式解析兼容 `response.output_text.delta`、`response.output_text.done` 与 `response.completed` 事件及 usage 提取。
 - 优化与健壮性提升：
   - OpenAI 协议纯文本兼容：在未携带图片附件时，保持 `content: string`，解决部分第三方网关对数组格式报 400 的问题。
