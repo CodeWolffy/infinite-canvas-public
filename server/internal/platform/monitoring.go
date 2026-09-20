@@ -19,14 +19,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// 只保留零成本的周期检查：模型列表与渠道余额。生成检测会真实调用上游，已移除。
 type Monitoring struct {
-	IntervalMinutes  int            `json:"intervalMinutes" binding:"min=0"`
-	AutoDisableAfter int            `json:"autoDisableAfter" binding:"min=0"`
-	BindingIDs       []string       `json:"bindingIds,omitempty" binding:"omitempty,dive,uuid"`
-	Prompt           string         `json:"prompt"`
-	Parameters       map[string]any `json:"parameters"`
-	CheckModels      bool           `json:"checkModels"`
-	BalanceThreshold *string        `json:"balanceThreshold"`
+	IntervalMinutes  int     `json:"intervalMinutes" binding:"min=0"`
+	CheckModels      bool    `json:"checkModels"`
+	BalanceThreshold *string `json:"balanceThreshold"`
 }
 
 func (a *App) channelModels(ctx context.Context, c channel) (names []string, err error) {
@@ -111,25 +108,14 @@ func (a *App) channelBalance(ctx context.Context, c channel) (Row, error) {
 }
 
 func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
-	admin.GET("/channels/:id/bindings", respond(func(c *gin.Context) (any, error) {
-		id, err := idParam(c, "id")
-		if err != nil {
-			return nil, err
-		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT b.id,m.id AS model_id,m.display_name,m.capability,b.upstream_model FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND m.deleted_at IS NULL ORDER BY m.sort_order,m.created_at", id)
-		return gin.H{"models": items}, err
-	}))
 	admin.PUT("/channels/:id/monitoring", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
 			return nil, err
 		}
-		input, err := body[Monitoring](c, Monitoring{AutoDisableAfter: 3})
+		input, err := body[Monitoring](c)
 		if err != nil {
 			return nil, err
-		}
-		if len(input.BindingIDs) > 0 && strings.TrimSpace(input.Prompt) == "" {
-			return nil, problem(400, "invalid_probe", "请填写生成检测的提示词")
 		}
 		if input.BalanceThreshold != nil {
 			value, e := decimal.NewFromString(*input.BalanceThreshold)
@@ -137,28 +123,12 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 				return nil, problem(400, "invalid_balance", "余额提醒阈值必须为非负数")
 			}
 		}
-		if input.IntervalMinutes > 0 && len(input.BindingIDs) == 0 && !input.CheckModels && input.BalanceThreshold == nil {
+		if !input.CheckModels && input.BalanceThreshold == nil {
 			return nil, problem(400, "invalid_probe", "请至少选择一个检测项目")
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if len(input.BindingIDs) > 0 {
-				var protocol string
-				if err := tx.QueryRow(ctx, "SELECT protocol FROM channels WHERE id=$1 AND deleted_at IS NULL FOR SHARE", id).Scan(&protocol); err != nil {
-					return err
-				}
-				if protocol == "anthropic" && explicitTextTokens(input.Parameters) == 0 {
-					return problem(400, "output_limit_required", "Claude 生成检测必须指定最大输出 token 数")
-				}
-				var count int
-				if err := tx.QueryRow(ctx, "SELECT count(*) FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.id=ANY($2::text[]::uuid[]) AND m.deleted_at IS NULL", id, input.BindingIDs).Scan(&count); err != nil {
-					return err
-				}
-				if count != len(input.BindingIDs) {
-					return problem(400, "invalid_probe", "请先将检测模型绑定到此渠道")
-				}
-			}
-			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,auto_disabled_at=CASE WHEN $4::int=0 THEN NULL ELSE auto_disabled_at END,consecutive_check_failures=0,updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id, jsonBytes(input), input.IntervalMinutes, input.AutoDisableAfter)
+			result, err := tx.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=CASE WHEN $3::int>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND deleted_at IS NULL", id, jsonBytes(input), input.IntervalMinutes)
 			if err != nil {
 				return err
 			}
@@ -185,7 +155,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 			}
 			var config Monitoring
 			_ = json.Unmarshal(jsonBytes(row["monitoring"]), &config)
-			if len(config.BindingIDs) == 0 && !config.CheckModels && config.BalanceThreshold == nil {
+			if !config.CheckModels && config.BalanceThreshold == nil {
 				return problem(400, "invalid_probe", "请先配置检测项目")
 			}
 			if _, err = tx.Exec(ctx, "UPDATE channels SET next_check_at=now() WHERE id=$1", id); err != nil {
@@ -317,68 +287,16 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	var changes Row
 	var balance any
 	balanceStatus := str(row["balanceStatus"])
-	var failure *upstreamError
 	canProbe := a.selectChannelKey(ctx, &ch, nil, true) == nil
-	validHealth := false
-	bindingChecks := []Row{}
 	if !canProbe {
 		status, detail["credentials"] = "failed", "没有可检测的密钥，请检查密钥配置"
-	}
-	if probes := config.BindingIDs; canProbe && len(probes) > 0 {
-		details := []string{}
-		for i, bindingID := range probes {
-			binding, err := one(ctx, a.DB, "SELECT b.model_id,m.capability,b.upstream_model,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.channel_id=$2 AND m.deleted_at IS NULL", bindingID, id)
-			if err != nil {
-				status = "failed"
-				details = append(details, "检测模型绑定已失效")
-				continue
-			}
-			ch.UpstreamModel = str(binding["upstreamModel"])
-			ch.BindingID = bindingID
-			ch.CostConfig = object(binding["costConfig"])
-			// 检测的全部成本记录共用 monitor_token，中断恢复时才能一并关联。
-			costID := token
-			if i > 0 {
-				costID = uuid.NewString()
-			}
-			task := Row{"id": costID, "run": 1, "probe": true, "modelId": binding["modelId"], "monitorToken": token, "note": "渠道生成检测", "capability": binding["capability"], "prompt": config.Prompt, "parameters": config.Parameters}
-			probeStarted := time.Now()
-			_, err = a.runProbe(ctx, ch, task)
-			checkStatus := "healthy"
-			category := ""
-			if err != nil {
-				status = "failed"
-				checkStatus = "failed"
-				currentFailure := classify(err)
-				category = currentFailure.Category
-				if channelFailure(currentFailure) {
-					failure = currentFailure
-					validHealth = true
-				}
-				details = append(details, str(binding["upstreamModel"])+" 生成检测失败（"+currentFailure.Category+"）")
-			} else {
-				validHealth = true
-				details = append(details, str(binding["upstreamModel"])+" 生成成功")
-			}
-			if err == nil || channelFailure(classify(err)) {
-				bindingChecks = append(bindingChecks, Row{"id": bindingID, "status": checkStatus, "category": nullable(category), "duration": time.Since(probeStarted).Milliseconds(), "started": probeStarted})
-			}
-		}
-		if len(details) > 0 {
-			detail["generation"] = strings.Join(details, "；")
-		}
 	}
 	if config.CheckModels && canProbe {
 		models, err = a.channelModels(ctx, ch)
 		if err != nil {
 			status = "failed"
 			detail["models"] = "模型列表读取失败"
-			if currentFailure := classify(err); channelFailure(currentFailure) {
-				failure = currentFailure
-				validHealth = true
-			}
 		} else {
-			validHealth = true
 			detail["modelCount"] = len(models)
 			if row["upstreamModels"] != nil {
 				changes = modelChanges(row["upstreamModels"], models)
@@ -417,34 +335,19 @@ func (a *App) runMonitor(root context.Context, row Row) {
 		if _, err = tx.Exec(root, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,$3,$4,$5)", token, id, status, jsonBytes(detail), time.Since(started).Milliseconds()); err != nil {
 			return err
 		}
-		for _, check := range bindingChecks {
-			if _, err = tx.Exec(root, `INSERT INTO channel_binding_checks(binding_id,status,duration_ms,checked_at,error_category) SELECT id,$2,$3,$4,$5 FROM model_channels WHERE id=$1
-				ON CONFLICT(binding_id) DO UPDATE SET status=excluded.status,duration_ms=excluded.duration_ms,checked_at=excluded.checked_at,error_category=excluded.error_category
-				WHERE channel_binding_checks.checked_at<excluded.checked_at`, check["id"], check["status"], check["duration"], check["started"], check["category"]); err != nil {
-				return err
-			}
-		}
 		var changeJSON, errorText any
 		if changes != nil {
 			changeJSON = jsonBytes(changes)
 		}
 		if status == "failed" {
-			errorText = detail["generation"]
-			if errorText == nil {
-				errorText = detail["models"]
-			}
+			errorText = detail["models"]
 		}
 		if _, err = tx.Exec(root, "UPDATE channels SET monitor_status=$2,monitor_error=$3,monitor_checked_at=now(),upstream_models=coalesce($4::text[],upstream_models),model_changes=coalesce($5,model_changes),upstream_balance=coalesce($6,upstream_balance),balance_status=$7 WHERE id=$1", id, status, errorText, models, changeJSON, balance, nullable(balanceStatus)); err != nil {
 			return err
 		}
-		if validHealth {
-			if err = a.recordMonitorHealth(root, tx, current, started, status == "healthy", failure); err != nil {
+		if status == "healthy" {
+			if err = recordKeySuccess(root, tx, ch, started); err != nil {
 				return err
-			}
-			if status == "healthy" {
-				if err = recordKeySuccess(root, tx, ch, started); err != nil {
-					return err
-				}
 			}
 		}
 		if str(current["monitorStatus"]) != status && (status == "failed" || current["monitorStatus"] != nil) && !(status == "healthy" && current["autoDisabledAt"] != nil) {
@@ -492,10 +395,7 @@ func (a *App) recoverMonitoring(ctx context.Context) {
 			return err
 		}
 		for _, row := range stale {
-			if err = a.recordMonitorHealth(ctx, tx, row, time.Now(), false, &upstreamError{Category: "timeout"}); err != nil {
-				return err
-			}
-			if _, err = tx.Exec(ctx, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,'failed',$3,0) ON CONFLICT(id) DO NOTHING", row["monitorToken"], row["id"], jsonBytes(Row{"generation": "检测超时或进程中断，未重新提交原请求"})); err != nil {
+			if _, err = tx.Exec(ctx, "INSERT INTO channel_checks(id,channel_id,status,detail,duration_ms) VALUES($1,$2,'failed',$3,0) ON CONFLICT(id) DO NOTHING", row["monitorToken"], row["id"], jsonBytes(Row{"checks": "检测超时或进程中断，未重新提交原请求"})); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE monitor_token=$1 AND status='running'", row["monitorToken"]); err != nil {

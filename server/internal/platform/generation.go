@@ -31,6 +31,15 @@ func (a *App) generationAdmission(c *gin.Context, settings PlatformSettings) err
 	}
 	return a.rate(c, "generate:ip:"+hash(a.clientIP(c)), settings.IPRPM, time.Minute)
 }
+
+// 模型级重试次数覆盖平台默认值；两者共用 1-10 的上限。
+func effectiveMaxAttempts(settings PlatformSettings, model Row) int {
+	if value := integer(object(model["config"])["maxAttempts"]); value > 0 {
+		return int(min(value, 10))
+	}
+	return settings.MaxAttempts
+}
+
 func modelForTask(ctx context.Context, tx pgx.Tx, id string) (Row, error) {
 	model, err := one(ctx, tx, "SELECT * FROM models WHERE id=$1 AND status='published' AND deleted_at IS NULL FOR SHARE", id)
 	if err != nil {
@@ -214,7 +223,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 				if _, err = changeWallet(ctx, tx, u.ID, "hold", taskID+":1", -price, price, "生成预冻结"); err != nil {
 					return err
 				}
-				if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,batch_id,user_id,model_id,capability,sequence,prompt,parameters,price_micros,price_per_second,seconds,group_discount,model_name,model_display_name,moderation_id,status,max_attempts) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)", taskID, id, u.ID, input.ModelID, model["capability"], i, input.Prompt, jsonBytes(input.Parameters), price, pricePerSecond, seconds, discount.String(), model["name"], model["displayName"], moderationID, status, settings.MaxAttempts); err != nil {
+				if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,batch_id,user_id,model_id,capability,sequence,prompt,parameters,price_micros,price_per_second,seconds,group_discount,model_name,model_display_name,moderation_id,status,max_attempts) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)", taskID, id, u.ID, input.ModelID, model["capability"], i, input.Prompt, jsonBytes(input.Parameters), price, pricePerSecond, seconds, discount.String(), model["name"], model["displayName"], moderationID, status, effectiveMaxAttempts(settings, model)); err != nil {
 					return err
 				}
 			}
@@ -351,7 +360,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if _, err = changeWallet(ctx, tx, u.ID, "hold", id+":"+str(run), -price, price, "重试预冻结"); err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, settings.MaxAttempts)
+			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, effectiveMaxAttempts(settings, model))
 			return err
 		})
 		if err != nil {

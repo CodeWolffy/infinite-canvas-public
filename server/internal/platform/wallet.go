@@ -20,20 +20,21 @@ import (
 const moneyScale int64 = 1_000_000
 
 type PlatformSettings struct {
-	GenerationEnabled   bool   `json:"generationEnabled"`
-	CheckinEnabled      bool   `json:"checkinEnabled"`
-	RewardMin           string `json:"rewardMin"`
-	RewardMax           string `json:"rewardMax"`
-	UserRPM             int    `json:"userRPM"`
-	IPRPM               int    `json:"ipRPM"`
-	ActiveTasks         int    `json:"activeTasks"`
-	PaymentOrderMinutes int    `json:"paymentOrderMinutes"`
-	MaxAttempts         int    `json:"maxAttempts" binding:"min=1"`
-	ReferralEnabled     bool   `json:"referralEnabled"`
-	ReferralPercent     string `json:"referralPercent"`
+	GenerationEnabled       bool   `json:"generationEnabled"`
+	CheckinEnabled          bool   `json:"checkinEnabled"`
+	RewardMin               string `json:"rewardMin"`
+	RewardMax               string `json:"rewardMax"`
+	UserRPM                 int    `json:"userRPM"`
+	IPRPM                   int    `json:"ipRPM"`
+	ActiveTasks             int    `json:"activeTasks"`
+	PaymentOrderMinutes     int    `json:"paymentOrderMinutes"`
+	MaxAttempts             int    `json:"maxAttempts" binding:"min=1,max=10"`
+	RequestAutoDisableAfter int    `json:"requestAutoDisableAfter" binding:"min=0,max=100"`
+	ReferralEnabled         bool   `json:"referralEnabled"`
+	ReferralPercent         string `json:"referralPercent"`
 }
 
-var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30, MaxAttempts: 3, ReferralPercent: "0"}
+var defaultSettings = PlatformSettings{GenerationEnabled: true, RewardMin: "0", RewardMax: "0", UserRPM: 10, IPRPM: 60, ActiveTasks: 20, PaymentOrderMinutes: 30, MaxAttempts: 3, RequestAutoDisableAfter: 10, ReferralPercent: "0"}
 
 func (a *App) settings(ctx context.Context, q querier) (PlatformSettings, error) {
 	var raw []byte

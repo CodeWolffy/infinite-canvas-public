@@ -369,11 +369,10 @@ func TestTextSSEPersistsProgressBeforeSettlement(t *testing.T) {
 	}
 }
 
-func TestMonitoringChangesNotificationsAndCostReport(t *testing.T) {
+func TestMonitoringChangesAndBalanceNotifications(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
 	var revision atomic.Int32
-	var failing atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -388,25 +387,13 @@ func TestMonitoringChangesNotificationsAndCostReport(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/usage"):
 			fmt.Fprint(w, `{"total_usage":950}`)
 		default:
-			if failing.Load() {
-				w.WriteHeader(503)
-				fmt.Fprint(w, `{"error":{"message":"test failure"}}`)
-				return
-			}
-			fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}`)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer upstream.Close()
-	model, channel := capabilityModel(t, a, "text", upstream.URL, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE model_channels SET cost_config=$3 WHERE model_id=$1 AND channel_id=$2", model, channel, jsonBytes(Row{"fixed": "0.1"})); err != nil {
-		t.Fatal(err)
-	}
+	_, channel := capabilityModel(t, a, "text", upstream.URL, 0)
 	threshold := "2"
-	var bindingID string
-	if err := a.DB.QueryRow(ctx, "SELECT id FROM model_channels WHERE model_id=$1 AND channel_id=$2", model, channel).Scan(&bindingID); err != nil {
-		t.Fatal(err)
-	}
-	config := Monitoring{BindingIDs: []string{bindingID}, Prompt: "health", CheckModels: true, BalanceThreshold: &threshold}
+	config := Monitoring{CheckModels: true, BalanceThreshold: &threshold}
 	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2 WHERE id=$1", channel, jsonBytes(config)); err != nil {
 		t.Fatal(err)
 	}
@@ -437,30 +424,8 @@ func TestMonitoringChangesNotificationsAndCostReport(t *testing.T) {
 	if count() != 2 {
 		t.Fatalf("missing model change notice: %d", count())
 	}
-	failing.Store(true)
-	run()
-	if count() != 3 {
-		t.Fatalf("missing health failure notice: %d", count())
-	}
-	run()
-	if count() != 3 {
-		t.Fatal("same failure sent duplicate notice")
-	}
-	admin, cookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
-		t.Fatal(err)
-	}
-	router := a.Router()
-	costs := testRequest(router, "GET", "/api/admin/costs", nil, cookie)
-	if costs.Code != 200 {
-		t.Fatalf("cost report: %d %s", costs.Code, costs.Body.String())
-	}
-	totals := object(responseRow(t, costs)["totals"])
-	if totals["knownCost"] != "0.300000" || integer(totals["unknownCount"]) != 2 {
-		t.Fatalf("incorrect costs %v", totals)
-	}
 	_, ordinaryCookie := testUser(t, a, 0)
-	if n := responseRow(t, testRequest(router, "GET", "/api/user/notifications", nil, ordinaryCookie))["notifications"].([]any); len(n) != 0 {
+	if n := responseRow(t, testRequest(a.Router(), "GET", "/api/user/notifications", nil, ordinaryCookie))["notifications"].([]any); len(n) != 0 {
 		t.Fatal("ordinary user can see administrator notifications")
 	}
 }
@@ -726,25 +691,11 @@ func TestOpsRetentionPermanentBalanceAlertsAndCostFilters(t *testing.T) {
 		t.Fatalf("check-all: %d %s", queued.Code, queued.Body.String())
 	}
 
-	probeBindings, err := rows(ctx, a.DB, "SELECT id FROM model_channels WHERE channel_id=$1 AND model_id=ANY($2::text[]::uuid[])", channel, []string{model, other})
-	if err != nil {
-		t.Fatal(err)
-	}
-	config := Monitoring{Prompt: "probe"}
-	for _, binding := range probeBindings {
-		config.BindingIDs = append(config.BindingIDs, str(binding["id"]))
-	}
-	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2 WHERE id=$1", channel, jsonBytes(config)); err != nil {
-		t.Fatal(err)
-	}
-	row, err := one(ctx, a.DB, "UPDATE channels SET monitor_token=$2,monitor_deadline=now()+interval '1 second' WHERE id=$1 RETURNING *", channel, uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.runMonitor(ctx, row)
-	var probes int
-	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM upstream_cost_entries WHERE note='渠道生成检测'").Scan(&probes); err != nil || probes != 2 {
-		t.Fatalf("multi-model probes %d: %v", probes, err)
+	// 成本筛选按来源与渠道过滤；未配置金额的条目保持 unknown 来源。
+	for range 2 {
+		if _, err := a.DB.Exec(ctx, "INSERT INTO upstream_cost_entries(id,channel_id,capability,status) VALUES($1,$2,'image','succeeded')", uuid.NewString(), channel); err != nil {
+			t.Fatal(err)
+		}
 	}
 	filtered := testRequest(router, "GET", "/api/admin/costs?source=unknown&channelId="+channel, nil, adminCookie)
 	if filtered.Code != 200 || integer(object(responseRow(t, filtered)["totals"])["unknownCount"]) != 2 {
@@ -753,7 +704,7 @@ func TestOpsRetentionPermanentBalanceAlertsAndCostFilters(t *testing.T) {
 
 	settings := defaultSettings
 	settings.CheckinEnabled, settings.RewardMin, settings.RewardMax = true, "1", "1"
-	if _, err = a.DB.Exec(ctx, "INSERT INTO app_settings(key,value) VALUES('platform',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", jsonBytes(settings)); err != nil {
+	if _, err := a.DB.Exec(ctx, "INSERT INTO app_settings(key,value) VALUES('platform',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", jsonBytes(settings)); err != nil {
 		t.Fatal(err)
 	}
 	claimed := testRequest(router, "POST", "/api/user/checkin", nil, cookie)
@@ -767,7 +718,7 @@ func TestOpsRetentionPermanentBalanceAlertsAndCostFilters(t *testing.T) {
 	a.notifyNoChannel(ctx, model)
 	a.notifyNoChannel(ctx, model)
 	var adminNotes int
-	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM notifications WHERE user_id IS NULL AND kind='channel.unavailable'").Scan(&adminNotes); err != nil || adminNotes != 1 {
+	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM notifications WHERE user_id IS NULL AND kind='channel.unavailable'").Scan(&adminNotes); err != nil || adminNotes != 1 {
 		t.Fatalf("no-channel notice %d: %v", adminNotes, err)
 	}
 }
@@ -899,9 +850,9 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 	if str(flareBinding["id"]) == "" || str(sunburstBinding["id"]) == "" || str(flareBinding["id"]) == str(sunburstBinding["id"]) {
 		t.Fatalf("binding ids should be unique: flare=%s, sunburst=%s", str(flareBinding["id"]), str(sunburstBinding["id"]))
 	}
-	monitor := testRequest(router, "PUT", "/api/admin/channels/"+channel+"/monitoring", Row{"bindingIds": []string{str(flareBinding["id"]), str(sunburstBinding["id"])}, "prompt": "probe"}, adminCookie)
+	monitor := testRequest(router, "PUT", "/api/admin/channels/"+channel+"/monitoring", Row{"checkModels": true}, adminCookie)
 	if monitor.Code != http.StatusNoContent {
-		t.Fatalf("monitor binding ids: %d %s", monitor.Code, monitor.Body.String())
+		t.Fatalf("save monitoring: %d %s", monitor.Code, monitor.Body.String())
 	}
 
 	// 3. 独立配置上游成本

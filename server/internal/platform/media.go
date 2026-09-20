@@ -68,6 +68,8 @@ func safeClient(allowPrivate bool) *http.Client {
 func makeSafeClient(allowPrivate bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	// Go 默认每主机只留 2 条空闲连接，多个 worker 打同一上游时会反复重建连接。
+	transport.MaxIdleConnsPerHost = 32
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -292,20 +294,30 @@ func syncMediaRefs(ctx context.Context, tx pgx.Tx, kind, ownerID, userID string,
 	}
 	locking := append([]string{}, ordered...)
 	sort.Strings(locking)
-	for _, id := range locking {
-		if _, err := one(ctx, tx, "SELECT m.id FROM media_objects m WHERE m.id=$1 AND m.status='ready' AND "+mediaVisibility+" FOR SHARE OF m", id, userID, false); err != nil {
-			return problem(400, "invalid_media", "包含无权访问或不可用的文件")
+	if len(locking) > 0 {
+		// 一次查询校验全部引用并按 id 顺序加锁，避免按文件逐条往返。
+		visible, err := rows(ctx, tx, "SELECT m.id FROM media_objects m WHERE m.id=ANY($1::text[]::uuid[]) AND m.status='ready' AND "+mediaVisibility+" ORDER BY m.id FOR SHARE OF m", locking, userID, false)
+		if err != nil {
+			return err
+		}
+		available := map[string]bool{}
+		for _, row := range visible {
+			available[str(row["id"])] = true
+		}
+		for _, id := range locking {
+			if !available[id] {
+				return problem(400, "invalid_media", "包含无权访问或不可用的文件")
+			}
 		}
 	}
 	if _, err := tx.Exec(ctx, "DELETE FROM media_references WHERE owner_kind=$1 AND owner_id=$2", kind, ownerID); err != nil {
 		return err
 	}
-	for position, id := range ordered {
-		if _, err := tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id,position) VALUES($1,$2,$3,$4,$5)", kind, ownerID, userID, id, position); err != nil {
-			return err
-		}
+	if len(ordered) == 0 {
+		return nil
 	}
-	return nil
+	_, err := tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id,position) SELECT $1,$2,$3,u.id,(u.ord-1)::int FROM unnest($4::text[]::uuid[]) WITH ORDINALITY AS u(id,ord)", kind, ownerID, userID, ordered)
+	return err
 }
 
 func (a *App) mediaRoutes(api *gin.RouterGroup) {

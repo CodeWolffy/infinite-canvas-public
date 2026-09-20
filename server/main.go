@@ -63,6 +63,12 @@ var channelEndpoint string
 //go:embed migrations/017_referral_code_ci_unique.sql
 var referralCodeCiUnique string
 
+//go:embed migrations/018_request_failure_tracking.sql
+var requestFailureTracking string
+
+//go:embed migrations/019_remove_generation_probe.sql
+var removeGenerationProbe string
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
 		response, err := http.Get("http://127.0.0.1:3001/health")
@@ -77,7 +83,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability, conversationSoftDelete, channelEndpoint, referralCodeCiUnique})
+	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability, conversationSoftDelete, channelEndpoint, referralCodeCiUnique, requestFailureTracking, removeGenerationProbe})
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)

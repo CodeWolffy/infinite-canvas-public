@@ -11,14 +11,13 @@ const states = {
     available: { text: "正常", dot: "bg-emerald-500", ping: "bg-emerald-400" },
     degraded: { text: "部分可用", dot: "bg-amber-500", ping: "bg-amber-400" },
     unavailable: { text: "不可用", dot: "bg-rose-500", ping: "bg-rose-400" },
-    unknown: { text: "待检测", dot: "bg-slate-400 dark:bg-zinc-500", ping: "bg-slate-300 dark:bg-zinc-400" },
 } as const;
 const capabilities: Record<string, string> = { image: "图片", video: "视频", text: "文本", audio: "音频" };
 const barLimit = 40;
 
 const percent = (value: number) => (value >= 1 ? "100%" : `${(value * 100).toFixed(1)}%`);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-const isModelWorking = (model: ModelAvailability) => model.status === "available" || (model.status === "unknown" && (model.uptime ?? 0) > 0);
+const isModelWorking = (model: ModelAvailability) => model.status !== "unavailable";
 
 export default function StatusPage() {
     const session = useUserStore((state) => state.sessionVersion);
@@ -195,7 +194,7 @@ function ModelRow({ model }: { model: ModelAvailability }) {
     const checks = model.checks || [];
     const latest = checks[checks.length - 1];
     const isWorking = isModelWorking(model);
-    const state = isWorking ? states.available : states[model.status];
+    const state = states[model.status];
     const validDurations = checks.map((c) => c.durationMs).filter((d): d is number => d != null && d > 0);
     const avgMs = validDurations.length > 0 ? Math.round(validDurations.reduce((a, b) => a + b, 0) / validDurations.length) : null;
 

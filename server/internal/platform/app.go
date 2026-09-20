@@ -36,7 +36,7 @@ type Config struct {
 	Address, DatabaseURL, RedisURL, PublicURL, CookieName, EncryptionKey string
 	Origins                                                              []string
 	SecureCookie, TrustProxy, AllowPrivateHosts                          bool
-	SessionDays, WorkerConcurrency, OrphanDays, LogDays                  int
+	SessionDays, WorkerConcurrency, OrphanDays, LogDays, DBMaxConns      int
 	MaxUpload, MaxGenerated                                              int64
 	HeaderTimeout                                                        time.Duration
 	Bucket, MinioEndpoint, MinioAccessKey, MinioSecretKey                string
@@ -109,8 +109,8 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		return nil, errors.New("Secure Cookie 需要 HTTPS PUBLIC_URL；本地 HTTP 请设置 COOKIE_SECURE=false")
 	}
 	cfg.Origins = strings.Split(env("CORS_ORIGIN", cfg.PublicURL), ",")
-	for key, target := range map[string]*int{"SESSION_DAYS": &cfg.SessionDays, "ORPHAN_MEDIA_GRACE_DAYS": &cfg.OrphanDays, "REQUEST_LOG_RETENTION_DAYS": &cfg.LogDays} {
-		defaults := map[string]int{"SESSION_DAYS": 7, "ORPHAN_MEDIA_GRACE_DAYS": 45, "REQUEST_LOG_RETENTION_DAYS": 30}
+	for key, target := range map[string]*int{"SESSION_DAYS": &cfg.SessionDays, "ORPHAN_MEDIA_GRACE_DAYS": &cfg.OrphanDays, "REQUEST_LOG_RETENTION_DAYS": &cfg.LogDays, "DB_MAX_CONNS": &cfg.DBMaxConns} {
+		defaults := map[string]int{"SESSION_DAYS": 7, "ORPHAN_MEDIA_GRACE_DAYS": 45, "REQUEST_LOG_RETENTION_DAYS": 30, "DB_MAX_CONNS": 20}
 		*target, err = envInt(key, defaults[key])
 		if err != nil {
 			return nil, err
@@ -136,7 +136,16 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 	cfg.MaxGenerated = int64(generated)
 	// 沿用已有渠道默认超时；不额外引入独立的业务超时。
 	cfg.HeaderTimeout = 480 * time.Second
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	// 连接池默认 max(4, CPU)，而 worker、SSE 与 HTTP 请求共用同一个池，显式配置上限。
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	poolConfig.MaxConns = int32(cfg.DBMaxConns)
+	poolConfig.MinConns = 2
+	poolConfig.MaxConnLifetime = 30 * time.Minute
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	db, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, err
 	}

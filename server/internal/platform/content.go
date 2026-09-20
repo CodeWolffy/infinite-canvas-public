@@ -25,6 +25,14 @@ func canvasSnapshot(value any) error {
 	}
 	return nil
 }
+func canvasViewport(value map[string]any) error {
+	for _, key := range []string{"x", "y", "k"} {
+		if _, ok := value[key].(float64); !ok {
+			return problem(400, "invalid_viewport", "画布视口格式不正确")
+		}
+	}
+	return nil
+}
 func projectAccess(ctx context.Context, q querier, id, userID string) error {
 	if id == "" {
 		return nil
@@ -116,6 +124,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		input, err := body[struct {
 			Title    *string        `json:"title"`
 			Snapshot map[string]any `json:"snapshot"`
+			Viewport map[string]any `json:"viewport"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -125,6 +134,11 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		}
 		if input.Snapshot != nil {
 			if err = canvasSnapshot(input.Snapshot); err != nil {
+				return nil, err
+			}
+		}
+		if input.Viewport != nil {
+			if err = canvasViewport(input.Viewport); err != nil {
 				return nil, err
 			}
 		}
@@ -151,13 +165,20 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 					return err
 				}
 				if input.Snapshot != nil {
-					history, err := rows(ctx, tx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot) SELECT id,user_id,title,snapshot FROM canvas_projects WHERE id=$1 AND (snapshot-'viewport') IS DISTINCT FROM ($2::jsonb-'viewport') AND NOT EXISTS(SELECT 1 FROM canvas_project_history WHERE project_id=$1 AND note IS NULL AND created_at>now()-interval '5 minutes') RETURNING id", id, jsonBytes(input.Snapshot))
-					if err != nil {
+					// 先用走索引的时间窗口判断，避免每次保存都整份比较 JSONB。
+					var recent bool
+					if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM canvas_project_history WHERE project_id=$1 AND note IS NULL AND created_at>now()-interval '5 minutes')", id).Scan(&recent); err != nil {
 						return err
 					}
-					for _, h := range history {
-						if _, err = tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id) SELECT 'history',$1,user_id,media_id FROM media_references WHERE owner_kind='canvas' AND owner_id=$2", h["id"], id); err != nil {
+					if !recent {
+						history, err := rows(ctx, tx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot) SELECT id,user_id,title,snapshot FROM canvas_projects WHERE id=$1 AND (snapshot-'viewport') IS DISTINCT FROM ($2::jsonb-'viewport') RETURNING id", id, jsonBytes(input.Snapshot))
+						if err != nil {
 							return err
+						}
+						for _, h := range history {
+							if _, err = tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id) SELECT 'history',$1,user_id,media_id FROM media_references WHERE owner_kind='canvas' AND owner_id=$2", h["id"], id); err != nil {
+								return err
+							}
 						}
 					}
 				}
@@ -169,17 +190,29 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET snapshot=$2,updated_at=now() WHERE id=$1", id, jsonBytes(input.Snapshot)); err != nil {
 					return err
 				}
+			} else if input.Viewport != nil {
+				// 平移和缩放只改视口，原地替换这一个字段，不重写整份快照。
+				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET snapshot=jsonb_set(snapshot,'{viewport}',$2::jsonb,true),updated_at=now() WHERE id=$1", id, jsonBytes(input.Viewport)); err != nil {
+					return err
+				}
 			}
 			if input.Title != nil {
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET title=$2,updated_at=now() WHERE id=$1", id, strings.TrimSpace(*input.Title)); err != nil {
 					return err
 				}
 			}
-			if err := trimCanvasHistory(ctx, tx, id); err != nil {
-				return err
+			if input.Snapshot != nil {
+				if err := trimCanvasHistory(ctx, tx, id); err != nil {
+					return err
+				}
 			}
 			var err error
-			saved, err = one(ctx, tx, "SELECT "+canvasSummary+",snapshot FROM canvas_projects WHERE id=$1", id)
+			// 只有创建时客户端需要快照本身；更新只回传统计信息，避免每次保存都读回整份快照。
+			columns := canvasSummary
+			if create {
+				columns += ",snapshot"
+			}
+			saved, err = one(ctx, tx, "SELECT "+columns+" FROM canvas_projects WHERE id=$1", id)
 			return err
 		})
 		if err != nil {

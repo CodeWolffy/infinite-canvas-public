@@ -6,7 +6,7 @@
 
 | 能力 | 当前实现 | 主要源码 |
 | --- | --- | --- |
-| 渠道健康与告警 | 手动/周期生成检测，模型变更，余额提醒，故障及恢复通知；共享渠道槽位与冷却；站内通知与一次邮件投递，检测中断不重放原请求 | [monitoring.go](../server/internal/platform/monitoring.go)、[notifications.go](../server/internal/platform/notifications.go) |
+| 渠道健康与告警 | 真实流量连续失败自动熔断（阈值可配，手动恢复）；零成本的周期模型列表与余额检查，模型变更、余额提醒、故障及恢复通知；共享渠道槽位与冷却；站内通知与一次邮件投递，检测中断不重放原请求 | [monitoring.go](../server/internal/platform/monitoring.go)、[notifications.go](../server/internal/platform/notifications.go) |
 | 账号安全 | 验证邮箱、一次性密码找回链接、TOTP 第二步登录、一次性恢复码、设备与会话撤销；密钥加密、凭证哈希保存、防重放 | [security.go](../server/internal/platform/security.go)、[auth.go](../server/internal/platform/auth.go) |
 | 文本流式 | OpenAI/Gemini 上游流式，持久化片段、SSE 推送、断线读取快照、正式消息去重；工作台和画布显示进度，换账号关闭旧订阅 | [text_stream.go](../server/internal/platform/text_stream.go)、[text.ts](../web/src/services/api/text.ts) |
 | 分组权限与永久余额 | 分组限制可用模型，列表/报价/创建/重试/执行均校验；余额、签到、邀请与兑换到账永久保留，保留可选存储配额，移除周期规则 | [group_policy.go](../server/internal/platform/group_policy.go)、[groups.go](../server/internal/platform/groups.go)、[ops.go](../server/internal/platform/ops.go) |

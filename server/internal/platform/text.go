@@ -303,7 +303,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,user_id,model_id,capability,prompt,parameters,price_micros,pricing_kind,input_price_per_million,cached_price_per_million,output_price_per_million,group_discount,request_hash,conversation_id,request_message_id,model_name,model_display_name,moderation_id,status,max_attempts) VALUES($1,$2,$3,'text',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)", input.RequestID, u.ID, input.ModelID, input.Content, jsonBytes(parameters), price, pricingKind, inputPrice, cachedPrice, outputPrice, discount.String(), digest, conversationID, messageID, model["name"], model["displayName"], moderationID, status, settings.MaxAttempts); err != nil {
+			if _, err = tx.Exec(ctx, "INSERT INTO generation_tasks(id,user_id,model_id,capability,prompt,parameters,price_micros,pricing_kind,input_price_per_million,cached_price_per_million,output_price_per_million,group_discount,request_hash,conversation_id,request_message_id,model_name,model_display_name,moderation_id,status,max_attempts) VALUES($1,$2,$3,'text',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)", input.RequestID, u.ID, input.ModelID, input.Content, jsonBytes(parameters), price, pricingKind, inputPrice, cachedPrice, outputPrice, discount.String(), digest, conversationID, messageID, model["name"], model["displayName"], moderationID, status, effectiveMaxAttempts(settings, model)); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, "UPDATE conversations SET updated_at=now() WHERE id=$1", conversationID)

@@ -32,10 +32,10 @@ export type ModerationReview = { id: string; username: string; status: "pending"
 export const getModerationReviews = (status = "pending", offset = 0) => apiRequest<{ reviews: ModerationReview[] }>(`/api/admin/moderation?${serializeApiParams({ status, offset })}`);
 export const decideModeration = (id: string, body: { decision: "approved" | "rejected"; note: string }) => apiRequest<void>(`/api/admin/moderation/${id}/decision`, { method: "POST", body });
 
-export type MonitoringConfig = { intervalMinutes: number; autoDisableAfter: number; bindingIds: string[]; prompt: string; parameters: Record<string, unknown>; checkModels: boolean; balanceThreshold: string | null };
+export type MonitoringConfig = { intervalMinutes: number; checkModels: boolean; balanceThreshold: string | null };
 
 export type ModelCheck = { status: "succeeded" | "failed"; durationMs: number | null; finishedAt: string };
-export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable" | "unknown"; availableChannels: number; checkedAt: string | null; uptime: number | null; taskCount?: number; checks: ModelCheck[] };
+export type ModelAvailability = { id: string; displayName: string; capability: string; status: "available" | "degraded" | "unavailable"; availableChannels: number; uptime: number | null; taskCount?: number; checks: ModelCheck[] };
 export const getPublicStatus = () => apiRequest<{ models: ModelAvailability[] }>("/api/status/models");
 export type Referral = { id: string; displayName: string; reward: string; createdAt: string };
 export const getReferrals = (offset = 0) => apiRequest<{ code: string; enabled: boolean; percent: string; summary: { invited: number; earned: string }; referrals: Referral[] }>(`/api/user/referrals?offset=${offset}`);
@@ -44,7 +44,6 @@ export const saveMonitoring = (id: string, body: MonitoringConfig) => apiRequest
 export const checkChannel = (id: string) => apiRequest<{ queued: boolean }>(`/api/admin/channels/${id}/check`, { method: "POST" });
 export const checkAllChannels = (capability?: ModelCapability) => apiRequest<{ queued: number }>(`/api/admin/channels/check-all?${serializeApiParams({ capability })}`, { method: "POST" });
 export const getChannelChecks = (id: string) => apiRequest<{ checks: Array<{ id: string; status: string; detail: Record<string, unknown>; durationMs: number; createdAt: string }> }>(`/api/admin/channels/${id}/checks`);
-export const getChannelBindings = (id: string) => apiRequest<{ models: Array<{ id: string; modelId: string; displayName: string; capability: string; upstreamModel: string }> }>(`/api/admin/channels/${id}/bindings`);
 export const acknowledgeModelChanges = (id: string) => apiRequest<void>(`/api/admin/channels/${id}/model-changes/ack`, { method: "POST" });
 
 export type CostConfig = Partial<Record<"fixed" | "input" | "cached" | "output" | "second", string>>;

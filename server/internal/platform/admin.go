@@ -280,6 +280,11 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if input.Config == nil {
 			input.Config = map[string]any{}
 		}
+		if raw := input.Config["maxAttempts"]; raw != nil {
+			if value := integer(raw); value < 1 || value > 10 {
+				return nil, problem(400, "invalid_max_attempts", "模型重试次数必须在 1-10 之间，留空则跟随平台设置")
+			}
+		}
 		if input.Capability == "text" {
 			if _, err = modelTextParameters(Row{"config": input.Config}, nil); err != nil {
 				return nil, err
@@ -581,7 +586,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 					}
 				}
 			}
-			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability,endpoint_path) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,capability=excluded.capability,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,endpoint_path=excluded.endpoint_path,updated_at=now()", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability, strings.Trim(input.EndpointPath, "/ "))
+			_, err := tx.Exec(ctx, "INSERT INTO channels(id,name,protocol,base_url,status,timeout_ms,max_concurrency,cooldown_seconds,key_strategy,task_adapter,capability,endpoint_path) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,capability=excluded.capability,protocol=excluded.protocol,base_url=excluded.base_url,status=excluded.status,timeout_ms=excluded.timeout_ms,max_concurrency=excluded.max_concurrency,cooldown_seconds=excluded.cooldown_seconds,key_strategy=excluded.key_strategy,task_adapter=excluded.task_adapter,endpoint_path=excluded.endpoint_path,updated_at=now(),auto_disabled_at=CASE WHEN excluded.status='active' THEN NULL ELSE channels.auto_disabled_at END,consecutive_request_failures=CASE WHEN excluded.status='active' THEN 0 ELSE channels.consecutive_request_failures END,cooldown_until=CASE WHEN excluded.status='active' AND channels.auto_disabled_at IS NOT NULL THEN NULL ELSE channels.cooldown_until END,last_error_code=CASE WHEN excluded.status='active' AND channels.auto_disabled_at IS NOT NULL THEN NULL ELSE channels.last_error_code END", id, input.Name, input.Protocol, strings.TrimRight(input.BaseURL, "/"), input.Status, input.TimeoutMS, input.MaxConcurrency, input.CooldownSeconds, input.KeyStrategy, input.TaskAdapter, input.Capability, strings.Trim(input.EndpointPath, "/ "))
 			if err != nil {
 				return err
 			}

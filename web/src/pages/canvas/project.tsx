@@ -129,6 +129,7 @@ type CanvasGenerationRequest = {
 
 const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
+const CANVAS_VIEWPORT_SAVE_DEBOUNCE_MS = 3000;
 // Stable empty reference array prevents `... || []` from invalidating CanvasNode's React.memo on every render.
 const EMPTY_REFERENCES: CanvasResourceReference[] = [];
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
@@ -766,7 +767,8 @@ function InfiniteCanvasPage() {
             if (loadedProjectIdRef.current !== projectId) return;
             updateProject(projectId, { viewport: viewportRef.current });
             viewportSaveTimerRef.current = null;
-        }, 500);
+            // 视口走独立的小写入，间隔可以比内容保存更宽松。
+        }, CANVAS_VIEWPORT_SAVE_DEBOUNCE_MS);
         return () => {
             if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         };

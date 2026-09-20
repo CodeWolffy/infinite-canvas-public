@@ -16,23 +16,33 @@ export type ModelSettingsValues = {
     maxOutputTokens?: number;
     reasoningEfforts?: ModelReasoningEffort[];
     imageInput?: boolean;
+    maxAttempts?: number | null;
 };
 
 export function modelSettingsPayload(values: ModelSettingsValues, config: Record<string, unknown> = {}): Pick<ModelInput, "pricePerImage" | "inputPricePerMillion" | "cachedPricePerMillion" | "outputPricePerMillion" | "pricePerSecond" | "config"> {
     const tokenPricing = values.capability === "text" && values.tokenPricing;
     const secondPricing = (values.capability === "video" || values.capability === "audio") && values.perSecondPricing;
+    const next: Record<string, unknown> = { ...config };
+    if (values.maxAttempts == null) delete next.maxAttempts;
+    else next.maxAttempts = values.maxAttempts;
+    if (values.capability === "text") {
+        next.maxOutputTokens = values.maxOutputTokens;
+        next.reasoningEfforts = values.reasoningEfforts || [];
+        next.imageInput = Boolean(values.imageInput);
+    }
     return {
         pricePerImage: String(values.pricePerImage ?? "0"),
         inputPricePerMillion: tokenPricing ? values.inputPrice ?? "" : null,
         cachedPricePerMillion: tokenPricing ? values.cachedPrice ?? null : null,
         outputPricePerMillion: tokenPricing ? values.outputPrice ?? "" : null,
         pricePerSecond: secondPricing ? values.pricePerSecond ?? "" : null,
-        config: { ...config, ...(values.capability === "text" ? { maxOutputTokens: values.maxOutputTokens, reasoningEfforts: values.reasoningEfforts || [], imageInput: Boolean(values.imageInput) } : {}) },
+        config: next,
     };
 }
 
 export default function ModelSettingsFields({ capability }: { capability: ModelCapability }) {
     return <>
+        <Form.Item name="maxAttempts" label="重试次数" extra="留空跟随平台设置；绑定渠道较多的模型可调高，范围 1-10。只在没有文本输出、没有异步任务 ID 时切换渠道。"><InputNumber min={1} max={10} precision={0} className="!w-full" placeholder="跟随平台设置" /></Form.Item>
         {capability === "text" ? <>
             <Form.Item name="maxOutputTokens" label="最大输出 token" extra="统一用于报价与生成，用户端不展示或修改；按模型实际能力填写。" rules={[{ required: true, message: "请配置该模型的最大输出 token 数" }]}><InputNumber min={1} precision={0} className="!w-full" /></Form.Item>
             <Form.Item name="reasoningEfforts" label="开放的思考强度" extra="只勾选模型与渠道实际支持的档位，留空时使用模型默认。"><Select mode="multiple" allowClear placeholder="仅使用模型默认" options={modelReasoningEfforts.map((value) => ({ value, label: `${reasoningEffortLabel(value)}（${value}）` }))} /></Form.Item>

@@ -464,6 +464,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 			if result.Pending {
 				if result.UpstreamID == "" {
 					last = &upstreamError{Category: "upstream_error"}
+					upstreamFailed = true
 					return
 				}
 				persistCtx := ctx
@@ -531,8 +532,16 @@ func (a *App) executeTask(root context.Context, task Row) {
 					return err
 				}
 				result, err := tx.Exec(ctx, "UPDATE channels SET last_success_at=now(),last_error_code=NULL,cooldown_until=NULL WHERE id=$1 AND (last_failure_at IS NULL OR last_failure_at<$2) AND (last_error_code IS NOT NULL OR cooldown_until IS NOT NULL)", candidate.ID, task["startedAt"])
-				if err != nil || result.RowsAffected() == 0 {
+				if err != nil {
 					return err
+				}
+				recovered := result.RowsAffected() > 0
+				// 每次成功都让连续失败计数回落一档，间歇性故障不会积累到熔断阈值。
+				if _, err = tx.Exec(ctx, "UPDATE channels SET consecutive_request_failures=GREATEST(consecutive_request_failures-1,0) WHERE id=$1 AND consecutive_request_failures>0 AND (last_failure_at IS NULL OR last_failure_at<$2)", candidate.ID, task["startedAt"]); err != nil {
+					return err
+				}
+				if !recovered {
+					return nil
 				}
 				return a.notification(ctx, tx, "", "recovered:"+taskReference(task), "channel.recovered", "渠道已恢复", candidate.Name+" 已恢复正常生成。")
 			})
@@ -605,12 +614,29 @@ func (a *App) recordAttemptFailure(ctx context.Context, c channel, logID string,
 		if !channelFailure(failure) {
 			return nil
 		}
-		old, err := one(ctx, tx, "SELECT last_error_code FROM channels WHERE id=$1 FOR UPDATE", c.ID)
+		old, err := one(ctx, tx, "SELECT last_error_code,consecutive_request_failures,auto_disabled_at FROM channels WHERE id=$1 FOR UPDATE", c.ID)
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, "UPDATE channels SET last_failure_at=now(),last_error_code=$2,cooldown_until=now()+($3*interval '1 second') WHERE id=$1", c.ID, failure.Category, c.CooldownSeconds); err != nil {
+		count := integer(old["consecutiveRequestFailures"])
+		cooldown := int64(c.CooldownSeconds)
+		disable := false
+		if channelRequestFailure(failure.Category) {
+			count++
+			cooldown *= cooldownBackoff(count)
+			settings, err := a.settings(ctx, tx)
+			if err != nil {
+				return err
+			}
+			disable = settings.RequestAutoDisableAfter > 0 && count >= int64(settings.RequestAutoDisableAfter) && old["autoDisabledAt"] == nil
+		}
+		if _, err = tx.Exec(ctx, `UPDATE channels SET last_failure_at=now(),last_error_code=$2,cooldown_until=now()+($3*interval '1 second'),
+			consecutive_request_failures=$4,auto_disabled_at=CASE WHEN $5 THEN coalesce(auto_disabled_at,now()) ELSE auto_disabled_at END
+			WHERE id=$1`, c.ID, failure.Category, cooldown, count, disable); err != nil {
 			return err
+		}
+		if disable {
+			return a.notification(ctx, tx, "", "request-disabled:"+logID, "channel.disabled", "渠道已自动停用", c.Name+" 连续多次调用失败，已停止接单；请在渠道编辑中保存为「启用」恢复。")
 		}
 		if str(old["lastErrorCode"]) != failure.Category {
 			return a.notification(ctx, tx, "", "failure:"+logID, "channel.failure", "渠道调用异常", c.Name+"："+failure.Error())

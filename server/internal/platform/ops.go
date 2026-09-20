@@ -153,8 +153,7 @@ func (a *App) opsRoutes(admin *gin.RouterGroup) {
 			return nil, problem(400, "invalid_capability", "渠道类型不正确")
 		}
 		result, err := a.DB.Exec(c.Request.Context(), `UPDATE channels SET next_check_at=now() WHERE status='active' AND deleted_at IS NULL AND ($1='' OR capability=$1) AND (
-			(jsonb_typeof(monitoring->'bindingIds')='array' AND jsonb_array_length(monitoring->'bindingIds')>0)
-			OR coalesce((monitoring->>'checkModels')::boolean,false)
+			coalesce((monitoring->>'checkModels')::boolean,false)
 			OR (monitoring ? 'balanceThreshold' AND monitoring->>'balanceThreshold' NOT IN ('','null')))`, capability)
 		if err != nil {
 			return nil, err

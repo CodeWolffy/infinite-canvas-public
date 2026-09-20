@@ -45,7 +45,7 @@ func TestChannelCapabilityMigrationPreservesExistingChannels(t *testing.T) {
 		}
 		bindings[capability] = binding
 	}
-	monitor := Monitoring{IntervalMinutes: 15, BindingIDs: []string{bindings["image"], bindings["text"], bindings["video"], bindings["audio"]}, Prompt: "preserved prompt", CheckModels: true}
+	monitor := Monitoring{IntervalMinutes: 15, CheckModels: true}
 	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2,next_check_at=now(),monitor_token=$3,monitor_deadline=now()+interval '1 minute' WHERE id=$1", shared, jsonBytes(monitor), uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestChannelCapabilityMigrationPreservesExistingChannels(t *testing.T) {
 			t.Fatal("new channel inherited another channel's monitor lease")
 		}
 		var config Monitoring
-		if err := json.Unmarshal(jsonBytes(channel["monitoring"]), &config); err != nil || !reflect.DeepEqual(config.BindingIDs, []string{binding}) || config.IntervalMinutes != 15 || config.Prompt != monitor.Prompt || !config.CheckModels {
+		if err := json.Unmarshal(jsonBytes(channel["monitoring"]), &config); err != nil || !reflect.DeepEqual(config, monitor) {
 			t.Fatalf("%s monitoring configuration is incorrect: %v", capability, err)
 		}
 		var keyCount, activeKeys int

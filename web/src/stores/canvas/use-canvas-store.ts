@@ -54,7 +54,7 @@ type CanvasStore = {
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
 type CanvasSnapshot = Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">;
 const emptySnapshot = (): CanvasSnapshot => ({ nodes: [], connections: [], chatSessions: [], activeChatId: null, backgroundMode: "lines", showImageInfo: false, viewport: initialViewport });
-const pendingUpdates = new Map<string, { title?: string; snapshot?: CanvasSnapshot }>();
+const pendingUpdates = new Map<string, ProjectUpdatePatch>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const savingProjects = new Map<string, Promise<void>>();
 const deletingProjects = new Set<string>();
@@ -121,9 +121,14 @@ function mergeProject(project: CanvasProject) {
     return next;
 }
 
-function enqueueProjectUpdate(id: string, patch: { title?: string; snapshot?: CanvasSnapshot }) {
+type ProjectUpdatePatch = { title?: string; snapshot?: CanvasSnapshot; viewport?: ViewportTransform };
+
+function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
     if (!useCanvasStore.getState().hydrated) return;
-    pendingUpdates.set(id, { ...pendingUpdates.get(id), ...patch });
+    const merged: ProjectUpdatePatch = { ...pendingUpdates.get(id), ...patch };
+    // 待写入的完整快照已经带上当时的视口，单独的小视口写入没有意义。
+    if (merged.snapshot) delete merged.viewport;
+    pendingUpdates.set(id, merged);
     // 已知不可恢复：只保留待写入内容，等用户点重试，不再自动发请求。
     if (blockedProjects.has(id)) return;
     const timer = saveTimers.get(id);
@@ -329,7 +334,9 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                         return updated;
                     }),
                 }));
-                if (updated && get().hydrated) enqueueProjectUpdate(id, { snapshot: projectSnapshot(updated) });
+                if (!updated || !get().hydrated) return;
+                // 平移和缩放只改视口，单独走小写入，避免整份快照重传重写。
+                enqueueProjectUpdate(id, Object.keys(patch).every((key) => key === "viewport") ? { viewport: updated.viewport } : { snapshot: projectSnapshot(updated) });
             },
             applyRestoredProject: (record) => {
                 if (!get().projects.some((project) => project.id === record.id)) return;

@@ -37,7 +37,7 @@ export type AdminChannel = {
     taskAdapter: string;
     endpointPath?: string;
     autoDisabledAt: string | null;
-    consecutiveCheckFailures: number;
+    consecutiveRequestFailures: number;
     latency?: { samples: number; p50Ms: number | null; p95Ms: number | null };
     cooldownUntil: string | null;
     lastSuccessAt: string | null;

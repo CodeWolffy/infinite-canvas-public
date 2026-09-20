@@ -6,17 +6,17 @@ import { AdminGuard, AuthGuard } from "@/components/auth/auth-guard";
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import AdminLayout from "@/layouts/admin-layout";
 import UserLayout from "@/layouts/user-layout";
-import AssetsPage from "@/pages/assets";
-import CanvasPage from "@/pages/canvas";
 import ChangePasswordPage from "@/pages/change-password";
 import HomePage from "@/pages/home";
 import LoginPage from "@/pages/login";
 import AccountRecoveryPage from "@/pages/account-recovery";
 import NotFound from "@/pages/not-found";
-import PromptsPage from "@/pages/prompts";
 import UserCenterLayout from "@/layouts/user-center-layout";
 
 // 管理后台、个人中心、画布详情和生图工作台体积最大且不是进入应用就需要，拆成独立 chunk 按需加载。
+const AssetsPage = lazy(() => import("@/pages/assets"));
+const CanvasPage = lazy(() => import("@/pages/canvas"));
+const PromptsPage = lazy(() => import("@/pages/prompts"));
 const AdminAssetsPage = lazy(() => import("@/pages/admin/assets"));
 const AdminChannelsPage = lazy(() => import("@/pages/admin/channels"));
 const AdminLogsPage = lazy(() => import("@/pages/admin/logs"));

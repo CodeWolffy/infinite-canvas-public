@@ -115,11 +115,11 @@ export default function AdminChannelsPage() {
         { title: "渠道", key: "channel", width: 120, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
         { title: "接口地址", dataIndex: "baseUrl", width: 130, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
         { title: "密钥", key: "secret", width: 108, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><KeyRound className="size-3.5" />{channel.activeKeyCount} / {channel.keyCount} 可用</span> : <Tag color="orange">未配置</Tag> },
-        { title: "响应 p50 / p95", key: "latency", width: 140, render: (_, channel) => <Tooltip title={`${channel.latency?.samples || 0} 个成功样本，含真实任务、生成检测与调试`}><span className="font-mono text-xs">{channel.latency?.p50Ms == null ? "—" : `${(channel.latency.p50Ms / 1000).toFixed(1)}s / ${((channel.latency.p95Ms || 0) / 1000).toFixed(1)}s`}</span></Tooltip> },
+        { title: "响应 p50 / p95", key: "latency", width: 140, render: (_, channel) => <Tooltip title={`${channel.latency?.samples || 0} 个成功样本，含真实任务与在线调试`}><span className="font-mono text-xs">{channel.latency?.p50Ms == null ? "—" : `${(channel.latency.p50Ms / 1000).toFixed(1)}s / ${((channel.latency.p95Ms || 0) / 1000).toFixed(1)}s`}</span></Tooltip> },
         { title: "并发", dataIndex: "maxConcurrency", width: 60 },
         { title: "超时", dataIndex: "timeoutMs", width: 62, render: (value: number) => `${Math.round(value / 1000)}s` },
         { title: "故障冷却", dataIndex: "cooldownSeconds", width: 96, render: (value: number) => `${value ?? 120}s` },
-        { title: "状态", dataIndex: "status", width: 116, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.autoDisabledAt ? <Tooltip title={`连续 ${channel.consecutiveCheckFailures} 次检测失败，检测成功后恢复`}><Tag color="red">自动停用</Tag></Tooltip> : channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}</Space> },
+        { title: "状态", dataIndex: "status", width: 116, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.autoDisabledAt ? <Tooltip title={`真实调用连续失败 ${channel.consecutiveRequestFailures} 次，已停止接单；请在渠道编辑中保存为「启用」恢复`}><Tag color="red">自动停用</Tag></Tooltip> : channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}</Space> },
         { title: "最近尝试", key: "health", width: 200, render: (_, channel) => {
             const attempt = channel.lastAttempt;
             if (!attempt) return <div className="text-xs text-stone-500">{channel.lastErrorCode ? <span className="text-red-500">{channel.lastErrorCode}</span> : channel.lastSuccessAt ? dayjs(channel.lastSuccessAt).format("YYYY-MM-DD HH:mm") : "尚无尝试"}</div>;
@@ -153,7 +153,7 @@ export default function AdminChannelsPage() {
                 </div>
                 <Space wrap>
                     <Link to={`/admin/models?type=${category.value}`}><Button>{category.label}模型</Button></Link>
-                    <Button loading={checkAll.isPending} onClick={() => modal.confirm({ title: `检测全部${category.label}渠道？`, content: `仅提交已启用且配置了检测项目的${category.label}渠道。生成检测会产生真实上游费用。`, okText: "开始检测", onOk: () => checkAll.mutateAsync(category.value) })}>检测{category.label}渠道</Button>
+                    <Button loading={checkAll.isPending} onClick={() => modal.confirm({ title: `检测全部${category.label}渠道？`, content: `仅提交已启用且配置了检测项目的${category.label}渠道。检测只读取上游模型列表和余额，不产生生成费用。`, okText: "开始检测", onOk: () => checkAll.mutateAsync(category.value) })}>检测{category.label}渠道</Button>
                     <Button type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建{category.label}渠道</Button>
                 </Space>
             </div>

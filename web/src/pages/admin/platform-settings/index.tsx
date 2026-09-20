@@ -123,10 +123,18 @@ export default function PlatformSettingsPage() {
                             <Form.Item
                                 name="maxAttempts"
                                 label="任务最多尝试次数（含首次）"
-                                extra="默认 3 次；1 表示关闭自动切换。只在没有文本输出、没有异步任务 ID 时切换，次数耗尽退回冻结余额。"
+                                extra="默认 3 次，上限 10；1 表示关闭自动切换。模型可单独覆盖此值。只在没有文本输出、没有异步任务 ID 时切换，次数耗尽退回冻结余额。"
                                 rules={[{ required: true }]}
                             >
-                                <InputNumber min={1} precision={0} className="!w-full" />
+                                <InputNumber min={1} max={10} precision={0} className="!w-full" />
+                            </Form.Item>
+                            <Form.Item
+                                name="requestAutoDisableAfter"
+                                label="连续调用失败自动停用阈值"
+                                extra="默认 10 次；填 0 关闭。只统计超时、上游异常和流中断，限流与鉴权失败不计入。达到阈值后停止接单，需在渠道编辑中保存为「启用」手动恢复。"
+                                rules={[{ required: true }]}
+                            >
+                                <InputNumber min={0} max={100} precision={0} className="!w-full" />
                             </Form.Item>
                             <Form.Item
                                 name="activeTasks"

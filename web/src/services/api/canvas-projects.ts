@@ -24,7 +24,7 @@ export async function createCanvasProject(input: { title: string; snapshot: unkn
     return (await apiRequest<{ project: CanvasProjectDetail }>("/api/canvas-projects", { method: "POST", body: input })).project;
 }
 
-export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown }) {
+export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown }) {
     return (await apiRequest<{ project: CanvasProjectSummary }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
 }
 

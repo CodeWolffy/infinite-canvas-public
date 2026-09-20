@@ -200,43 +200,35 @@ func TestModerationRefundAndRejectedContext(t *testing.T) {
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM moderation_reviews WHERE user_id=$1 AND status='canceled'", user).Scan(&canceledReviews); err != nil || canceledReviews != 1 { t.Fatalf("canceled reviews=%d: %v", canceledReviews, err) }
 }
 
-func TestMonitorAutoRecoveryAndStatusAuth(t *testing.T) {
+func TestRequestFuseAndStatusAuth(t *testing.T) {
 	a := routingApp(t)
 	ctx := context.Background()
-	_, userCookie := testUser(t, a, 0)
-	var healthy atomic.Bool
+	settings := defaultSettings
+	settings.UserRPM, settings.IPRPM, settings.RequestAutoDisableAfter = 0, 0, 2
+	if _, err := a.DB.Exec(ctx, "UPDATE app_settings SET value=$1 WHERE key='platform'", jsonBytes(settings)); err != nil { t.Fatal(err) }
+	user, userCookie := testUser(t, a, 5*moneyScale)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !healthy.Load() { w.WriteHeader(503); fmt.Fprint(w, `{"error":{"message":"unavailable"}}`); return }
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+		w.WriteHeader(503); fmt.Fprint(w, `{"error":{"message":"unavailable"}}`)
 	}))
 	defer upstream.Close()
-	model, channelID := capabilityModel(t, a, "text", upstream.URL, 0)
-	var binding string
-	if err := a.DB.QueryRow(ctx, "SELECT id FROM model_channels WHERE channel_id=$1", channelID).Scan(&binding); err != nil { t.Fatal(err) }
-	config := Monitoring{AutoDisableAfter: 3, BindingIDs: []string{binding}, Prompt: "probe"}
-	if _, err := a.DB.Exec(ctx, "UPDATE channels SET monitoring=$2 WHERE id=$1", channelID, jsonBytes(config)); err != nil { t.Fatal(err) }
-	probe := func() {
-		row, err := one(ctx, a.DB, "UPDATE channels SET monitor_token=$2,monitor_deadline=now()+(timeout_ms*interval '1 millisecond') WHERE id=$1 RETURNING *", channelID, uuid.NewString())
-		if err != nil { t.Fatal(err) }
-		a.runMonitor(ctx, row)
+	model, channelID := capabilityModel(t, a, "text", upstream.URL, moneyScale)
+	// 冷却清零，让两次真实调用都落在同一渠道上累计失败。
+	if _, err := a.DB.Exec(ctx, "UPDATE channels SET cooldown_seconds=0 WHERE id=$1", channelID); err != nil { t.Fatal(err) }
+	for i := range 2 {
+		if response := testRequest(a.Router(), "POST", "/api/text/requests", Row{"requestId": uuid.NewString(), "modelId": model, "content": "hello"}, userCookie); response.Code != 200 {
+			t.Fatalf("create text task %d: %d %s", i, response.Code, response.Body.String())
+		}
+		a.executeTask(ctx, claimForTest(t, a, user))
 	}
-	for range 3 { probe() }
 	var disabled bool
-	if err := a.DB.QueryRow(ctx, "SELECT auto_disabled_at IS NOT NULL FROM channels WHERE id=$1", channelID).Scan(&disabled); err != nil || !disabled { t.Fatal("channel did not cool after three checks", err) }
+	if err := a.DB.QueryRow(ctx, "SELECT auto_disabled_at IS NOT NULL FROM channels WHERE id=$1", channelID).Scan(&disabled); err != nil || !disabled { t.Fatal("channel did not fuse after two failures", err) }
 	candidates, err := a.candidates(ctx, model, nil, nil)
 	if err != nil || len(candidates) != 0 { t.Fatal("automatic disable was ignored", err) }
-	healthy.Store(true)
-	probe()
-	if err = a.DB.QueryRow(ctx, "SELECT auto_disabled_at IS NOT NULL FROM channels WHERE id=$1", channelID).Scan(&disabled); err != nil || disabled { t.Fatal("channel did not recover", err) }
 	if anonymous := testRequest(a.Router(), "GET", "/api/status/models", nil, nil); anonymous.Code != 401 { t.Fatal(anonymous.Body.String()) }
 	response := testRequest(a.Router(), "GET", "/api/status/models", nil, userCookie)
 	if response.Code != 200 { t.Fatal(response.Body.String()) }
 	models := responseRow(t, response)["models"].([]any)
-	if len(models) != 1 || object(models[0])["status"] != "available" || strings.Contains(response.Body.String(), "test-key") || strings.Contains(response.Body.String(), upstream.URL) { t.Fatal("public health is wrong or contains private routing data", response.Body.String()) }
-	if _, err = a.DB.Exec(ctx, "UPDATE channels SET status='disabled' WHERE id=$1", channelID); err != nil { t.Fatal(err) }
-	probe()
-	var status string
-	if err = a.DB.QueryRow(ctx, "SELECT status FROM channels WHERE id=$1", channelID).Scan(&status); err != nil || status != "disabled" { t.Fatal("manual disable was undone", err) }
+	if len(models) != 1 || object(models[0])["status"] != "unavailable" || integer(object(models[0])["availableChannels"]) != 0 || strings.Contains(response.Body.String(), "test-key") || strings.Contains(response.Body.String(), upstream.URL) { t.Fatal("public health is wrong or contains private routing data", response.Body.String()) }
 }
 
 func TestReferralRegistrationOnlyBindsAndRollsBackInvalidAdmission(t *testing.T) {

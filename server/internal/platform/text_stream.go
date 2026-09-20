@@ -13,6 +13,12 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
+// 流式文本按半秒合并落库，兼顾流式手感与写入次数；会话状态仍由事件推送，不必每个心跳都查库。
+const (
+	textFlushInterval   = 500 * time.Millisecond
+	textSessionInterval = 30 * time.Second
+)
+
 func (a *App) wakeText(id string) {
 	a.streamMu.Lock()
 	defer a.streamMu.Unlock()
@@ -104,11 +110,15 @@ func (a *App) textEvents(c *gin.Context) {
 	ticker := time.NewTicker(queuePoll)
 	defer ticker.Stop()
 	last := ""
+	var lastSessionCheck time.Time
 	for {
-		if _, err := a.loadUser(c); err != nil {
-			c.SSEvent("expired", gin.H{})
-			c.Writer.Flush()
-			return
+		if time.Since(lastSessionCheck) >= textSessionInterval {
+			if _, err := a.loadUser(c); err != nil {
+				c.SSEvent("expired", gin.H{})
+				c.Writer.Flush()
+				return
+			}
+			lastSessionCheck = time.Now()
 		}
 		value, err := a.textRequestDetail(c)
 		if err != nil {
@@ -274,8 +284,8 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 		}
 		content.WriteString(delta)
 		pending.WriteString(delta)
-		// 首段立即保存；后续沿用任务轮询节奏合并写入，避免逐 token 更新大字段。
-		if lastFlush.IsZero() || time.Since(lastFlush) >= queuePoll {
+		// 首段立即保存；后续按半秒合并写入，避免逐 token 更新大字段。
+		if lastFlush.IsZero() || time.Since(lastFlush) >= textFlushInterval {
 			return flush()
 		}
 		return nil
