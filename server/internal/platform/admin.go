@@ -639,10 +639,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		candidate, err := a.channelFromRow(row)
-		if err != nil {
-			return nil, err
-		}
+		candidate := a.channelFromRow(row)
 		if err = a.selectChannelKey(c.Request.Context(), &candidate, nil, true); err != nil {
 			return nil, err
 		}

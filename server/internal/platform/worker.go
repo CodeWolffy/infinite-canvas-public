@@ -58,14 +58,6 @@ func (e *upstreamError) Error() string {
 	return upstreamMessage(e.Category)
 }
 
-func nullableInt(n int64) any {
-	if n == 0 {
-		return nil
-	}
-	return n
-}
-
-// toFloat 兼容 pgx 回传的 numeric/float64/int 形式的数值。
 func toFloat(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -160,11 +152,11 @@ type channel struct {
 	CostConfig                                                   map[string]any
 }
 
-func (a *App) channelFromRow(row Row) (channel, error) {
+func (a *App) channelFromRow(row Row) channel {
 	c := channel{ID: str(row["id"]), BindingID: str(row["bindingId"]), Name: str(row["name"]), Protocol: str(row["protocol"]), BaseURL: str(row["baseUrl"]), UpstreamModel: str(row["upstreamModel"]), TimeoutMS: int(integer(row["timeoutMs"])), MaxConcurrency: int(integer(row["maxConcurrency"])), CooldownSeconds: int(integer(row["cooldownSeconds"])), Priority: int(integer(row["priority"])), Weight: int(integer(row["weight"])), EndpointPath: str(row["endpointPath"])}
 	c.CostConfig = object(row["costConfig"])
 	c.KeyStrategy, c.TaskAdapter = str(row["keyStrategy"]), str(row["taskAdapter"])
-	return c, nil
+	return c
 }
 func (a *App) candidates(ctx context.Context, modelID string, excludedChannels, excludedKeys []string) ([]channel, error) {
 	items, err := rows(ctx, a.DB, `SELECT c.*,v.binding_id,v.upstream_model,v.priority,v.weight,v.cost_config
@@ -181,10 +173,7 @@ func (a *App) candidates(ctx context.Context, modelID string, excludedChannels, 
 	}
 	rankings := []ranked{}
 	for _, row := range items {
-		c, err := a.channelFromRow(row)
-		if err != nil {
-			return nil, err
-		}
+		c := a.channelFromRow(row)
 		rankings = append(rankings, ranked{c, -math.Log(1-rand.Float64()) / float64(c.Weight)})
 	}
 	sort.Slice(rankings, func(i, j int) bool {

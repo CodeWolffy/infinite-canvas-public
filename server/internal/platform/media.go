@@ -209,7 +209,7 @@ func (a *App) readMedia(ctx context.Context, row Row) ([]byte, error) {
 	}
 	return data, nil
 }
-func (a *App) download(ctx context.Context, address string, headers http.Header) ([]byte, error) {
+func (a *App) download(ctx context.Context, address string) ([]byte, error) {
 	u, err := url.Parse(address)
 	if err != nil || u.Host == "" || u.User != nil || u.Scheme != "https" && u.Scheme != "http" {
 		return nil, errors.New("无效的媒体地址")
@@ -218,7 +218,6 @@ func (a *App) download(ctx context.Context, address string, headers http.Header)
 	if err != nil {
 		return nil, err
 	}
-	req.Header = headers
 	response, err := safeClient(a.Config.AllowPrivateHosts).Do(req)
 	if err != nil {
 		return nil, err

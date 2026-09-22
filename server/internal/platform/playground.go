@@ -70,10 +70,7 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 	if row["capability"] != input.Capability {
 		return nil, problem(400, "invalid_capability", "请选择与调试类型一致的渠道")
 	}
-	ch, err := a.channelFromRow(row)
-	if err != nil {
-		return nil, err
-	}
+	ch := a.channelFromRow(row)
 	ch.UpstreamModel = input.Model
 	if ch.Protocol == "anthropic" && input.Capability == "text" && explicitTextTokens(input.Parameters) == 0 {
 		return nil, problem(400, "output_limit_required", "Claude Messages 必须填写最大输出 token 数")

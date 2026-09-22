@@ -270,10 +270,7 @@ func (a *App) runMonitor(root context.Context, row Row) {
 	ctx, cancel := context.WithDeadline(root, row["monitorDeadline"].(time.Time))
 	defer cancel()
 	config := monitoringConfig(row["monitoring"])
-	ch, err := a.channelFromRow(row)
-	if err != nil {
-		return
-	}
+	ch := a.channelFromRow(row)
 	probe := Row{"id": token, "run": 1}
 	acquired, err := a.slot(ctx, ch, probe, row["monitorDeadline"].(time.Time))
 	if err != nil || !acquired {

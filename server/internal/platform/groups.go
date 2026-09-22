@@ -390,10 +390,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		ch, err := a.channelFromRow(row)
-		if err != nil {
-			return nil, err
-		}
+		ch := a.channelFromRow(row)
 		if err = a.selectChannelKey(c.Request.Context(), &ch, nil, true); err != nil {
 			return nil, err
 		}

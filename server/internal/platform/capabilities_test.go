@@ -597,10 +597,7 @@ func TestMetadataMonitoringRespectsChannelSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch, err := a.channelFromRow(row)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ch := a.channelFromRow(row)
 	held := Row{"id": uuid.NewString(), "run": 1}
 	acquired, err := a.slot(ctx, ch, held, time.Now().Add(480*time.Second))
 	if err != nil || !acquired {

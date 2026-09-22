@@ -326,7 +326,7 @@ func (a *App) generate(ctx context.Context, c channel, task Row) (generationResu
 		if encoded := str(item["b64_json"]); encoded != "" {
 			data, err = a.decodeBase64(encoded)
 		} else {
-			data, err = a.download(ctx, str(item["url"]), nil)
+			data, err = a.download(ctx, str(item["url"]))
 		}
 		return generationResult{Data: data}, err
 	case "audio":
@@ -713,7 +713,7 @@ func (a *App) pollVideo(ctx context.Context, c channel, id string) (generationRe
 		address = str(object(response["content"])["video_url"])
 	}
 	if address != "" {
-		data, err := a.download(ctx, address, nil)
+		data, err := a.download(ctx, address)
 		return generationResult{Data: data}, err
 	}
 	if status == "completed" || status == "succeeded" {
