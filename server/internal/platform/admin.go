@@ -142,11 +142,12 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			if err != nil {
 				return nil, err
 			}
+			// securityProof 用指针：状态变更不需要二次验证，前端也不会发该字段，
+			// 值类型会让嵌套的 required 校验在绑定阶段就把状态请求拒掉。
 			input, err := body[struct {
-				Value         string        `json:"value"`
-				Role          string        `json:"role"`
-				Status        string        `json:"status"`
-				SecurityProof securityProof `json:"securityProof"`
+				Role          string         `json:"role"`
+				Status        string         `json:"status"`
+				SecurityProof *securityProof `json:"securityProof"`
 			}](c)
 			if err != nil {
 				return nil, err
@@ -169,7 +170,11 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 				}
 				// 角色变更属于高危操作，必须二次验证；状态变更沿用原有权限判断。
 				if field == "role" {
-					if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+					proof := securityProof{}
+					if input.SecurityProof != nil {
+						proof = *input.SecurityProof
+					}
+					if err := a.requireSecurityProof(c, tx, proof); err != nil {
 						return err
 					}
 				}
@@ -193,7 +198,8 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 				if _, err = tx.Exec(ctx, "UPDATE sessions SET revoked_at=now() WHERE user_id=$1", id); err != nil {
 					return err
 				}
-				return a.audit(ctx, tx, currentUser(c).ID, "user."+field, id, input)
+				// 审计只记目标值，不能把 securityProof 里的管理员密码写进 audit_logs。
+				return a.audit(ctx, tx, currentUser(c).ID, "user."+field, id, gin.H{field: next})
 			})
 			return gin.H{"user": u}, err
 		}))

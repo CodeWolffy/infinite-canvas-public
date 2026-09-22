@@ -630,8 +630,18 @@ func (a *App) requeue(ctx context.Context, task Row, resuming bool) {
 	if resuming {
 		query = "UPDATE generation_tasks SET status='queued',worker_token=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'"
 	}
-	if _, err := a.DB.Exec(ctx, query, task["id"], task["workerToken"]); err != nil {
+	result, err := a.DB.Exec(ctx, query, task["id"], task["workerToken"])
+	if err != nil {
 		slog.Warn("任务重排失败", "task", str(task["id"]), "resuming", resuming, "error", err)
+		return
+	}
+	a.notifyTextRequeued(ctx, task, result.RowsAffected() == 1)
+}
+
+// notifyTextRequeued 在文本任务回到队列后唤醒 SSE 订阅者，让前端能显示「正在切换渠道」。
+func (a *App) notifyTextRequeued(ctx context.Context, task Row, requeued bool) {
+	if requeued && task["capability"] == "text" {
+		a.publishText(ctx, str(task["id"]))
 	}
 }
 
@@ -650,7 +660,12 @@ func (a *App) retryTask(ctx context.Context, task Row, ch channel, failure *upst
 			AND NOT(v.channel_id=ANY(generation_tasks.failed_channel_ids)) AND ($5='authentication' OR v.channel_id<>$3::uuid)
 			AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=v.channel_id AND k.status='active' AND NOT(k.id=ANY(generation_tasks.attempted_key_ids))))`,
 		task["id"], task["workerToken"], nullable(ch.ID), failure.Error(), failure.Category)
-	return result.RowsAffected() == 1, err
+	if err != nil {
+		return false, err
+	}
+	retried := result.RowsAffected() == 1
+	a.notifyTextRequeued(ctx, task, retried)
+	return retried, nil
 }
 func (a *App) recordAttemptFailure(ctx context.Context, c channel, logID string, failure *upstreamError) error {
 	upstreamAttemptsTotal.WithLabelValues(c.ID, failure.Category).Inc()

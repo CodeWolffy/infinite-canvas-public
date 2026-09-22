@@ -381,6 +381,7 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		return err
 	}
 	canceled := false
+	isText := false
 	err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 		owner := str(row["userId"])
 		if err := lockWallet(ctx, tx, owner); err != nil {
@@ -393,6 +394,7 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if task["status"] != "reviewing" && task["status"] != "queued" && task["status"] != "running" {
 			return nil
 		}
+		isText = task["capability"] == "text"
 		price := integer(task["priceMicros"])
 		if _, err = changeWallet(ctx, tx, owner, "release", taskReference(task), price, -price, "任务取消退回冻结余额"); err != nil {
 			return err
@@ -420,6 +422,10 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 	// 事务提交后再广播：取消状态已落库，执行中的上游请求可以安全中断。
 	if canceled {
 		a.publishCancel(ctx, id)
+		// 文本 SSE 只在收到信号时查库，取消是 worker 之外的状态变化，需要单独通知订阅者。
+		if isText {
+			a.publishText(ctx, id)
+		}
 	}
 	return nil
 }

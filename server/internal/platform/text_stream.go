@@ -153,6 +153,7 @@ func (a *App) textEvents(c *gin.Context) {
 	last := ""
 	var lastSessionCheck time.Time
 	// 只在首次连接和收到 changed 信号时查库；心跳 tick 仅保活连接。
+	// 会话校验每 30 秒执行一次，顺带强制刷新一次快照，作为 Redis 丢消息时的兜底。
 	refresh := true
 	for {
 		if time.Since(lastSessionCheck) >= textSessionInterval {
@@ -162,6 +163,7 @@ func (a *App) textEvents(c *gin.Context) {
 				return
 			}
 			lastSessionCheck = time.Now()
+			refresh = true
 		}
 		if refresh {
 			refresh = false
