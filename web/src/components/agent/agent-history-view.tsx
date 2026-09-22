@@ -39,7 +39,8 @@ export function AgentHistoryView({
     const toggleThread = (threadId: string) => {
         setSelectedIds((current) => {
             const next = new Set(current);
-            next.has(threadId) ? next.delete(threadId) : next.add(threadId);
+            if (next.has(threadId)) next.delete(threadId);
+            else next.add(threadId);
             return next;
         });
     };

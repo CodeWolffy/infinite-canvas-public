@@ -179,7 +179,8 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
     const toggleChecked = (id: string) =>
         setChecked((prev) => {
             const next = new Set(prev);
-            next.has(id) ? next.delete(id) : next.add(id);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
             return next;
         });
     const allChecked = filtered.length > 0 && filtered.every((node) => checked.has(node.id));

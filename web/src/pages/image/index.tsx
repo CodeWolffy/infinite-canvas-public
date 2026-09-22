@@ -89,7 +89,7 @@ export default function ImagePage() {
     const effectiveConfig = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const addAsset = useAssetStore((state) => state.addAsset);
-    const [models, setModels] = useState<PublicModel[]>([]);
+    const [, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
         toLog: (detail) => ({ log: detailToLog(detail, modelsRef.current), results: detail.tasks.map(taskToResult) }),
@@ -414,7 +414,6 @@ export default function ImagePage() {
         if (failure) message.error(failure.reason instanceof Error ? failure.reason.message : t("workbench.generationFailed"));
     };
 
-    const selectModel = (value: string) => updateGenerationConfig("imageModel", value);
 
     const updateGenerationConfig: UpdateAiConfig = (key, value) => {
         updateConfig(key, value);

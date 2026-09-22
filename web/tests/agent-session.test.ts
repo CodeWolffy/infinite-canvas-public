@@ -1,48 +1,41 @@
-const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
-const { runInNewContext } = require("node:vm");
-const { test } = require("node:test");
-const ts = require("typescript");
+import ts from "typescript";
+import { expect, test } from "vitest";
+import { findNode, loadModule, sourceFile } from "./support/source-loader";
 
-const source = ts.createSourceFile("local-agent-panel.tsx", readFileSync(resolve(__dirname, "../src/components/agent/local-agent-panel.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function handler(name, context) {
-    let declaration;
-    const visit = (part) => {
-        if (ts.isVariableDeclaration(part) && part.name.getText(source) === name) declaration = part;
-        ts.forEachChild(part, visit);
-    };
-    visit(source);
-    assert.ok(declaration, name);
-    const module = { exports: {} };
-    const code = ts.transpileModule(`export const invoke = ${declaration.initializer.getText(source)};`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-    runInNewContext(code, { module, exports: module.exports, DOMException, ...context });
-    return module.exports.invoke;
+// `sendPrompt`/`addAttachments` are closures inside the React panel component, so they cannot be
+// imported directly; they are extracted from the source and executed with injected dependencies.
+const source = sourceFile("components/agent/local-agent-panel.tsx", ts.ScriptKind.TSX);
+
+function handler(name: string, context: Record<string, any>) {
+    const declaration = findNode(source, (node) => ts.isVariableDeclaration(node) && node.name.getText(source) === name) as ts.VariableDeclaration | undefined;
+    expect(declaration).toBeTruthy();
+    const initializer = declaration!.initializer!.getText(source);
+    return loadModule(`export const invoke = ${initializer};`, { DOMException, ...context }).invoke;
 }
 function deferred() {
-    let resolve;
+    let resolve: (value?: unknown) => void;
     const promise = new Promise((done) => { resolve = done; });
-    return { promise, resolve };
+    return { promise, resolve: resolve! };
 }
 const image = { id: "canvas:node", name: "private.png", type: "image/png", size: 12, width: 10, height: 10, url: "blob:private", dataUrl: "data:image/png;base64,cHJpdmF0ZQ==" };
-function panel(canvasReferences = [], attachments = []) {
+function panel(canvasReferences: any[] = [], attachments: any[] = []) {
     const user = { id: "same-user", sessionVersion: 1 };
-    const state = { connected: true, sending: false, waiting: false, loadingThreads: false, prompt: "private prompt", attachments, canvasReferences, canvasContext: { snapshot: { nodes: [{ id: "node" }] } }, messages: [], activeThreadId: "thread", conversation: { status: "ready", conversationId: "conversation", revision: 1 } };
-    const requests = [], events = [], urls = [];
-    const context = {
+    const state: any = { connected: true, sending: false, waiting: false, loadingThreads: false, prompt: "private prompt", attachments, canvasReferences, canvasContext: { snapshot: { nodes: [{ id: "node" }] } }, messages: [], activeThreadId: "thread", conversation: { status: "ready", conversationId: "conversation", revision: 1 } };
+    const requests: any[] = [], events: any[] = [], urls: string[] = [];
+    const context: Record<string, any> = {
         sessionVersion: 1, useUserStore: { getState: () => user }, useAgentStore: { getState: () => state },
-        assertCurrentSession: (version) => { if (version !== user.sessionVersion) throw new DOMException("changed session", "AbortError"); },
+        assertCurrentSession: (version: number) => { if (version !== user.sessionVersion) throw new DOMException("changed session", "AbortError"); },
         useAgentSkillStore: { getState: () => ({ selectedSkill: null }) },
         prompt: state.prompt, attachments, models: [], model: "local-model", reasoningEffort: "", permissionMode: "request", endpoint: "http://127.0.0.1:17371", token: "local-token",
-        promptWithCanvasReferences: (text) => text, promptWithAttachments: (text) => text, attachmentPayloadBytes: () => 12,
-        MAX_ATTACHMENTS: 10, MAX_ATTACHMENT_PAYLOAD_BYTES: 1000, createId: () => "message", rt: (key) => key, compactText: (text) => text,
-        setAgentState: (patch) => { if (user.sessionVersion === 1) Object.assign(state, patch); },
-        addMessage: (message) => { if (user.sessionVersion === 1) state.messages.push(message); },
-        addEventLog: (...event) => { if (user.sessionVersion === 1) events.push(event); },
+        promptWithCanvasReferences: (text: string) => text, promptWithAttachments: (text: string) => text, attachmentPayloadBytes: () => 12,
+        MAX_ATTACHMENTS: 10, MAX_ATTACHMENT_PAYLOAD_BYTES: 1000, createId: () => "message", rt: (key: string) => key, compactText: (text: string) => text,
+        setAgentState: (patch: any) => { if (user.sessionVersion === 1) Object.assign(state, patch); },
+        addMessage: (message: any) => { if (user.sessionVersion === 1) state.messages.push(message); },
+        addEventLog: (...event: any[]) => { if (user.sessionVersion === 1) events.push(event); },
         message: { warning: () => {} },
         loadThreadsSequenceRef: { current: 0 }, threadMessagesRef: { current: new Map() }, attachmentUrlsRef: { current: new Set() }, clientIdRef: { current: "tab:same-user" },
-        resolveCanvasReferenceImages: async () => [image], createMessageAttachmentMetadata: async (file) => ({ id: file.id, url: file.dataUrl }),
-        fetchAgentJson: async (_endpoint, _token, path, request) => { requests.push({ path, body: JSON.parse(request.body) }); return { threadId: "thread" }; },
+        resolveCanvasReferenceImages: async () => [image], createMessageAttachmentMetadata: async (file: any) => ({ id: file.id, url: file.dataUrl }),
+        fetchAgentJson: async (_endpoint: string, _token: string, path: string, request: any) => { requests.push({ path, body: JSON.parse(request.body) }); return { threadId: "thread" }; },
         URL: { createObjectURL: () => { urls.push("blob:new"); return "blob:new"; }, revokeObjectURL: () => {} },
         readDataUrl: async () => image.dataUrl, readImageMeta: async () => ({ width: 10, height: 10 }),
         clearSkillSelection: () => {}, AgentApiError: class extends Error {},
@@ -66,23 +59,23 @@ for (const stage of ["canvas image read", "canvas image preview", "attachment pr
         setup.replaceSession();
         finish.resolve(stage === "canvas image read" ? [image] : { url: image.dataUrl });
         await pending;
-        assert.equal(setup.requests.length, 0);
-        assert.equal(setup.state.prompt, "replacement draft");
-        assert.equal(setup.state.messages.length, 0);
+        expect(setup.requests.length).toBe(0);
+        expect(setup.state.prompt).toBe("replacement draft");
+        expect(setup.state.messages.length).toBe(0);
     });
 }
 
 test("Agent sends current-session attachments and canvas references with their original ownership", async () => {
     const setup = panel([{ nodeId: "node", kind: "image", label: "image" }], [{ ...image, id: "attachment", dataUrl: "data:image/png;base64,bG9jYWw=" }]);
     await handler("sendPrompt", setup.context)();
-    assert.equal(setup.requests.length, 1);
+    expect(setup.requests.length).toBe(1);
     const request = setup.requests[0];
-    assert.equal(request.path, "/agent/codex/turn");
-    assert.equal(request.body.clientId, "tab:same-user");
-    assert.equal(request.body.threadId, "thread");
-    assert.equal(request.body.conversationId, "conversation");
-    assert.deepEqual(request.body.attachments.map((item) => item.id), ["attachment", "canvas:node"]);
-    assert.equal(request.body.messageMetadata.canvasReferences[0].previewUrl, image.dataUrl);
+    expect(request.path).toBe("/agent/codex/turn");
+    expect(request.body.clientId).toBe("tab:same-user");
+    expect(request.body.threadId).toBe("thread");
+    expect(request.body.conversationId).toBe("conversation");
+    expect(request.body.attachments.map((item: any) => item.id)).toEqual(["attachment", "canvas:node"]);
+    expect(request.body.messageMetadata.canvasReferences[0].previewUrl).toBe(image.dataUrl);
 });
 
 for (const stage of ["readDataUrl", "readImageMeta"]) {
@@ -95,8 +88,8 @@ for (const stage of ["readDataUrl", "readImageMeta"]) {
         setup.replaceSession();
         finish.resolve(stage === "readDataUrl" ? image.dataUrl : { width: 10, height: 10 });
         await pending;
-        assert.equal(setup.state.attachments.length, 0);
-        assert.equal(setup.urls.length, 0);
-        assert.equal(setup.state.messages.length, 0);
+        expect(setup.state.attachments.length).toBe(0);
+        expect(setup.urls.length).toBe(0);
+        expect(setup.state.messages.length).toBe(0);
     });
 }

@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Badge, Button, Empty, Popover, Tabs, Tag } from "antd";
 import { Bell, CheckCheck, RefreshCw } from "lucide-react";
-import { useTranslation } from "react-i18next";
 
 import { getNotifications, readAllNotifications, readNotification } from "@/services/api/platform-operations";
 import { getAnnouncement } from "@/services/api/preferences";
@@ -22,7 +21,6 @@ function readSeenAnnouncement(): string {
 }
 
 export function NotificationCenter() {
-    const { t } = useTranslation();
     const [open, setOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<"system" | "announcement">("system");
     const session = useUserStore((state) => state.sessionVersion);

@@ -80,7 +80,7 @@ export default function VideoPage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const addAsset = useSaveToAssets();
 
-    const [models, setModels] = useState<PublicModel[]>([]);
+    const [, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
         toLog: (detail) => detailToLog(detail, modelsRef.current),

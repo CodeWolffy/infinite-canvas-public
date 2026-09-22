@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { App, Button, Card, Progress, Spin } from "antd";
-import { BarChart3, Database, FolderHeart, HardDrive, Image as ImageIcon, MessageSquare, RefreshCw, ShieldCheck } from "lucide-react";
+import { BarChart3, FolderHeart, HardDrive, Image as ImageIcon, MessageSquare, RefreshCw, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { formatBytes } from "@/lib/image-utils";
