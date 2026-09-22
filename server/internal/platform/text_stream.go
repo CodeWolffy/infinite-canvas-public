@@ -152,6 +152,8 @@ func (a *App) textEvents(c *gin.Context) {
 	defer ticker.Stop()
 	last := ""
 	var lastSessionCheck time.Time
+	// 只在首次连接和收到 changed 信号时查库；心跳 tick 仅保活连接。
+	refresh := true
 	for {
 		if time.Since(lastSessionCheck) >= textSessionInterval {
 			if _, err := a.loadUser(c); err != nil {
@@ -161,24 +163,25 @@ func (a *App) textEvents(c *gin.Context) {
 			}
 			lastSessionCheck = time.Now()
 		}
-		value, err := a.textRequestDetail(c)
-		if err != nil {
-			c.SSEvent("unavailable", gin.H{})
+		if refresh {
+			refresh = false
+			value, err := a.textRequestDetail(c)
+			if err != nil {
+				c.SSEvent("unavailable", gin.H{})
+				c.Writer.Flush()
+				return
+			}
+			detail := value.(gin.H)
+			request := detail["request"].(Row)
+			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"])
+			if key != last {
+				c.SSEvent("snapshot", value)
+				last = key
+			}
 			c.Writer.Flush()
-			return
-		}
-		detail := value.(gin.H)
-		request := detail["request"].(Row)
-		key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"])
-		if key != last {
-			c.SSEvent("snapshot", value)
-			last = key
-		} else {
-			_, _ = c.Writer.Write([]byte(": heartbeat\n\n"))
-		}
-		c.Writer.Flush()
-		if request["status"] != "reviewing" && request["status"] != "running" && request["status"] != "queued" {
-			return
+			if request["status"] != "reviewing" && request["status"] != "running" && request["status"] != "queued" {
+				return
+			}
 		}
 		select {
 		case <-c.Request.Context().Done():
@@ -186,7 +189,10 @@ func (a *App) textEvents(c *gin.Context) {
 		case <-a.shutdown:
 			return
 		case <-changed:
+			refresh = true
 		case <-ticker.C:
+			_, _ = c.Writer.Write([]byte(": ping\n\n"))
+			c.Writer.Flush()
 		}
 	}
 }

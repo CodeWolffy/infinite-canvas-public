@@ -26,6 +26,12 @@ import (
 // 沿用视频接口已有的 2.5 秒轮询节奏；状态与余额始终以 PostgreSQL 为准。
 const queuePoll = 2500 * time.Millisecond
 
+// 空队列时的退避上限与恢复扫描周期。
+const (
+	queuePollMax    = 10 * time.Second
+	recoverInterval = 5 * time.Second
+)
+
 type generationResult struct {
 	Data             []byte
 	Text, UpstreamID string
@@ -238,21 +244,27 @@ func (a *App) StartWorkers(ctx context.Context) {
 		a.workers.Add(1)
 		go func() {
 			defer a.workers.Done()
+			// 空队列时按指数退避降低 SKIP LOCKED 空转；领到任务后立刻恢复原节奏。
+			poll := queuePoll
 			for ctx.Err() == nil {
 				task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=coalesce(started_at,now()),deadline=coalesce(deadline,now()+interval '480 seconds') WHERE id=(SELECT id FROM generation_tasks WHERE status='queued' AND available_at<=now() ORDER BY available_at,queued_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", uuid.NewString())
 				if err == nil {
+					poll = queuePoll
 					a.executeGuarded(ctx, task)
 					continue
 				}
 				if !errors.Is(err, notFound) && ctx.Err() == nil {
 					slog.Warn("暂时无法领取任务", "error", err)
 				}
-				timer := time.NewTimer(queuePoll)
+				timer := time.NewTimer(poll)
 				select {
 				case <-ctx.Done():
 					timer.Stop()
 					return
 				case <-timer.C:
+				}
+				if errors.Is(err, notFound) {
+					poll = min(poll*2, queuePollMax)
 				}
 			}
 		}()
@@ -260,7 +272,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 	a.workers.Add(1)
 	go func() {
 		defer a.workers.Done()
-		ticker := time.NewTicker(queuePoll)
+		ticker := time.NewTicker(recoverInterval)
 		defer ticker.Stop()
 		for {
 			select {
