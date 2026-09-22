@@ -32,6 +32,9 @@ const (
 	recoverInterval = 5 * time.Second
 )
 
+// cleanupBatch 是一次批量删除对象存储的文件数。
+const cleanupBatch = 100
+
 type generationResult struct {
 	Data             []byte
 	Text, UpstreamID string
@@ -300,6 +303,15 @@ func (a *App) StartWorkers(ctx context.Context) {
 	a.workers.Add(1)
 	go func() {
 		defer a.workers.Done()
+		// 启动后先跑一次，避免频繁重启的容器永远等不到第一次清理。
+		first := time.NewTimer(time.Minute)
+		defer first.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-first.C:
+			a.runCleanup(ctx)
+		}
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -307,7 +319,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				a.cleanup(ctx)
+				a.runCleanup(ctx)
 			}
 		}
 	}()
@@ -809,7 +821,7 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 				return err
 			}
 		}
-		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds) WHERE id=$1", task["id"], status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds),partial_text=CASE WHEN $2='succeeded' THEN '' ELSE partial_text END WHERE id=$1", task["id"], status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE task_id=$1 AND status='running'", task["id"], status); err != nil {
@@ -887,6 +899,26 @@ func (a *App) reconcileExpiredOrders(ctx context.Context) {
 	}
 }
 
+// runCleanup 由启动后与每日定时触发；多实例部署靠 Redis 锁保证只跑一份。
+func (a *App) runCleanup(ctx context.Context) {
+	if !a.cleanupLock(ctx) {
+		return
+	}
+	a.cleanup(ctx)
+}
+
+func (a *App) cleanupLock(ctx context.Context) bool {
+	if a.Redis == nil {
+		return true
+	}
+	acquired, err := a.Redis.SetNX(ctx, "ic:cleanup:lock", uuid.NewString(), time.Hour).Result()
+	if err != nil {
+		slog.Warn("清理锁获取失败", "error", err)
+		return false
+	}
+	return acquired
+}
+
 func (a *App) cleanup(ctx context.Context) {
 	a.logExec(ctx, "清理过期登录令牌", "DELETE FROM auth_tokens WHERE expires_at<now()")
 	a.logExec(ctx, "清理过期邮件", "DELETE FROM mail_outbox WHERE created_at<now()-($1*interval '1 day') AND status IN('sent','failed')", a.Config.LogDays)
@@ -900,30 +932,51 @@ func (a *App) cleanup(ctx context.Context) {
 		slog.Warn("读取待清理媒体失败", "error", err)
 		return
 	}
-	for _, item := range items {
-		var key string
-		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			row, err := one(ctx, tx, "SELECT * FROM media_objects WHERE id=$1 FOR UPDATE", item["id"])
-			if err != nil {
-				return err
+	for start := 0; start < len(items); start += cleanupBatch {
+		end := min(start+cleanupBatch, len(items))
+		pending := []pendingMedia{}
+		for _, item := range items[start:end] {
+			if key, err := a.markMediaDeleting(ctx, str(item["id"])); err == nil {
+				pending = append(pending, pendingMedia{id: str(item["id"]), key: key})
 			}
-			var referenced bool
-			if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM media_references WHERE media_id=$1) OR EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=$1) OR EXISTS(SELECT 1 FROM assets WHERE media_id=$1)", item["id"]).Scan(&referenced); err != nil {
-				return err
-			}
-			if referenced {
-				return notFound
-			}
-			key = str(row["objectKey"])
-			_, err = tx.Exec(ctx, "UPDATE media_objects SET status='deleting' WHERE id=$1", item["id"])
-			return err
-		})
-		if err != nil {
+		}
+		if len(pending) == 0 {
 			continue
 		}
-		if err = a.S3.RemoveObject(ctx, a.Config.Bucket, key, minio.RemoveObjectOptions{}); err != nil {
-			continue
+		objects := make(chan minio.ObjectInfo, len(pending))
+		for _, item := range pending {
+			objects <- minio.ObjectInfo{Key: item.key}
 		}
-		_, _ = a.DB.Exec(ctx, "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", item["id"])
+		close(objects)
+		for failure := range a.S3.RemoveObjects(ctx, a.Config.Bucket, objects, minio.RemoveObjectsOptions{}) {
+			slog.Warn("删除媒体对象失败", "key", failure.ObjectName, "error", failure.Err)
+		}
+		for _, item := range pending {
+			a.logExec(ctx, "清理媒体记录", "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", item.id)
+		}
 	}
+}
+
+type pendingMedia struct{ id, key string }
+
+// markMediaDeleting 在事务内二次确认没有引用，再把记录标记为 deleting 并返回对象键。
+func (a *App) markMediaDeleting(ctx context.Context, id string) (string, error) {
+	var key string
+	err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		row, err := one(ctx, tx, "SELECT * FROM media_objects WHERE id=$1 FOR UPDATE", id)
+		if err != nil {
+			return err
+		}
+		var referenced bool
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM media_references WHERE media_id=$1) OR EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=$1) OR EXISTS(SELECT 1 FROM assets WHERE media_id=$1)", id).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
+			return notFound
+		}
+		key = str(row["objectKey"])
+		_, err = tx.Exec(ctx, "UPDATE media_objects SET status='deleting' WHERE id=$1", id)
+		return err
+	})
+	return key, err
 }
