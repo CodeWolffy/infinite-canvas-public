@@ -86,7 +86,7 @@ export default function AdminAssetsPage() {
             key: "actions",
             fixed: "right",
             width: 150,
-            render: (_, asset) => <Space><Button type="text" size="small" icon={<Pencil className="size-3.5" />} onClick={() => openEdit(asset)}>编辑</Button><Button type="text" danger size="small" icon={<Trash2 className="size-3.5" />} onClick={() => modal.confirm({ title: `删除“${asset.title}”？`, content: "删除公共素材条目不会移除仍被画布或生成记录引用的图片。", okText: "删除", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => deleteMutation.mutateAsync(asset.id) })} /></Space>,
+            render: (_, asset) => <Space><Button type="text" size="small" icon={<Pencil className="size-3.5" />} onClick={() => openEdit(asset)}>编辑</Button><Button type="text" danger size="small" aria-label={`删除 ${asset.title}`} icon={<Trash2 className="size-3.5" />} onClick={() => modal.confirm({ title: `删除“${asset.title}”？`, content: "删除公共素材条目不会移除仍被画布或生成记录引用的图片。", okText: "删除", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => deleteMutation.mutateAsync(asset.id) })} /></Space>,
         },
     ];
 

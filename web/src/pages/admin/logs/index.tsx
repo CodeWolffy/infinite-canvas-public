@@ -62,7 +62,7 @@ export default function AdminRequestLogsPage() {
             render: (_, log) => {
                 const summary = [log.errorCategory, log.httpStatus ? `HTTP ${log.httpStatus}` : "", log.errorMessage].filter(Boolean).join(" · ");
                 return summary ? (
-                    <Tooltip title="点击复制详情"><div className="max-w-[420px] cursor-pointer truncate hover:text-stone-950 dark:hover:text-stone-100" onClick={() => copyText(logDetail(log), "请求详情已复制")}>{summary}</div></Tooltip>
+                    <Tooltip title="点击复制详情"><button type="button" className="max-w-[420px] cursor-pointer truncate text-left hover:text-stone-950 dark:hover:text-stone-100" aria-label="复制请求详情" onClick={() => copyText(logDetail(log), "请求详情已复制")}>{summary}</button></Tooltip>
                 ) : <span className="text-stone-300 dark:text-stone-600">—</span>;
             },
         },
