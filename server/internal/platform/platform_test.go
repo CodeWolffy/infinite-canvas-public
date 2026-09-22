@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -794,4 +795,78 @@ func TestRotateKeysReencryptsLegacyCiphertext(t *testing.T) {
 	if !rotated {
 		t.Fatalf("轮换统计缺少 channel_keys: %v", results)
 	}
+}
+
+// 用户取消任务必须中断正在执行的上游请求，且余额退回、状态为 canceled。
+func TestCancelPropagatesToUpstream(t *testing.T) {
+	a := testApp(t)
+	if a.Redis == nil || a.S3 == nil {
+		t.Skip("需要 TEST_REDIS_ADDR 与 TEST_MINIO_ADDR")
+	}
+	userID, cookie := testUser(t, a, 3*moneyScale)
+	ctx := context.Background()
+	upstreamStarted := make(chan struct{})
+	upstreamCanceled := make(chan struct{})
+	var startedOnce, canceledOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 必须读完请求体：否则 http.Server 不会启动后台读，客户端断开也不会取消 r.Context()。
+		_, _ = io.ReadAll(r.Body)
+		startedOnce.Do(func() { close(upstreamStarted) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(upstreamCanceled) })
+		case <-time.After(30 * time.Second):
+			// 上限等待，避免断言失败时整个测试包被挂死。
+		}
+	}))
+	defer upstream.Close()
+	modelID, channelID := uuid.NewString(), uuid.NewString()
+	sealed, err := a.seal("test-upstream-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'cancel-model','取消模型','image','published',1000000)", []any{modelID}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'取消渠道','image','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'cancel-model')", []any{modelID, channelID}}} {
+		if _, err = a.DB.Exec(ctx, query.sql, query.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created := testRequest(a.Router(), "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": modelID, "prompt": "cancel", "count": 1}, cookie)
+	if created.Code != 200 {
+		t.Fatalf("创建任务失败: %d %s", created.Code, created.Body.String())
+	}
+	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+	task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=now(),deadline=now()+interval '480 seconds' WHERE id=(SELECT id FROM generation_tasks WHERE user_id=$2 AND status='queued' LIMIT 1) RETURNING *", uuid.NewString(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.executeGuarded(ctx, task)
+	}()
+	select {
+	case <-upstreamStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("上游请求未开始")
+	}
+	if _, ok := a.running.Load(str(task["id"])); !ok {
+		t.Fatal("执行中的任务未注册取消函数")
+	}
+	if err = a.cancelTask(ctx, str(task["id"]), userID, false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("取消未传播到上游请求")
+	}
+	<-done
+	saved, err := one(ctx, a.DB, "SELECT status,error_code FROM generation_tasks WHERE id=$1", task["id"])
+	if err != nil || saved["status"] != "canceled" || saved["errorCode"] != "canceled" {
+		t.Fatalf("任务状态不正确: %v %v", saved, err)
+	}
+	testBalance(t, a, userID, 3*moneyScale, 0)
 }

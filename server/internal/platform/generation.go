@@ -380,7 +380,8 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 	if err != nil {
 		return err
 	}
-	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+	canceled := false
+	err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 		owner := str(row["userId"])
 		if err := lockWallet(ctx, tx, owner); err != nil {
 			return err
@@ -407,7 +408,18 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='canceled',updated_at=now() WHERE task_id=$1 AND status='running'", id); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, "UPDATE request_logs SET status='failed',error_category='canceled',error_message='任务已取消',finished_at=now() WHERE task_id=$1 AND status='running'", id)
-		return err
+		if _, err = tx.Exec(ctx, "UPDATE request_logs SET status='failed',error_category='canceled',error_message='任务已取消',finished_at=now() WHERE task_id=$1 AND status='running'", id); err != nil {
+			return err
+		}
+		canceled = true
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// 事务提交后再广播：取消状态已落库，执行中的上游请求可以安全中断。
+	if canceled {
+		a.publishCancel(ctx, id)
+	}
+	return nil
 }

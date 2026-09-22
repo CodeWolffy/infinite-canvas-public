@@ -222,6 +222,7 @@ func (a *App) releaseSlot(c channel, task Row) {
 func (a *App) StartWorkers(ctx context.Context) {
 	a.shutdown = ctx.Done()
 	a.startTextEvents(ctx)
+	a.startCancelEvents(ctx)
 	a.startMail(ctx)
 	a.startMonitoring(ctx)
 	a.startMetrics(ctx)
@@ -384,6 +385,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 	var attemptChannel channel
 	var logID string
 	upstreamFailed := false
+	canceled := false
 	for _, candidate := range candidates {
 		deadline := task["deadline"].(time.Time)
 		if !resuming {
@@ -457,7 +459,13 @@ func (a *App) executeTask(root context.Context, task Row) {
 				last = &upstreamError{Category: "storage"}
 				return
 			}
-			result, err := a.generate(jobCtx, candidate, task)
+			// 单独包一层可取消上下文：cancelTask 触发时只中断上游请求，不影响随后的落库与槽位释放。
+			runCtx, stopRun := context.WithCancel(jobCtx)
+			defer stopRun()
+			taskID := str(task["id"])
+			a.running.Store(taskID, context.CancelFunc(stopRun))
+			defer a.running.Delete(taskID)
+			result, err := a.generate(runCtx, candidate, task)
 			_, _ = a.DB.Exec(context.WithoutCancel(ctx), "UPDATE upstream_cost_entries SET duration_ms=(extract(epoch FROM(now()-created_at))*1000)::bigint WHERE id=$1", logID)
 			if err != nil {
 				if resuming && root.Err() != nil {
@@ -467,6 +475,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 					return
 				}
 				last = classify(err)
+				// 用户取消：任务行已由 cancelTask 改为 canceled，这里不重试也不结算。
+				if last.Category == "canceled" && root.Err() == nil {
+					canceled = true
+					return
+				}
 				upstreamFailed = true
 				return
 			}
@@ -555,6 +568,9 @@ func (a *App) executeTask(root context.Context, task Row) {
 				return a.notification(ctx, tx, "", "recovered:"+taskReference(task), "channel.recovered", "渠道已恢复", candidate.Name+" 已恢复正常生成。")
 			})
 		}()
+		if canceled {
+			return
+		}
 		if task["status"] == "succeeded" || task["status"] == "queued" {
 			return
 		}

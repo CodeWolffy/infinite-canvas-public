@@ -59,6 +59,8 @@ type App struct {
 	streamSinks map[string]map[chan struct{}]struct{}
 	shutdown    <-chan struct{}
 	startedAt   time.Time
+	// running 保存本实例正在执行的上游请求的取消函数，键为任务 ID。
+	running sync.Map
 	// workersStarted 在 StartWorkers 之后置位，供 /ready 区分「进程存活」与「可以接单」。
 	workersStarted atomic.Bool
 }

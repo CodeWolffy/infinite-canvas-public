@@ -37,6 +37,47 @@ func (a *App) publishText(ctx context.Context, id string) {
 	}
 }
 
+// cancelRunning 中断本实例中该任务的上游请求；没有在跑的任务时是空操作。
+func (a *App) cancelRunning(id string) {
+	if cancel, ok := a.running.Load(id); ok {
+		if fn, ok := cancel.(context.CancelFunc); ok {
+			fn()
+		}
+	}
+}
+
+// publishCancel 本地中断后经 Redis 广播，让其他实例也停掉同一个任务的上游请求。
+func (a *App) publishCancel(ctx context.Context, id string) {
+	a.cancelRunning(id)
+	if a.Redis != nil {
+		_ = a.Redis.Publish(ctx, "ic:task-cancel", id).Err()
+	}
+}
+
+func (a *App) startCancelEvents(ctx context.Context) {
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		if a.Redis == nil {
+			return
+		}
+		sub := a.Redis.Subscribe(ctx, "ic:task-cancel")
+		defer sub.Close()
+		messages := sub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case message, ok := <-messages:
+				if !ok {
+					return
+				}
+				a.cancelRunning(message.Payload)
+			}
+		}
+	}()
+}
+
 func (a *App) startTextEvents(ctx context.Context) {
 	a.workers.Add(1)
 	go func() {
