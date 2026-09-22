@@ -8,6 +8,7 @@ import dayjs from "dayjs";
 import "dayjs/locale/zh-cn";
 import { useTranslation } from "react-i18next";
 
+import { AppErrorBoundary } from "@/components/layout/app-error-boundary";
 import { ClientRootInit } from "@/components/layout/client-root-init";
 import type { AppLocale } from "@/i18n";
 import { getAntThemeConfig } from "@/lib/app-theme";
@@ -52,7 +53,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
         <ConfigProvider locale={locale === "zh-CN" ? zhCN : enUS} theme={getAntThemeConfig(dark)}>
             <App>
                 <QueryClientProvider client={queryClient}>
-                    <ClientRootInit>{children}</ClientRootInit>
+                    <AppErrorBoundary>
+                        <ClientRootInit>{children}</ClientRootInit>
+                    </AppErrorBoundary>
                 </QueryClientProvider>
             </App>
         </ConfigProvider>

@@ -3,6 +3,7 @@ import { Spin } from "antd";
 import { createBrowserRouter, Navigate, Outlet, useParams } from "react-router-dom";
 
 import { AdminGuard, AuthGuard } from "@/components/auth/auth-guard";
+import { AppErrorFallback } from "@/components/layout/app-error-boundary";
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import AdminLayout from "@/layouts/admin-layout";
 import UserLayout from "@/layouts/user-layout";
@@ -47,14 +48,18 @@ const AdminStatusPage = lazy(() => import("@/pages/admin/status"));
 const StatusPage = lazy(() => import("@/pages/status"));
 const TextPage = lazy(() => import("@/pages/text"));
 
+// 各层路由都挂同一个错误兜底：lazy chunk 加载失败或渲染异常时不再整页白屏。
+const errorElement = <AppErrorFallback />;
+
 export const router = createBrowserRouter([
-    { path: "/login", element: <LoginPage /> },
+    { path: "/login", element: <LoginPage />, errorElement },
     { path: "/sign-up", element: <LoginPage /> },
     { path: "/register", element: <LoginPage /> },
     { path: "/forgot-password", element: <AccountRecoveryPage /> },
     { path: "/reset-password", element: <AccountRecoveryPage /> },
     { path: "/verify-email", element: <AccountRecoveryPage /> },
     {
+        errorElement,
         element: (
             <AuthGuard>
                 <Outlet />
@@ -63,6 +68,7 @@ export const router = createBrowserRouter([
         children: [
             { path: "/change-password", element: <ChangePasswordPage /> },
             {
+                errorElement,
                 element: (
                     <UserLayout>
                         <AnalyticsTracker />
@@ -88,6 +94,7 @@ export const router = createBrowserRouter([
             },
             {
                 path: "/user",
+                errorElement,
                 element: <UserCenterLayout />,
                 children: [
                     { index: true, element: <Navigate to="generations" replace /> },
@@ -100,6 +107,7 @@ export const router = createBrowserRouter([
             },
             {
                 path: "/admin",
+                errorElement,
                 element: <AdminGuard><AdminLayout /></AdminGuard>,
                 children: [
                     { index: true, element: <Navigate to="stats" replace /> },
