@@ -9,6 +9,7 @@ import { NotificationCenter } from "@/components/layout/notification-center";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { SecurityProofProvider } from "@/hooks/use-security-proof";
 
 const adminLinks = [
     { to: "/admin/stats", label: "用量统计", icon: BarChart3 },
@@ -81,6 +82,7 @@ export default function AdminLayout() {
                 </main>
             </div>
             <AnnouncementEditor open={announcementOpen} onClose={() => setAnnouncementOpen(false)} />
+            <SecurityProofProvider />
         </div>
     );
 }

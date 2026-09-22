@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import { createAdminUser, getAdminUsers, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
 import { getUserGroups, setUserGroup } from "@/services/api/billing";
 import type { AuthUser, UserRole } from "@/services/api/auth";
@@ -16,6 +17,7 @@ type Credential = { username: string; displayName: string; temporaryPassword: st
 
 export default function AdminUsersPage() {
     const { message, modal } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const copyText = useCopyText();
     const queryClient = useQueryClient();
     const currentUser = useUserStore((state) => state.user);
@@ -37,9 +39,9 @@ export default function AdminUsersPage() {
     const updateUserCache = (user: AuthUser) => queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => users.map((item) => (item.id === user.id ? user : item)));
     const createMutation = useMutation({ mutationFn: createAdminUser, onSuccess: (user, variables) => { queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => [user, ...users]); setCreateOpen(false); createForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
     const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: "active" | "disabled" }) => updateAdminUserStatus(id, status), onSuccess: (user) => { updateUserCache(user); message.success(user.status === "active" ? "账号已启用" : "账号已禁用"); }, onError: showError(message.error) });
-    const roleMutation = useMutation({ mutationFn: ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role), onSuccess: (user) => { updateUserCache(user); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
+    const roleMutation = useMutation({ mutationFn: async ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role, await requestProof()), onSuccess: (user) => { updateUserCache(user); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
     const groupMutation = useMutation({ mutationFn: ({ id, groupId }: { id: string; groupId: string | null }) => setUserGroup(id, groupId), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); setGroupUser(null); message.success("分组已调整"); }, onError: showError(message.error) });
-    const resetMutation = useMutation({ mutationFn: ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword), onSuccess: (user, variables) => { updateUserCache(user); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
+    const resetMutation = useMutation({ mutationFn: async ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword, await requestProof()), onSuccess: (user, variables) => { updateUserCache(user); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
 
     const users = useMemo(() => {
         const normalized = keyword.trim().toLowerCase();

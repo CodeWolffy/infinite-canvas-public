@@ -219,10 +219,14 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		return gin.H{"settings": settings}, err
 	}))
 	admin.PUT("/platform-settings", respond(func(c *gin.Context) (any, error) {
-		settings, err := body[PlatformSettings](c)
+		payload, err := body[struct {
+			PlatformSettings
+			SecurityProof securityProof `json:"securityProof"`
+		}](c)
 		if err != nil {
 			return nil, err
 		}
+		settings := payload.PlatformSettings
 		min, err := amountUnits(settings.RewardMin, moneyScale)
 		if err != nil {
 			return nil, err
@@ -244,6 +248,9 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, payload.SecurityProof); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, "INSERT INTO app_settings(key,value) VALUES('platform',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()", jsonBytes(settings)); err != nil {
 				return err
 			}
@@ -343,9 +350,10 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		input, err := body[struct {
-			Amount    string `json:"amount" binding:"required"`
-			Note      string `json:"note" binding:"required"`
-			RequestID string `json:"requestId" binding:"required,uuid"`
+			Amount        string        `json:"amount" binding:"required"`
+			Note          string        `json:"note" binding:"required"`
+			RequestID     string        `json:"requestId" binding:"required,uuid"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -360,6 +368,9 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		reference := uuid.MustParse(input.RequestID).String()
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			if err := lockWallet(ctx, tx, id); err != nil {
 				return err
 			}

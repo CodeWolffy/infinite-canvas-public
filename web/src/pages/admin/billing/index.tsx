@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 
 import { adjustBalance, getAdminPaymentOrders, getAdminWalletEntries, getPaymentChannels, paymentMethodLabels, paymentProviderLabels, reconcilePaymentOrder, savePaymentChannel, walletEntryLabels, type PaymentChannel, type PaymentMethod, type PaymentOrder, type PaymentProvider, type WalletEntry } from "@/services/api/billing";
 import { getAdminUsers } from "@/services/api/admin-users";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import CostReport from "./components/cost-report";
 
 type ChannelValues = Omit<PaymentChannel, "id" | "configuredSecrets">;
@@ -18,6 +19,7 @@ const statusLabels = { pending: "待支付", paid: "已到账", closed: "已关�
 
 export default function BillingPage() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const [editing, setEditing] = useState<PaymentChannel | null | undefined>();
     const [tab, setTab] = useState("channels");
@@ -32,9 +34,9 @@ export default function BillingPage() {
     const orders = useQuery({ queryKey: ["admin-payment-orders", status, page], queryFn: () => getAdminPaymentOrders(status, (page - 1) * 50), enabled: tab === "orders" });
     const ledger = useQuery({ queryKey: ["admin-wallet-entries", page], queryFn: () => getAdminWalletEntries("", (page - 1) * 50), enabled: tab === "ledger" });
     const users = useQuery({ queryKey: ["admin-users"], queryFn: getAdminUsers, enabled: adjustmentOpen });
-    const save = useMutation({ mutationFn: (values: ChannelValues) => savePaymentChannel(editing?.id, values), onSuccess: () => { setEditing(undefined); void client.invalidateQueries({ queryKey: ["payment-channels"] }); message.success("支付渠道已保存"); }, onError: (error: Error) => message.error(error.message) });
+    const save = useMutation({ mutationFn: async (values: ChannelValues) => savePaymentChannel(editing?.id, values, await requestProof()), onSuccess: () => { setEditing(undefined); void client.invalidateQueries({ queryKey: ["payment-channels"] }); message.success("支付渠道已保存"); }, onError: (error: Error) => message.error(error.message) });
     const reconcile = useMutation({ mutationFn: reconcilePaymentOrder, onSuccess: () => { void orders.refetch(); message.success("查单完成"); }, onError: (error: Error) => message.error(error.message) });
-    const adjust = useMutation({ mutationFn: (values: { userId: string; amount: string; note: string }) => adjustBalance(values.userId, { amount: String(values.amount), note: values.note, requestId: adjustmentID }), onSuccess: () => { setAdjustmentOpen(false); void client.invalidateQueries({ queryKey: ["admin-wallet-entries"] }); void client.invalidateQueries({ queryKey: ["admin-users"] }); message.success("余额已调整"); }, onError: (error: Error) => message.error(error.message) });
+    const adjust = useMutation({ mutationFn: async (values: { userId: string; amount: string; note: string }) => adjustBalance(values.userId, { amount: String(values.amount), note: values.note, requestId: adjustmentID }, await requestProof()), onSuccess: () => { setAdjustmentOpen(false); void client.invalidateQueries({ queryKey: ["admin-wallet-entries"] }); void client.invalidateQueries({ queryKey: ["admin-users"] }); message.success("余额已调整"); }, onError: (error: Error) => message.error(error.message) });
     const openChannel = (channel: PaymentChannel | null) => { setEditing(channel); form.resetFields(); form.setFieldsValue(channel || { name: "", provider: "epay", methods: ["alipay", "wxpay"], enabled: false, config: {} }); };
     const currentError = tab === "channels" ? channels.error : tab === "orders" ? orders.error : ledger.error;
 

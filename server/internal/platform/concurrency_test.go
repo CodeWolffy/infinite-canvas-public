@@ -63,13 +63,13 @@ func TestSuccessfulLoginsDoNotConsumeFailureQuota(t *testing.T) {
 
 func TestAdminPasswordResetReturnsUserAndRevokesSessions(t *testing.T) {
 	a := testApp(t)
-	admin, adminCookie := testUser(t, a, 0)
+	admin, adminCookie, adminPassword := testAdmin(t, a)
 	victim, victimCookie := testUser(t, a, 0)
 	if _, err := a.DB.Exec(context.Background(), "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
 		t.Fatal(err)
 	}
 	router := a.Router()
-	response := testRequest(router, "POST", "/api/admin/users/"+victim+"/reset-password", map[string]string{"temporaryPassword": "reset-password-test"}, adminCookie)
+	response := testRequest(router, "POST", "/api/admin/users/"+victim+"/reset-password", map[string]any{"temporaryPassword": "reset-password-test", "securityProof": map[string]string{"password": adminPassword}}, adminCookie)
 	if response.Code != 200 {
 		t.Fatalf("reset status=%d %s", response.Code, response.Body)
 	}

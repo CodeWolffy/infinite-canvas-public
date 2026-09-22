@@ -4,15 +4,17 @@ import { Alert, App, Button, Form, InputNumber, Spin, Switch } from "antd";
 import { SlidersHorizontal } from "lucide-react";
 
 import { getPlatformSettings, savePlatformSettings, type PlatformSettings } from "@/services/api/billing";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import MailSettingsPanel from "./components/mail-settings";
 
 export default function PlatformSettingsPage() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const [form] = Form.useForm<PlatformSettings>();
     const query = useQuery({ queryKey: ["platform-settings"], queryFn: getPlatformSettings });
     const mutation = useMutation({
-        mutationFn: savePlatformSettings,
+        mutationFn: async (values: PlatformSettings) => savePlatformSettings(values, await requestProof()),
         onSuccess: () => {
             void client.invalidateQueries({ queryKey: ["platform-settings"] });
             void client.invalidateQueries({ queryKey: ["wallet"] });

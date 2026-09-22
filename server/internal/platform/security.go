@@ -120,6 +120,14 @@ func (a *App) verifySecurityProof(c *gin.Context, tx pgx.Tx, proof securityProof
 	return a.secondFactor(c.Request.Context(), tx, u.ID, proof.Code, false)
 }
 
+// requireSecurityProof 是高危管理操作的二次验证入口：缺凭据与密码错误都返回 400。
+func (a *App) requireSecurityProof(c *gin.Context, tx pgx.Tx, proof securityProof) error {
+	if strings.TrimSpace(proof.Password) == "" {
+		return problem(400, "security_proof_required", "请先完成二次验证：输入当前密码（已启用两步验证时还需验证码）")
+	}
+	return a.verifySecurityProof(c, tx, proof)
+}
+
 func (a *App) sessionWithClient(ctx context.Context, q querier, userID string, c *gin.Context) (string, error) {
 	token, err := a.session(ctx, q, userID)
 	if err != nil {

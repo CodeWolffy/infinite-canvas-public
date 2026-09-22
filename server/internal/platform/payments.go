@@ -292,11 +292,12 @@ func (a *App) paymentAdminRoutes(admin *gin.RouterGroup) {
 	}))
 	save := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
-			Name     string            `json:"name" binding:"required"`
-			Provider string            `json:"provider" binding:"required,oneof=epay alipay wechat"`
-			Methods  []string          `json:"methods" binding:"required,min=1,dive,oneof=alipay wxpay"`
-			Enabled  bool              `json:"enabled"`
-			Config   map[string]string `json:"config"`
+			Name          string            `json:"name" binding:"required"`
+			Provider      string            `json:"provider" binding:"required,oneof=epay alipay wechat"`
+			Methods       []string          `json:"methods" binding:"required,min=1,dive,oneof=alipay wxpay"`
+			Enabled       bool              `json:"enabled"`
+			Config        map[string]string `json:"config"`
+			SecurityProof securityProof     `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -316,6 +317,9 @@ func (a *App) paymentAdminRoutes(admin *gin.RouterGroup) {
 			}
 		}
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			merged := map[string]string{}
 			if c.Param("id") != "" {
 				existing, err := one(ctx, tx, "SELECT * FROM payment_channels WHERE id=$1 FOR UPDATE", id)

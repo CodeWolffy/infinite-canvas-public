@@ -3,15 +3,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Form, Input, InputNumber, Select, Switch, Table, Tag } from "antd";
 
 import { getMailDeliveries, getMailSettings, saveMailSettings, type MailSettings } from "@/services/api/platform-operations";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 
 export default function MailSettingsPanel() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const [form] = Form.useForm<MailSettings>();
     const config = useQuery({ queryKey: ["admin", "mail-settings"], queryFn: getMailSettings });
     const deliveries = useQuery({ queryKey: ["admin", "mail-deliveries"], queryFn: getMailDeliveries });
     useEffect(() => { if (config.data) form.setFieldsValue({ ...config.data.settings, mode: config.data.settings.mode || "starttls", port: config.data.settings.port || 587, password: "" }); }, [config.data, form]);
-    const save = useMutation({ mutationFn: saveMailSettings, onSuccess: () => { void client.invalidateQueries({ queryKey: ["admin", "mail-settings"] }); message.success("邮件配置已保存"); }, onError: (error: Error) => message.error(error.message) });
+    const save = useMutation({ mutationFn: async (values: MailSettings) => saveMailSettings(values, await requestProof()), onSuccess: () => { void client.invalidateQueries({ queryKey: ["admin", "mail-settings"] }); message.success("邮件配置已保存"); }, onError: (error: Error) => message.error(error.message) });
     const states: Record<string, string> = { queued: "待发送", sending: "发送中", sent: "已发送", failed: "发送失败" };
     return <section className="mt-10 border-t border-border pt-8"><h2 className="text-xl font-semibold">邮件与通知</h2><p className="mb-6 mt-2 text-sm leading-6 text-muted-foreground">用于邮箱验证、找回密码和管理员异常提醒。管理员绑定并验证邮箱后可接收渠道通知；发送失败保留站内记录，可在修正配置后重新发起验证邮件。</p>
         {config.error ? <Alert type="error" title={config.error.message} /> : <Form form={form} layout="vertical" onFinish={(values) => save.mutate(values)} initialValues={{ enabled: false, mode: "starttls", port: 587 }}>

@@ -18,7 +18,7 @@ export const verifyEmail = (token: string) => apiRequest<{ message: string }>("/
 
 export type MailSettings = { host: string; port: number; mode: "tls" | "starttls"; username: string; password: string; from: string; enabled: boolean };
 export const getMailSettings = () => apiRequest<{ settings: MailSettings; passwordConfigured: boolean }>("/api/admin/mail-settings");
-export const saveMailSettings = (body: MailSettings) => apiRequest<void>("/api/admin/mail-settings", { method: "PUT", body });
+export const saveMailSettings = (body: MailSettings, securityProof: SecurityProof) => apiRequest<void>("/api/admin/mail-settings", { method: "PUT", body: { ...body, securityProof } });
 export const getMailDeliveries = () => apiRequest<{ deliveries: Array<{ id: string; status: string; createdAt: string; finishedAt: string | null }> }>("/api/admin/mail-deliveries");
 export type PlatformNotification = { id: string; kind: string; title: string; content: string; createdAt: string; read: boolean };
 export const getNotifications = () => apiRequest<{ notifications: PlatformNotification[] }>("/api/user/notifications");

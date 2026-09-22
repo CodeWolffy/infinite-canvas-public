@@ -120,11 +120,19 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			if err != nil {
 				return nil, err
 			}
-			input, err := body[map[string]string](c)
+			input, err := body[struct {
+				Value         string        `json:"value"`
+				Role          string        `json:"role"`
+				Status        string        `json:"status"`
+				SecurityProof securityProof `json:"securityProof"`
+			}](c)
 			if err != nil {
 				return nil, err
 			}
-			next := input[field]
+			next := input.Status
+			if field == "role" {
+				next = input.Role
+			}
 			if field == "status" && next != "active" && next != "disabled" || field == "role" && next != "admin" && next != "user" {
 				return nil, problem(400, "invalid_request", "状态或角色不正确")
 			}
@@ -136,6 +144,12 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 				if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('admin-roles',0))"); err != nil {
 					return err
+				}
+				// 角色变更属于高危操作，必须二次验证；状态变更沿用原有权限判断。
+				if field == "role" {
+					if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+						return err
+					}
 				}
 				old, err := scanUser(tx.QueryRow(ctx, "SELECT "+userColumns+" FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 FOR UPDATE OF u", id))
 				if err != nil {
@@ -168,7 +182,8 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		input, err := body[struct {
-			TemporaryPassword string `json:"temporaryPassword" binding:"required,min=10,max=128"`
+			TemporaryPassword string        `json:"temporaryPassword" binding:"required,min=10,max=128"`
+			SecurityProof     securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -189,6 +204,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			result, err := tx.Exec(ctx, "UPDATE users SET password_hash=$2,must_change_password=true,updated_at=now() WHERE id=$1", id, encoded)
 			if err != nil {
 				return err
@@ -502,8 +520,26 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 	admin.GET("/stats", respond(a.adminStats))
 	admin.GET("/request-logs", respond(func(c *gin.Context) (any, error) { return a.listLogs(c, true) }))
 	admin.DELETE("/request-logs", respond(func(c *gin.Context) (any, error) {
-		result, err := a.DB.Exec(c.Request.Context(), "DELETE FROM request_logs WHERE status<>'running'")
-		return gin.H{"deleted": result.RowsAffected()}, err
+		input, err := body[struct {
+			SecurityProof securityProof `json:"securityProof"`
+		}](c)
+		if err != nil {
+			return nil, err
+		}
+		ctx := c.Request.Context()
+		var deleted int64
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
+			result, err := tx.Exec(ctx, "DELETE FROM request_logs WHERE status<>'running'")
+			if err != nil {
+				return err
+			}
+			deleted = result.RowsAffected()
+			return nil
+		})
+		return gin.H{"deleted": deleted}, err
 	}))
 	admin.GET("/tasks", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)

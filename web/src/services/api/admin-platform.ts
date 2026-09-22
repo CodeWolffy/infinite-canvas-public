@@ -1,5 +1,6 @@
 import { apiRequest, serializeApiParams } from "@/services/api/request";
 import type { ModelCapability } from "@/lib/model-capabilities";
+import type { SecurityProof } from "@/services/api/platform-operations";
 
 export type AdminModel = {
     id: string;
@@ -199,8 +200,8 @@ export async function getAdminRequestLogs(params: { from?: string; to?: string; 
     return await apiRequest<{ logs: RequestLog[]; total: number }>(`/api/admin/request-logs${query.size ? `?${query}` : ""}`);
 }
 
-export async function clearAdminRequestLogs() {
-    return (await apiRequest<{ deleted: number }>("/api/admin/request-logs", { method: "DELETE" })).deleted;
+export async function clearAdminRequestLogs(securityProof: SecurityProof) {
+    return (await apiRequest<{ deleted: number }>("/api/admin/request-logs", { method: "DELETE", body: { securityProof } })).deleted;
 }
 
 export type PlaygroundTestParams = {

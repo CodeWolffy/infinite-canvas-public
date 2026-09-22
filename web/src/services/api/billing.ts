@@ -1,4 +1,5 @@
 import { apiRequest, serializeApiParams } from "./request";
+import type { SecurityProof } from "./platform-operations";
 
 export type PaymentMethod = "alipay" | "wxpay";
 export type PaymentProvider = "epay" | "alipay" | "wechat";
@@ -20,13 +21,13 @@ export const createPaymentOrder = (body: { channelId: string; method: PaymentMet
 export const getPaymentOrder = (id: string) => apiRequest<{ order: PaymentOrder }>(`/api/user/payment-orders/${id}`);
 export const refreshPaymentOrder = (id: string) => apiRequest<{ order: PaymentOrder }>(`/api/user/payment-orders/${id}/refresh`, { method: "POST", body: {} });
 export const getPaymentChannels = () => apiRequest<{ channels: PaymentChannel[] }>("/api/admin/payment-channels");
-export const savePaymentChannel = (id: string | undefined, body: Omit<PaymentChannel, "id" | "configuredSecrets">) => apiRequest<{ id: string }>(`/api/admin/payment-channels${id ? `/${id}` : ""}`, { method: id ? "PUT" : "POST", body });
+export const savePaymentChannel = (id: string | undefined, body: Omit<PaymentChannel, "id" | "configuredSecrets">, securityProof: SecurityProof) => apiRequest<{ id: string }>(`/api/admin/payment-channels${id ? `/${id}` : ""}`, { method: id ? "PUT" : "POST", body: { ...body, securityProof } });
 export const getAdminPaymentOrders = (status = "", offset = 0) => apiRequest<{ orders: PaymentOrder[] }>(`/api/admin/payment-orders?${serializeApiParams({ status, offset, limit: 50 })}`);
 export const reconcilePaymentOrder = (id: string) => apiRequest<void>(`/api/admin/payment-orders/${id}/reconcile`, { method: "POST", body: {} });
 export const getAdminWalletEntries = (userId = "", offset = 0) => apiRequest<{ entries: WalletEntry[] }>(`/api/admin/wallet-entries?${serializeApiParams({ userId, offset, limit: 50 })}`);
-export const adjustBalance = (id: string, body: { amount: string; note: string; requestId: string }) => apiRequest<void>(`/api/admin/users/${id}/balance`, { method: "POST", body });
+export const adjustBalance = (id: string, body: { amount: string; note: string; requestId: string }, securityProof: SecurityProof) => apiRequest<void>(`/api/admin/users/${id}/balance`, { method: "POST", body: { ...body, securityProof } });
 export const getPlatformSettings = () => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings");
-export const savePlatformSettings = (body: PlatformSettings) => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings", { method: "PUT", body });
+export const savePlatformSettings = (body: PlatformSettings, securityProof: SecurityProof) => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings", { method: "PUT", body: { ...body, securityProof } });
 export const getInvitations = (offset = 0) => apiRequest<{ invitations: Invitation[] }>(`/api/admin/invitations?limit=50&offset=${offset}`);
 export const createInvitation = (body: { note: string; maxUses: number; count?: number; expiresAt?: string }) => apiRequest<{ invitation?: Invitation; code?: string; invitations?: Invitation[]; codes?: string[] }>("/api/admin/invitations", { method: "POST", body });
 export const setInvitationDisabled = (id: string, disabled: boolean) => apiRequest<void>(`/api/admin/invitations/${id}`, { method: "PATCH", body: { disabled } });

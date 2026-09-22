@@ -6,6 +6,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { History, RefreshCw, Trash2 } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import { clearAdminRequestLogs, getAdminChannels, getAdminModels, getAdminRequestLogs, type RequestLog } from "@/services/api/admin-platform";
 import { getAdminUsers } from "@/services/api/admin-users";
 
@@ -15,6 +16,7 @@ const statusLabels = { running: "运行中", succeeded: "成功", failed: "错�
 
 export default function AdminRequestLogsPage() {
     const { message, modal } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const copyText = useCopyText();
     const queryClient = useQueryClient();
     const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().startOf("day"), dayjs()] }));
@@ -40,7 +42,7 @@ export default function AdminRequestLogsPage() {
         refetchInterval: (query) => (query.state.data?.logs.some((log) => log.status === "running") ? 5000 : false),
     });
     const clearMutation = useMutation({
-        mutationFn: clearAdminRequestLogs,
+        mutationFn: async () => clearAdminRequestLogs(await requestProof()),
         onSuccess: (deleted) => { void queryClient.invalidateQueries({ queryKey: ["admin", "request-logs"] }); message.success(`已清空 ${deleted} 条日志`); },
         onError: (error: Error) => message.error(error.message || "操作失败"),
     });

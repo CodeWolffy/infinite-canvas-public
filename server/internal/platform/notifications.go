@@ -115,10 +115,14 @@ func (a *App) notificationRoutes(api, admin *gin.RouterGroup) {
 		return gin.H{"settings": config, "passwordConfigured": configured}, err
 	}))
 	admin.PUT("/mail-settings", respond(func(c *gin.Context) (any, error) {
-		input, err := body[MailConfig](c)
+		payload, err := body[struct {
+			MailConfig
+			SecurityProof securityProof `json:"securityProof"`
+		}](c)
 		if err != nil {
 			return nil, err
 		}
+		input := payload.MailConfig
 		if input.Host != "" {
 			if strings.ContainsAny(input.Host, "/\r\n ") || input.Port < 1 || input.Port > 65535 || (input.Mode != "tls" && input.Mode != "starttls") {
 				return nil, problem(400, "invalid_mail_config", "请填写 SMTP 主机、有效端口和加密方式")
@@ -133,6 +137,9 @@ func (a *App) notificationRoutes(api, admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, payload.SecurityProof); err != nil {
+				return err
+			}
 			old, err := a.mailConfig(ctx, tx)
 			if err != nil {
 				return err

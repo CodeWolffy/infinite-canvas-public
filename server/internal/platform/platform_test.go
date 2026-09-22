@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Calcium-Ion/go-epay/epay"
+	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -120,8 +121,22 @@ func testUser(t *testing.T, a *App, balance int64) (string, *http.Cookie) {
 	}
 	return id, &http.Cookie{Name: a.Config.CookieName, Value: token}
 }
-func testRequest(router http.Handler, method, path string, payload any, cookie *http.Cookie) *httptest.ResponseRecorder {
-	body := bytes.NewReader(jsonBytes(payload))
+// testAdmin 创建一位带真实密码哈希的管理员，便于验证高危操作的二次验证。
+func testAdmin(t *testing.T, a *App) (string, *http.Cookie, string) {
+	t.Helper()
+	password := "admin-test-password"
+	encoded, err := argon2id.CreateHash(password, argon2id.DefaultParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, cookie := testUser(t, a, 0)
+	if _, err = a.DB.Exec(context.Background(), "UPDATE users SET role='admin',password_hash=$2 WHERE id=$1", id, encoded); err != nil {
+		t.Fatal(err)
+	}
+	return id, cookie, password
+}
+
+func testRequest(router http.Handler, method, path string, payload any, cookie *http.Cookie) *httptest.ResponseRecorder {	body := bytes.NewReader(jsonBytes(payload))
 	req := httptest.NewRequest(method, path, body)
 	req.Header.Set("Content-Type", "application/json")
 	if cookie != nil {
@@ -936,4 +951,38 @@ func TestShutdownRequeuesRunningTask(t *testing.T) {
 		t.Fatalf("任务未按退出重排: %v %v", saved, err)
 	}
 	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+}
+
+// 高危管理操作必须带二次验证：缺失或密码错误返回 400，正确才执行。
+func TestHighRiskAdminOperationsRequireSecurityProof(t *testing.T) {
+	a := testApp(t)
+	_, cookie, password := testAdmin(t, a)
+	victim, _ := testUser(t, a, 0)
+	router := a.Router()
+	path := "/api/admin/users/" + victim + "/reset-password"
+	payload := map[string]any{"temporaryPassword": "reset-password-test"}
+	// 缺少 securityProof 时由请求绑定直接拒绝，只要求 400。
+	if response := testRequest(router, "POST", path, payload, cookie); response.Code != 400 {
+		t.Fatalf("缺少二次验证时应拒绝: %d %s", response.Code, response.Body.String())
+	}
+	// 空白密码能通过绑定，必须由二次验证自己拦下并给出明确错误码。
+	payload["securityProof"] = map[string]string{"password": "   "}
+	if response := testRequest(router, "POST", path, payload, cookie); response.Code != 400 || responseRow(t, response)["error"] != "security_proof_required" {
+		t.Fatalf("空密码应提示二次验证: %d %s", response.Code, response.Body.String())
+	}
+	payload["securityProof"] = map[string]string{"password": "wrong-password"}
+	if response := testRequest(router, "POST", path, payload, cookie); response.Code != 400 || responseRow(t, response)["error"] != "invalid_password" {
+		t.Fatalf("密码错误时应拒绝: %d %s", response.Code, response.Body.String())
+	}
+	var hash string
+	if err := a.DB.QueryRow(context.Background(), "SELECT password_hash FROM users WHERE id=$1", victim).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	if hash != "unused" {
+		t.Fatal("二次验证失败时不应改动目标用户密码")
+	}
+	payload["securityProof"] = map[string]string{"password": password}
+	if response := testRequest(router, "POST", path, payload, cookie); response.Code != 200 {
+		t.Fatalf("正确的二次验证应通过: %d %s", response.Code, response.Body.String())
+	}
 }
