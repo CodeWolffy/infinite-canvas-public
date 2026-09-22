@@ -361,8 +361,25 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		limit, offset := pagination(c)
 		scope := c.DefaultQuery("scope", "all")
 		u := currentUser(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT * FROM assets WHERE ((scope='public' AND $2<>'private') OR (owner_id=$1 AND scope='private' AND $2<>'public')) ORDER BY updated_at DESC,id DESC LIMIT $3 OFFSET $4", u.ID, scope, limit, offset)
-		return gin.H{"assets": items}, err
+		// 素材页改为服务端分页后，关键词与类型筛选也必须在服务端执行。
+		where, args := "((scope='public' AND $2<>'private') OR (owner_id=$1 AND scope='private' AND $2<>'public'))", []any{u.ID, scope}
+		if kind := c.Query("kind"); kind != "" {
+			args = append(args, kind)
+			where += " AND type=$" + str(len(args))
+		}
+		if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+			args = append(args, "%"+keyword+"%")
+			placeholder := "$" + str(len(args))
+			where += " AND (title ILIKE " + placeholder + " OR coalesce(content,'') ILIKE " + placeholder + ")"
+		}
+		ctx := c.Request.Context()
+		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM assets WHERE "+where, args...)
+		if err != nil {
+			return nil, err
+		}
+		query := "SELECT * FROM assets WHERE " + where + " ORDER BY updated_at DESC,id DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
+		items, err := rows(ctx, a.DB, query, append(args, limit, offset)...)
+		return gin.H{"assets": items, "total": integer(total["total"])}, err
 	}))
 	api.GET("/assets/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

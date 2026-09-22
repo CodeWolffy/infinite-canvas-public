@@ -1,5 +1,6 @@
 import { Copy, Download, PencilLine, Search, Trash2, Upload } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
@@ -8,8 +9,9 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { listAssetPage } from "@/services/api/assets";
 import { cn } from "@/lib/utils";
-import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
+import { assetCoverUrl, normalizeAsset, useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
@@ -36,7 +38,7 @@ export default function AssetsPage() {
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
-    const assets = useAssetStore((state) => state.assets);
+    const queryClient = useQueryClient();
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
@@ -58,26 +60,17 @@ export default function AssetsPage() {
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
     const content = Form.useWatch("content", form) || "";
-    const validAssets = assets;
-
-    const filteredAssets = useMemo(() => {
-        const query = keyword.trim().toLowerCase();
-        return validAssets.filter((asset) => {
-            if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
-            if (!query) return true;
-            return assetSearchText(asset).includes(query);
-        });
-    }, [validAssets, keyword, kindFilter]);
-
-    const visibleAssets = useMemo(() => {
-        const start = (page - 1) * pageSize;
-        return filteredAssets.slice(start, start + pageSize);
-    }, [filteredAssets, page, pageSize]);
-
-    useEffect(() => {
-        const maxPage = Math.max(1, Math.ceil(filteredAssets.length / pageSize));
-        setPage((value) => Math.min(value, maxPage));
-    }, [filteredAssets.length, pageSize]);
+    // 素材列表改为服务端分页：关键词与类型筛选随分页一起下发，避免只过滤当前页。
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
+    const assetsQuery = useQuery({
+        queryKey: ["assets", sessionVersion, page, pageSize, kindFilter, keyword.trim()],
+        queryFn: () => listAssetPage({ page, size: pageSize, kind: kindFilter, keyword }),
+        placeholderData: keepPreviousData,
+    });
+    const visibleAssets = (assetsQuery.data?.assets || []).map(normalizeAsset);
+    const total = assetsQuery.data?.total || 0;
+    const refreshAssets = () => { void queryClient.invalidateQueries({ queryKey: ["assets"] }); };
+    const validAssets = visibleAssets;
 
     const openCreate = () => {
         setEditingAsset(null);
@@ -133,6 +126,7 @@ export default function AssetsPage() {
             }
             assertCurrentSession(session);
             message.success(editingAsset ? t("assets.updated") : t("assets.saved"));
+            refreshAssets();
             setIsAssetOpen(false);
         } catch (error) {
             if (useUserStore.getState().sessionVersion !== session || (error && typeof error === "object" && "errorFields" in error)) return;
@@ -210,6 +204,7 @@ export default function AssetsPage() {
             const count = results.length - failed.length;
             if (!failed.length) message.success(t("assets.imported", { count }));
             else message.error(`已导入 ${count} 项，${failed.length} 项失败：${failed[0].reason instanceof Error ? failed[0].reason.message : t("assets.importFailed")}`);
+            refreshAssets();
         } catch (error) {
             if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : t("assets.importFailed"));
         } finally {
@@ -226,6 +221,7 @@ export default function AssetsPage() {
             await removeAsset(deletingAsset.id);
             assertCurrentSession(session);
             message.success(t("assets.deleted"));
+            refreshAssets();
             setDeletingAsset(null);
         } catch (error) {
             if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "素材删除失败");
@@ -324,11 +320,11 @@ export default function AssetsPage() {
                         <Pagination
                             current={page}
                             pageSize={pageSize}
-                            total={filteredAssets.length}
+                            total={total}
                             showSizeChanger
                             pageSizeOptions={[10, 20, 50, 100]}
                             onChange={(nextPage, nextPageSize) => {
-                                setPage(nextPage);
+                                setPage(nextPageSize === pageSize ? nextPage : 1);
                                 setPageSize(nextPageSize);
                             }}
                         />
@@ -605,6 +601,3 @@ function assetSummary(asset: Asset) {
     return `${asset.data.width}x${asset.data.height} · ${formatBytes(asset.data.bytes)} · ${asset.data.mimeType}`;
 }
 
-function assetSearchText(asset: Asset) {
-    return [asset.title, asset.source || "", asset.note || "", (asset.tags || []).join(" "), asset.kind === "text" ? asset.data.content : asset.data.mimeType].join(" ").toLowerCase();
-}

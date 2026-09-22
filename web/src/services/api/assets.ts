@@ -46,6 +46,22 @@ export async function listAssets(scope: AssetScope | "all" = "all") {
     return all;
 }
 
+export type AssetPageQuery = { page: number; size: number; scope?: AssetScope | "all"; kind?: AssetType | "all"; keyword?: string };
+
+/** 素材页的服务端分页：筛选与分页都在后端执行，返回总数供表格分页使用。 */
+export async function listAssetPage(query: AssetPageQuery) {
+    const params = new URLSearchParams({ limit: String(query.size), offset: String((query.page - 1) * query.size) });
+    if (query.scope && query.scope !== "all") params.set("scope", query.scope);
+    if (query.kind && query.kind !== "all") params.set("kind", query.kind);
+    if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+    return await apiRequest<{ assets: AssetRecord[]; total: number }>(`/api/assets?${params}`);
+}
+
+/** 画布侧栏只需要最近一批素材，不再把全量素材拉进内存。 */
+export async function listRecentAssets(scope: AssetScope | "all" = "all") {
+    return (await listAssetPage({ page: 1, size: ASSET_PAGE_SIZE, scope })).assets;
+}
+
 export async function createAsset(input: AssetInput) {
     return (await apiRequest<{ asset: AssetRecord }>("/api/assets", { method: "POST", body: input })).asset;
 }

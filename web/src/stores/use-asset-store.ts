@@ -60,7 +60,7 @@ export function assetCoverUrl(asset: Asset) {
     return asset.kind === "image" && cover === own ? previewUrlFor(asset.data.storageKey) || cover : cover;
 }
 
-function normalizeAsset(record: assetApi.AssetRecord): Asset {
+export function normalizeAsset(record: assetApi.AssetRecord): Asset {
     const metadata = record.metadata || {};
     const user = useUserStore.getState().user;
     const common = {
@@ -137,7 +137,7 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
         if (get().hydratedUserId !== userId) set({ assets: [], hydrated: false, hydratedUserId: userId });
         let request = hydratePromises.get(userId);
         if (!request) {
-            request = assetApi.listAssets().then((records) => {
+            request = assetApi.listRecentAssets().then((records) => {
                 if (useUserStore.getState().sessionVersion === sessionVersion) set({ assets: records.map(normalizeAsset), hydrated: true });
             }).finally(() => {
                 if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
