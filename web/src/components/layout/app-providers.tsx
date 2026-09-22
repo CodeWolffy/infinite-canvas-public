@@ -15,7 +15,7 @@ import { getAntThemeConfig } from "@/lib/app-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             staleTime: 30_000,

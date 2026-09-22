@@ -10,7 +10,8 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { modelOptionLabel, modelOptionName, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore } from "@/stores/use-config-store";
 import { useWorkbenchAgentStore, type WorkbenchCommand } from "@/stores/use-workbench-agent-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
-import { createGenerationBatch, getPublicModels } from "@/services/api/generation";
+import { createGenerationBatch } from "@/services/api/generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
 import { getGenerationTask, selectedPlatformModel } from "@/services/api/tasks";
 
 // Execute site-level Agent tools in the browser, including canvas lists, workbench generation, prompt search, and asset operations.
@@ -70,7 +71,7 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
         case "workbench_image_generate":
             return runImageWorkbench(input, navigate);
         case "workbench_video_get_config":
-            return { current: { model: useConfigStore.getState().config.videoModel, seconds: useConfigStore.getState().config.videoSeconds }, models: (await getPublicModels()).filter((model) => model.capability === "video") };
+            return { current: { model: useConfigStore.getState().config.videoModel, seconds: useConfigStore.getState().config.videoSeconds }, models: (await fetchPublicModels()).filter((model) => model.capability === "video") };
         case "workbench_video_generate":
             return runPlatformVideo(input, navigate);
         case "prompts_search":
@@ -120,7 +121,7 @@ function getGenerationStatus(input: SiteToolInput, canvasSnapshot?: CanvasAgentS
 async function runPlatformVideo(input: SiteToolInput, navigate: NavigateFunction) {
     const session = useUserStore.getState().sessionVersion;
     const config = useConfigStore.getState().config;
-    const modelId = selectedPlatformModel(await getPublicModels(), typeof input.model === "string" ? input.model : config.videoModel, "video");
+    const modelId = selectedPlatformModel(await fetchPublicModels(), typeof input.model === "string" ? input.model : config.videoModel, "video");
     assertCurrentSession(session);
     if (input.run === false) { navigate("/video"); return { ok: true, modelId, navigated: "/video" }; }
     const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";

@@ -3,7 +3,8 @@ import { persist } from "zustand/middleware";
 
 import { modelPriceLabel, type ModelPricing } from "@/lib/model-price";
 import type { ModelReasoning, ReasoningEffort } from "@/lib/model-reasoning";
-import { listModels, type PublicModel } from "@/services/api/models";
+import type { PublicModel } from "@/services/api/generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
 import { useUserStore } from "@/stores/use-user-store";
 
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -147,7 +148,7 @@ export const useConfigStore = create<ConfigStore>()(
             config: defaultConfig,
             hydratePlatformModels: async () => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
-                const models = await listModels();
+                const models = await fetchPublicModels();
                 if (useUserStore.getState().sessionVersion !== sessionVersion) return;
                 set((state) => ({ config: platformConfig(state.config, models) }));
             },

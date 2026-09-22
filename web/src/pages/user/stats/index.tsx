@@ -1,32 +1,18 @@
-import { useEffect, useState } from "react";
-import { App, Button, Card, Progress, Spin } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { Button, Card, Progress, Spin } from "antd";
 import { BarChart3, FolderHeart, HardDrive, Image as ImageIcon, MessageSquare, RefreshCw, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { formatBytes } from "@/lib/image-utils";
-import { getUserStats, type UserStats } from "@/services/api/user-center";
+import { getUserStats } from "@/services/api/user-center";
+import { useUserStore } from "@/stores/use-user-store";
 
 export default function UserStatsPage() {
     const { t } = useTranslation();
-    const { message } = App.useApp();
-    const [stats, setStats] = useState<UserStats | null>(null);
-    const [loading, setLoading] = useState(false);
-
-    const loadStats = async () => {
-        setLoading(true);
-        try {
-            const data = await getUserStats();
-            setStats(data);
-        } catch {
-            message.error("获取个人统计失败");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        void loadStats();
-    }, []);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
+    const statsQuery = useQuery({ queryKey: ["user-stats", sessionVersion], queryFn: getUserStats });
+    const stats = statsQuery.data ?? null;
+    const loading = statsQuery.isPending || statsQuery.isFetching;
 
     if (loading && !stats) {
         return (
@@ -60,7 +46,7 @@ export default function UserStatsPage() {
                         {t("userCenter.statsDesc")}
                     </p>
                 </div>
-                <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadStats()} loading={loading}>
+                <Button icon={<RefreshCw className="size-4" />} onClick={() => void statsQuery.refetch()} loading={loading}>
                     刷新
                 </Button>
             </div>

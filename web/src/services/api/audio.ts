@@ -2,7 +2,8 @@ import { normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoic
 import { type UploadedFile } from "@/services/file-storage";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { AiConfig } from "@/stores/use-config-store";
-import { createGenerationBatch, getPublicModels } from "./generation";
+import { createGenerationBatch } from "./generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
 import { readMedia } from "./media";
 import { selectedPlatformModel, waitForGenerationTask } from "./tasks";
 
@@ -10,7 +11,7 @@ const storedAudio = new WeakMap<Blob, UploadedFile>();
 
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: { signal?: AbortSignal; canvasProjectId?: string; onTaskCreated?: (id: string) => void }): Promise<Blob> {
     const session = useUserStore.getState().sessionVersion;
-    const models = await getPublicModels();
+    const models = await fetchPublicModels();
     assertCurrentSession(session);
     if (options?.signal?.aborted) throw new DOMException("已停止准备", "AbortError");
     const modelId = selectedPlatformModel(models, config.model || config.audioModel, "audio");

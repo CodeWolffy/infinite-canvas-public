@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { App, Button, Card, DatePicker, Descriptions, Drawer, Select, Table, Tag, Typography } from "antd";
+import { useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { Button, Card, DatePicker, Descriptions, Drawer, Select, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { History, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useUserStore } from "@/stores/use-user-store";
 import { formatDuration } from "@/lib/image-utils";
 import { walletEntryLabels } from "@/services/api/billing";
 import { getUserLogs, type UserLogTotals, type UserLogType, type UserRequestLog } from "@/services/api/user-center";
@@ -19,46 +21,24 @@ const fundAmount = (value: string | null | undefined) => { const text = String(v
 
 export default function UserLogsPage() {
     const { t } = useTranslation();
-    const { message } = App.useApp();
     const copy = useCopyText();
-    const [logs, setLogs] = useState<UserRequestLog[]>([]);
-    const [total, setTotal] = useState(0);
-    const [totals, setTotals] = useState<UserLogTotals | null>(null);
-    const [loading, setLoading] = useState(false);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(20);
     const [typeFilter, setTypeFilter] = useState<UserLogType | undefined>(undefined);
     const [statusFilter, setStatusFilter] = useState<"running" | "succeeded" | "failed" | undefined>(undefined);
     const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
     const [detail, setDetail] = useState<UserRequestLog | null>(null);
-    const reqIdRef = useRef(0);
-
-    const loadLogs = useCallback(async () => {
-        const id = ++reqIdRef.current;
-        setLoading(true);
-        try {
-            const data = await getUserLogs({
-                type: typeFilter,
-                status: statusFilter,
-                from: range?.[0].toISOString(),
-                to: range?.[1].toISOString(),
-                limit: pageSize,
-                offset: (page - 1) * pageSize,
-            });
-            if (id !== reqIdRef.current) return;
-            setLogs(data.logs);
-            setTotal(data.total);
-            setTotals(data.totals ?? null);
-        } catch {
-            if (id === reqIdRef.current) message.error("获取调用日志失败");
-        } finally {
-            if (id === reqIdRef.current) setLoading(false);
-        }
-    }, [message, page, pageSize, range, statusFilter, typeFilter]);
-
-    useEffect(() => {
-        void loadLogs();
-    }, [loadLogs]);
+    // 筛选与分页全部进 queryKey，切换时保留上一页数据，不再手写 loading 与竞态判断。
+    const logsQuery = useQuery({
+        queryKey: ["user-logs", sessionVersion, page, pageSize, typeFilter, statusFilter, range?.[0].toISOString(), range?.[1].toISOString()],
+        queryFn: () => getUserLogs({ type: typeFilter, status: statusFilter, from: range?.[0].toISOString(), to: range?.[1].toISOString(), limit: pageSize, offset: (page - 1) * pageSize }),
+        placeholderData: keepPreviousData,
+    });
+    const logs = logsQuery.data?.logs || [];
+    const total = logsQuery.data?.total || 0;
+    const totals: UserLogTotals | null = logsQuery.data?.totals ?? null;
+    const loading = logsQuery.isPending || logsQuery.isFetching;
 
     const typeLabel = (value: string) => walletEntryLabels[value] ?? (value === "image" ? t("userCenter.typeImage") : value === "text" ? t("userCenter.typeText") : value === "video" ? "视频" : value === "audio" ? "音频" : t("userCenter.typeProbe"));
     const statusLabel = (value: string) => (value === "succeeded" ? t("userCenter.statusSucceeded") : value === "failed" ? t("userCenter.statusFailed") : t("userCenter.statusRunning"));
@@ -232,7 +212,7 @@ export default function UserLogsPage() {
                             { value: "running", label: t("userCenter.statusRunning") },
                         ]}
                     />
-                    <Button className="ml-auto" icon={<RefreshCw className="size-4" />} onClick={() => void loadLogs()} loading={loading}>
+                    <Button className="ml-auto" icon={<RefreshCw className="size-4" />} onClick={() => void logsQuery.refetch()} loading={loading}>
                         刷新
                     </Button>
                 </div>
@@ -267,6 +247,7 @@ export default function UserLogsPage() {
                         showTotal: (tot) => `共 ${tot} 条记录`,
                     }}
                     size="small"
+                    locale={{ emptyText: logsQuery.isError ? (logsQuery.error instanceof Error ? logsQuery.error.message : "获取调用日志失败") : undefined }}
                     scroll={{ x: 920 }}
                 />
             </Card>

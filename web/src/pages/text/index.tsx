@@ -7,7 +7,7 @@ import { Streamdown } from "streamdown";
 import dayjs from "dayjs";
 
 import { useCopyText } from "@/hooks/use-copy-text";
-import { getPublicModels } from "@/services/api/generation";
+import { usePublicModels } from "@/hooks/use-public-models";
 import { getWallet } from "@/services/api/billing";
 import { quoteGeneration } from "@/services/api/platform-operations";
 import { deleteTextConversation, getTextConversation, listTextConversations, queueTextRequest, watchTextRequest, type TextMessage } from "@/services/api/text";
@@ -48,7 +48,7 @@ export default function TextPage() {
     const follow = useRef(true);
     const previousSession = useRef(session);
     const restoredConversation = useRef("");
-    const models = useQuery({ queryKey: ["public-models", session], queryFn: getPublicModels });
+    const models = usePublicModels();
     const available = (models.data || []).filter((model) => model.capability === "text");
     const model = available.find((item) => item.id === modelId) || available[0];
     const effort = resolveReasoningEffort(model, reasoningEffort);

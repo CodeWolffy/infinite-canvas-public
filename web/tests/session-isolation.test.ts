@@ -251,7 +251,7 @@ test("personal configuration and delayed model hydration stay within the authent
     imports.nanoid = nodeRequire("nanoid");
     imports["zustand/middleware"] = { persist: (creator: any, options: any) => persist(creator, { ...options, storage: createJSONStorage(() => ({ getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })) }) };
     const models = deferred();
-    imports["@/services/api/models"] = { listModels: () => models.promise };
+    imports["@/hooks/use-public-models"] = { fetchPublicModels: () => models.promise, usePublicModels: () => ({ data: [] }) };
     imports["@/lib/model-price"] = load("../lib/model-price.ts");
     const config = load("use-config-store.ts").useConfigStore;
     await login("A");
@@ -300,6 +300,8 @@ test("local Agent credentials survive same-user login while platform messages an
         createGenerationBatch: async (input: any) => { videoSubmissions.push(input); return { batch: { id: "video-batch" }, tasks: [{ id: "video-task" }] }; },
     };
     imports["@/services/api/generation"] = generationApi;
+    // 平台模型统一走 use-public-models 单入口，测试沿用同一个桩。
+    imports["@/hooks/use-public-models"] = { fetchPublicModels: () => generationApi.getPublicModels(), usePublicModels: () => ({ data: videoModels }) };
     imports["@/services/api/tasks"] = { selectedPlatformModel: (models: any[], _selected: any, capability: string) => models.find((model) => model.capability === capability).id };
     imports["@/stores/use-config-store"] = {
         useConfigStore: { getState: () => ({ config: { channels: [], videoModel: "platform::video-model", videoSeconds: "6" }, updateConfig() {} }) },

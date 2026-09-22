@@ -3,8 +3,8 @@ import { beforeEach, expect, test, vi } from "vitest";
 // 平台模型由 /api/models 下发，这里只替换数据源，其余逻辑用真实实现。
 const state = vi.hoisted(() => ({ models: [] as unknown[] }));
 
-vi.mock("@/services/api/models", () => ({
-    listModels: async () => state.models,
+vi.mock("@/hooks/use-public-models", () => ({
+    fetchPublicModels: async () => state.models,
 }));
 
 vi.mock("@/stores/use-user-store", () => ({

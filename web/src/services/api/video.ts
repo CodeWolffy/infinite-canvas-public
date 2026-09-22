@@ -4,7 +4,8 @@ import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { boolConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
-import { createGenerationBatch, getPublicModels } from "./generation";
+import { createGenerationBatch } from "./generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
 import { ensurePlatformMedia, getGenerationTask, selectedPlatformModel, taskDelay } from "./tasks";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -20,7 +21,7 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     const session = useUserStore.getState().sessionVersion;
     const [models, referenceMediaIds] = await Promise.all([
-        getPublicModels(),
+        fetchPublicModels(),
         Promise.all([...references, ...(options?.videos || []), ...(options?.audios || [])].map((reference) => ensurePlatformMedia(reference, options?.signal))),
     ]);
     assertCurrentSession(session);

@@ -1,6 +1,7 @@
 import i18n from "@/i18n";
 import { findChannelModel, modelOptionName, type AiConfig } from "@/stores/use-config-store";
-import { createGenerationBatch, getGenerationBatch, getPublicModels, uploadGenerationMedia, type GenerationBatchDetail } from "@/services/api/generation";
+import { createGenerationBatch, getGenerationBatch, uploadGenerationMedia, type GenerationBatchDetail } from "@/services/api/generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
 import { mediaId } from "@/services/api/media";
 import { createTextConversation, createTextRequest } from "@/services/api/text";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -330,7 +331,7 @@ function textMessageContent(content: AiTextMessage["content"]) {
 }
 
 async function resolvePlatformModelId(value: string, capability: "image" | "text") {
-    const models = await getPublicModels();
+    const models = await fetchPublicModels();
     const name = modelOptionName(value);
     const model = models.find((item) => item.capability === capability && (item.id === value || item.id === name));
     if (!model) throw new Error(capability === "image" ? "暂无可用图片模型" : "暂无可用文本模型");
