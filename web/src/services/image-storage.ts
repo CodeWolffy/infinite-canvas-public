@@ -3,7 +3,6 @@ import i18n from "@/i18n";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
 import { readImageMeta } from "@/lib/image-utils";
 import { mediaUrl, readMedia, uploadMedia } from "@/services/api/media";
-import { withLocalProxy } from "@/stores/use-config-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type UploadedImage = {
@@ -71,7 +70,7 @@ async function fetchImageBlob(url: string, options?: ImageReadOptions) {
         controller.abort();
     }, IMAGE_DOWNLOAD_TIMEOUT_MS);
     try {
-        const response = await fetch(withLocalProxy(url), { signal: controller.signal });
+        const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) throw namedError(IMAGE_RESPONSE_ERROR);
         const blob = await response.blob();
         assertCurrentSession(sessionVersion);

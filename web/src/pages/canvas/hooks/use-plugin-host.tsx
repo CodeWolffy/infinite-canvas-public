@@ -5,7 +5,7 @@ import { message } from "antd";
 import { requestEdit, requestGeneration, requestImageQuestion, type AiTextMessage } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { decodeChannelModel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { decodeChannelModel, hasPlatformModel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { buildGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
@@ -21,7 +21,6 @@ type CanvasTheme = (typeof canvasThemes)[keyof typeof canvasThemes];
 type PluginHostParams = {
     projectId: string;
     effectiveConfig: AiConfig;
-    isAiConfigReady: (config: AiConfig, model: string) => boolean;
     theme: CanvasTheme;
     nodesRef: MutableRefObject<CanvasNodeData[]>;
     connectionsRef: MutableRefObject<CanvasConnection[]>;
@@ -37,15 +36,15 @@ type PluginHostParams = {
  */
 export function usePluginHost(params: PluginHostParams) {
     const { t } = useTranslation();
-    const { projectId, effectiveConfig, isAiConfigReady, theme, nodesRef, connectionsRef, viewportRef, setNodes, setDialogNodeId, applyAgentOps } = params;
+    const { projectId, effectiveConfig, theme, nodesRef, connectionsRef, viewportRef, setNodes, setDialogNodeId, applyAgentOps } = params;
 
     // Host capabilities available to plugin nodes; methods receive nodeId and are not bound to a specific node.
     const pluginAi = useMemo<CanvasPluginAi>(() => {
         // Convert plugin reference images (data URLs or URLs) into the ReferenceImage[] expected by the host generation API.
         const toReferences = (refs?: string[]): ReferenceImage[] => (refs || []).filter(Boolean).map((src, index) => ({ id: `plugin-ref-${index}`, name: `ref-${index}.png`, type: "image/png", dataUrl: src }));
-        // Open the configuration dialog and throw when AI is not configured, allowing the plugin to handle the error.
+        // Throw when the platform has no matching model, allowing the plugin to handle the error.
         const ensureReady = (config: AiConfig) => {
-            if (!isAiConfigReady(config, config.model)) {
+            if (!hasPlatformModel(config, config.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 throw new Error(t("canvas.plugins.aiConfigRequired"));
             }
@@ -88,7 +87,7 @@ export function usePluginHost(params: PluginHostParams) {
             listModels: (capability) => selectableModelsByCapability(effectiveConfig, capability as ModelCapability | undefined).map((value) => ({ value, label: decodeChannelModel(value)?.model || value })),
             defaultModel: (capability) => buildGenerationConfig(effectiveConfig, undefined, capability).model,
         };
-    }, [effectiveConfig, isAiConfigReady, projectId, t]);
+    }, [effectiveConfig, projectId, t]);
 
     const pluginHost = useMemo<CanvasPluginHost>(
         () => ({

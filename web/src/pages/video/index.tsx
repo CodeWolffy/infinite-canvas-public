@@ -19,7 +19,7 @@ import { getCapabilityBatches, selectedPlatformModel } from "@/services/api/task
 import { useSaveToAssets } from "@/hooks/use-save-to-assets";
 import { useGenerationBatches, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, modelOptionLabel, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -76,7 +76,7 @@ export default function VideoPage() {
     const targetBatchId = searchParams.get("batch");
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
-    const effectiveConfig = useEffectiveConfig();
+    const effectiveConfig = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const addAsset = useSaveToAssets();
 

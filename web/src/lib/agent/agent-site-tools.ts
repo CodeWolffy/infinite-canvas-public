@@ -182,7 +182,7 @@ function runImageWorkbench(input: SiteToolInput, navigate: NavigateFunction) {
     const configStore = useConfigStore.getState();
     const applied: NonNullable<WorkbenchCommand["config"]> = {};
     if (typeof input.model === "string" && input.model.trim()) {
-        const value = normalizeModelOptionValue(input.model, configStore.config.channels) || input.model;
+        const value = normalizeModelOptionValue(input.model, configStore.config.platformModels) || input.model;
         if (!selectableModelsByCapability(configStore.config, "image").includes(value)) throw new Error("请选择平台发布的图片模型");
         configStore.updateConfig("imageModel", value);
         applied.model = value;

@@ -90,7 +90,7 @@ function textGeneration({ count = 2, request, failBeforeSubmit = false, reasonin
         setNodes: (update) => { nodes = update(nodes); context.nodesRef.current = nodes; }, nodesRef: { current: nodes },
         setExpandedBatchNodeIds: () => {}, setRunningNodeId: () => {}, finishGenerationRequest: () => {}, message: { error: (error) => errors.push(error), warning: (error) => errors.push(error) },
         startGenerationRequest: () => { started.push(true); return new AbortController(); },
-        hasResumableVideoTask: () => false, findRetrySourceNode: () => nodes[0], effectiveConfig: {}, buildGenerationConfig: () => ({ model: "model", reasoningEffort: "auto" }), isAiConfigReady: () => true,
+        hasResumableVideoTask: () => false, findRetrySourceNode: () => nodes[0], config: {}, buildGenerationConfig: () => ({ model: "model", reasoningEffort: "auto" }), hasPlatformModel: () => true,
         hydrateNodeGenerationContext: async () => ({ prompt: "question", referenceImages: [] }), buildNodeGenerationContext: () => ({}), isVideoTaskFailed: () => false,
         connections: [{ fromNodeId: "source", toNodeId: "node" }], connectionsRef: { current: [{ fromNodeId: "source", toNodeId: "node" }] }, disposed: false, missingTextRequestsRef: { current: new Map() },
     };

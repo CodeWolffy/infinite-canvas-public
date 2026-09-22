@@ -13,7 +13,7 @@ import { ApiError } from "@/services/api/request";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { waitForGenerationTask } from "@/services/api/tasks";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
-import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { defaultConfig, hasPlatformModel, useConfigStore } from "@/stores/use-config-store";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 
@@ -210,9 +210,6 @@ function InfiniteCanvasPage() {
     });
 
     const config = useConfigStore((state) => state.config);
-    const effectiveConfig = useEffectiveConfig();
-    const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
-    const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
@@ -351,13 +348,13 @@ function InfiniteCanvasPage() {
             videoPollIdsRef.current.add(node.id);
             let controller: AbortController | undefined;
             try {
-                const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
-                if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                const generationConfig = buildGenerationConfig(config, node, "video");
+                if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                     if (silent) {
                         setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: t("workbench.configFirst") } } : item)));
                         return;
                     }
-                    openConfigDialog(true);
+                    message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                     return;
                 }
                 setRunningNodeId(node.id);
@@ -407,7 +404,7 @@ function InfiniteCanvasPage() {
                 }
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [config, finishGenerationRequest, hasPlatformModel, message, startGenerationRequest, t],
     );
 
     const pollAudioNodeTask = useCallback(async (node: CanvasNodeData) => {
@@ -864,7 +861,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const metadata = type === CanvasNodeType.Config ? { model: config.imageModel || config.model, size: config.size, count: getGenerationCount(config.canvasImageCount || config.count) } : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -879,7 +876,7 @@ function InfiniteCanvasPage() {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, setConnecting, t],
+        [config.canvasImageCount, config.count, config.imageModel, config.model, config.size, message, setConnecting, t],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -1055,8 +1052,7 @@ function InfiniteCanvasPage() {
 
     const { pluginHost, renderPluginPanel, buildNodeToolbarItems } = usePluginHost({
         projectId,
-        effectiveConfig,
-        isAiConfigReady,
+        effectiveConfig: config,
         theme,
         nodesRef,
         connectionsRef,
@@ -1071,9 +1067,9 @@ function InfiniteCanvasPage() {
             const configMetadata =
                 type === CanvasNodeType.Config
                     ? {
-                          model: effectiveConfig.imageModel || effectiveConfig.model,
-                          size: effectiveConfig.size,
-                          count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                          model: config.imageModel || config.model,
+                          size: config.size,
+                          count: getGenerationCount(config.canvasImageCount || config.count),
                       }
                     : undefined;
             const newNode = createCanvasNode(type, targetPosition, configMetadata);
@@ -1094,7 +1090,7 @@ function InfiniteCanvasPage() {
                     : isBuiltinType(type) && type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group;
             if (wantsPanel) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [config.canvasImageCount, config.count, config.imageModel, config.model, config.size, getCanvasCenter],
     );
 
     const deleteNodes = useCallback(
@@ -2124,7 +2120,7 @@ function InfiniteCanvasPage() {
                     { x: textNode.position.x + textNode.width + gap + configSpec.width / 2, y: centerY },
                     {
                         generationMode: "text",
-                        model: effectiveConfig.textModel || effectiveConfig.model || defaultConfig.textModel,
+                        model: config.textModel || config.model || defaultConfig.textModel,
                         count: 1,
                         composerContent: t("canvas.reverseComposer", { imageId: node.id, textId: textNode.id }),
                     },
@@ -2139,7 +2135,7 @@ function InfiniteCanvasPage() {
             setDialogNodeId(configNode.id);
             setContextMenu(null);
         },
-        [effectiveConfig.model, effectiveConfig.textModel, message, t],
+        [config.model, config.textModel, message, t],
     );
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
@@ -2214,8 +2210,8 @@ function InfiniteCanvasPage() {
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
-            if (payload.generate && !isAiConfigReady(generationConfig, generationConfig.model)) {
+            const generationConfig = { ...buildGenerationConfig(config, node, "image"), count: "1", size: node.metadata?.size || "auto" };
+            if (payload.generate && !hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 return;
             }
@@ -2277,7 +2273,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, projectId, startGenerationRequest, t],
+        [config, finishGenerationRequest, hasPlatformModel, message, projectId, startGenerationRequest, t],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2311,8 +2307,8 @@ function InfiniteCanvasPage() {
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+            const generationConfig = { ...buildGenerationConfig(config, node, "image"), count: "1" };
+            if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 return;
             }
@@ -2360,7 +2356,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, projectId, startGenerationRequest, t],
+        [config, finishGenerationRequest, hasPlatformModel, message, projectId, startGenerationRequest, t],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2485,8 +2481,8 @@ function InfiniteCanvasPage() {
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+            const generationConfig = buildGenerationConfig(config, sourceNode, mode);
+            if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 return;
             }
@@ -3031,7 +3027,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, projectId, startGenerationRequest, t],
+        [completeVideoNodeTask, config, finishGenerationRequest, hasPlatformModel, message, projectId, startGenerationRequest, t],
     );
 
     useEffect(() => {
@@ -3067,15 +3063,15 @@ function InfiniteCanvasPage() {
             const generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
-                          ...effectiveConfig,
-                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
-                          quality: savedImageMetadata.quality || effectiveConfig.quality,
-                          size: savedImageMetadata.size || effectiveConfig.size,
-                          background: savedImageMetadata.background ?? effectiveConfig.background,
+                          ...config,
+                          model: savedImageMetadata.model || config.imageModel || config.model,
+                          quality: savedImageMetadata.quality || config.quality,
+                          size: savedImageMetadata.size || config.size,
+                          background: savedImageMetadata.background ?? config.background,
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                    : { ...buildGenerationConfig(config, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+            if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 return;
             }
@@ -3227,7 +3223,7 @@ function InfiniteCanvasPage() {
                 }
             }
         },
-        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, projectId, startGenerationRequest, t],
+        [completeVideoNodeTask, config, finishGenerationRequest, hasPlatformModel, message, pollVideoNodeTask, projectId, startGenerationRequest, t],
     );
 
     const deleteBatchImage = useCallback((nodeId: string, imageId: string) => {
@@ -3262,9 +3258,9 @@ function InfiniteCanvasPage() {
                 },
                 {
                     prompt: "",
-                    model: effectiveConfig.imageModel || effectiveConfig.model,
-                    size: effectiveConfig.size,
-                    count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                    model: config.imageModel || config.model,
+                    size: config.size,
+                    count: getGenerationCount(config.canvasImageCount || config.count),
                 },
             );
             const connection = { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: configNode.id };
@@ -3278,7 +3274,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, t],
+        [config.canvasImageCount, config.count, config.imageModel, config.model, config.size, message, t],
     );
 
     const insertAssistantImage = useCallback(
