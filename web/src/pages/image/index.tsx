@@ -1,7 +1,6 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { BookOpen, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Tag, Tooltip, Typography } from "antd";
-import dayjs from "dayjs";
+import { App, Button, Drawer, Empty, Image, Input, Tag, Tooltip, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -10,20 +9,23 @@ import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { LogPanel } from "@/components/generation/log-panel";
+import { ReferenceOrderButtons } from "@/components/generation/reference-order-buttons";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { fileBaseName, fileExtension, moveListItem, summaryLogBase, type GenerationLog } from "@/lib/generation-log";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { createZip } from "@/lib/zip";
 import { modelOptionLabel, modelOptionName, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { createGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { platformImageParameters } from "@/services/api/image";
 import { selectedPlatformModel } from "@/services/api/tasks";
 import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { useGenerationBatches, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
+import { useGenerationBatches, useWorkbenchBootstrap, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
@@ -46,32 +48,6 @@ type GenerationResult = {
     error?: string;
 };
 
-type GenerationLog = {
-    id: string;
-    createdAt: number;
-    title: string;
-    prompt: string;
-    time: string;
-    model: string;
-    config: GenerationLogConfig;
-    references: ReferenceImage[];
-    durationMs: number;
-    successCount: number;
-    failCount: number;
-    imageCount: number;
-    size: string;
-    quality: string;
-    status: "pending" | "success" | "failed";
-    images: GeneratedImage[];
-    thumbnails: string[];
-    thumbnailMediaIds?: string[];
-    results: GenerationResult[];
-    referenceMediaIds: string[];
-    modelId: string;
-};
-
-type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
-
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
@@ -89,7 +65,6 @@ export default function ImagePage() {
     const effectiveConfig = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const addAsset = useAssetStore((state) => state.addAsset);
-    const [, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
         toLog: (detail) => ({ log: detailToLog(detail, modelsRef.current), results: detail.tasks.map(taskToResult) }),
@@ -102,7 +77,6 @@ export default function ImagePage() {
         notifyKeys: { success: "imageWorkbench.generated", title: "imageWorkbench.notificationTitle" },
     });
     const [modelId, setModelId] = useState(remixState?.modelId || "");
-    const [initialized, setInitialized] = useState(false);
     const [prompt, setPrompt] = useState(remixState?.prompt || "");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [logsOpen, setLogsOpen] = useState(false);
@@ -120,44 +94,24 @@ export default function ImagePage() {
     const processedCommandRef = useRef(0);
     const agentTaskIdRef = useRef<string | undefined>(undefined);
     const preferencesRef = useRef<Record<string, unknown>>({});
-
-    useEffect(() => {
-        const sessionVersion = useUserStore.getState().sessionVersion;
-        let disposed = false;
-        void Promise.all([getPublicModels(), listGenerationBatches(), getGenerationPreferences()]).then(async ([availableModels, batchPage, preferences]) => {
-            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-            const batches = batchPage.batches;
-            preferencesRef.current = preferences;
-            const imageModels = availableModels.filter((item) => item.capability === "image");
-            modelsRef.current = imageModels;
-            setModels(imageModels);
-            const preferredModelId = typeof preferences.imageModelId === "string" && imageModels.some((item) => item.id === preferences.imageModelId) ? preferences.imageModelId : imageModels[0]?.id || "";
+    const { initialized } = useWorkbenchBootstrap({
+        capability: "image",
+        modelsRef,
+        preferencesRef,
+        batches: { setLogs, setActiveBatchIds, applyDetail, setPreviewLog, setResults },
+        toLog: (batch, models) => summaryToLog(batch, models),
+        applyPreferences: (preferences, models) => {
+            const preferredModelId = typeof preferences.imageModelId === "string" && models.some((item) => item.id === preferences.imageModelId) ? preferences.imageModelId : models[0]?.id || "";
             const initialModel = remixState?.modelId || preferredModelId;
             setModelId(initialModel);
             if (initialModel) updateConfig("imageModel", initialModel);
             for (const key of ["quality", "size", "count", "background"] as const) {
                 if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
             }
-            batches.forEach((batch) => {
-                batch.summary.thumbnailMediaIds.forEach((id) => void ensureImagePreview(id));
-            });
-            setLogs(batches.map((batch) => summaryToLog(batch, imageModels)));
-            const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
-            if (!activeBatches.length) return;
-            setActiveBatchIds(activeBatches.map((b) => b.id));
-            const detail = await getGenerationBatch(activeBatches[0]!.id);
-            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-            const applied = applyDetail(detail);
-            setPreviewLog(applied.log);
-            setResults(applied.results);
-        }).catch((error) => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) message.error(error instanceof Error ? error.message : "生成记录加载失败");
-        }).finally(() => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) setInitialized(true);
-        });
-        return () => { disposed = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        },
+        resolveInitialBatchId: (batches) => batches.find((batch) => batch.summary.activeCount > 0)?.id,
+        onBatch: (batch) => batch.summary.thumbnailMediaIds.forEach((id) => void ensureImagePreview(id)),
+    });
 
     const model = modelId || effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim() && model && !generating);
@@ -432,6 +386,7 @@ export default function ImagePage() {
                 <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
                     <LogPanel
                         logs={logs}
+                        variant="image"
                         selectedLogIds={selectedLogIds}
                         activeLogId={previewLog?.id}
                         onSelectedLogIdsChange={setSelectedLogIds}
@@ -609,6 +564,7 @@ export default function ImagePage() {
             <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel
                     logs={logs}
+                    variant="image"
                     selectedLogIds={selectedLogIds}
                     activeLogId={previewLog?.id}
                     onSelectedLogIdsChange={setSelectedLogIds}
@@ -728,26 +684,10 @@ function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => voi
     );
 }
 
-function fileBaseName(text: string) {
-    const cleaned = text.trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-").slice(0, 24);
-    return `${cleaned || "image"}-${dayjs().format("YYYYMMDD-HHmmss")}`;
-}
-
-function fileExtension(mimeType?: string) {
-    return mimeType?.split("/")[1]?.replace("jpeg", "jpg") || "png";
-}
-
 function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): GenerationLog {
     const parameters = batch.parameters || {};
-    const model = models.find((item) => item.id === batch.modelId);
     return {
-        id: batch.id,
-        createdAt: new Date(batch.createdAt).getTime(),
-        title: batch.prompt.slice(0, 12) || i18n.t("workbench.untitled"),
-        prompt: batch.prompt,
-        time: new Date(batch.createdAt).toLocaleString(i18n.resolvedLanguage, { hour12: false }),
-        model: model?.displayName || model?.name || batch.modelId,
-        modelId: batch.modelId,
+        ...summaryLogBase(batch, models),
         config: { model: batch.modelId, imageModel: batch.modelId, quality: String(parameters.quality || "auto"), size: String(parameters.size || "auto"), count: String(batch.requestedCount) },
         references: [],
         referenceMediaIds: [],
@@ -763,127 +703,6 @@ function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): Ge
         thumbnailMediaIds: batch.summary.thumbnailMediaIds,
         thumbnails: batch.summary.thumbnailMediaIds.map((mediaId) => `/api/media/${mediaId}`),
     };
-}
-
-function LogPanel({
-    logs,
-    selectedLogIds,
-    activeLogId,
-    onSelectedLogIdsChange,
-    onCreateSession,
-    onDeleteSelected,
-    onPreviewLog,
-}: {
-    logs: GenerationLog[];
-    selectedLogIds: string[];
-    activeLogId?: string;
-    onSelectedLogIdsChange: (ids: string[]) => void;
-    onCreateSession: () => void;
-    onDeleteSelected: () => void;
-    onPreviewLog: (log: GenerationLog) => void;
-}) {
-    const { t } = useTranslation();
-    const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
-    const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
-
-    return (
-        <>
-            <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                    <h2 className="text-base font-semibold">{t("workbench.logs")}</h2>
-                </div>
-                <Tag className="m-0">{logs.length}</Tag>
-            </div>
-            <div className="mb-4 flex flex-wrap gap-2">
-                <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>
-                    {t("workbench.new")}
-                </Button>
-                <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
-                    {allSelected ? t("common.cancel") : t("workbench.selectAll")}
-                </Button>
-                <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
-                    {t("common.delete")}
-                </Button>
-            </div>
-            <div className="space-y-3">
-                {logs.map((log) => (
-                    <LogCard
-                        key={log.id}
-                        log={log}
-                        selected={selectedLogIds.includes(log.id)}
-                        active={activeLogId === log.id}
-                        onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))}
-                        onClick={() => onPreviewLog(log)}
-                    />
-                ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
-            </div>
-        </>
-    );
-}
-
-function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
-    const { t } = useTranslation();
-    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
-    const thumbnails = (log.thumbnailMediaIds && log.thumbnailMediaIds.length > 0)
-        ? log.thumbnailMediaIds.slice(0, 4).map((id) => ({ key: id, src: previewUrlFor(id) || `/api/media/${id}` }))
-        : (log.images && log.images.length > 0)
-            ? log.images.slice(0, 4).map((img) => ({ key: img.storageKey, src: (img.storageKey ? previewUrlFor(img.storageKey) : undefined) || img.dataUrl }))
-            : (log.thumbnails || []).filter(Boolean).slice(0, 4).map((src) => ({ key: undefined, src }));
-
-    useEffect(() => {
-        (log.thumbnailMediaIds || []).slice(0, 4).forEach((id) => void ensureImagePreview(id));
-        (log.images || []).slice(0, 4).forEach((img) => {
-            if (img.storageKey) void ensureImagePreview(img.storageKey);
-        });
-    }, [log.thumbnailMediaIds, log.images]);
-
-    return (
-        <button
-            type="button"
-            className={`block w-full rounded-lg border p-2 text-left transition ${active ? "border-stone-900 bg-blue-50 dark:border-stone-100 dark:bg-blue-950/20" : "border-stone-200 bg-background hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-900"}`}
-            onClick={onClick}
-        >
-            <div className="grid grid-cols-[minmax(128px,1fr)_auto] gap-2">
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2">
-                    <Checkbox className="mt-0.5" checked={selected} onClick={(event) => event.stopPropagation()} onChange={(event) => onSelectedChange(event.target.checked)} />
-                    <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold leading-5">{log.title}</div>
-                        {thumbnails.length ? (
-                            <div className="mt-2 flex gap-1 overflow-hidden">
-                                {thumbnails.map((item, index) => (
-                                    <img key={`${log.id}-${index}`} src={item.src} alt="" className="size-8 shrink-0 rounded-md object-cover" />
-                                ))}
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-                <div className="grid justify-items-end gap-2">
-                    <div className="flex gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
-                            {t("workbench.successCount", { count: log.successCount ?? log.imageCount })}
-                        </Tag>
-                        {log.failCount ? (
-                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
-                                {t("workbench.failCount", { count: log.failCount })}
-                            </Tag>
-                        ) : null}
-                    </div>
-                    <div className="flex flex-wrap justify-end gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{t("workbench.itemCount", { count: log.imageCount })}</Tag>
-                        {log.durationMs ? (
-                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
-                                {formatDuration(log.durationMs)}
-                            </Tag>
-                        ) : null}
-                    </div>
-                    <div className="flex justify-end">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.time}</Tag>
-                    </div>
-                </div>
-            </div>
-        </button>
-    );
 }
 
 function taskToResult(task: GenerationTask): GenerationResult {
@@ -927,20 +746,4 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
     };
 }
 
-function moveListItem<T>(items: T[], index: number, offset: number) {
-    const targetIndex = index + offset;
-    if (targetIndex < 0 || targetIndex >= items.length) return items;
-    const next = [...items];
-    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    return next;
-}
 
-function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {
-    if (total <= 1) return null;
-    return (
-        <div className="absolute inset-x-1 bottom-1 flex justify-between">
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
-        </div>
-    );
-}

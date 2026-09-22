@@ -1,23 +1,26 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { BookOpen, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Tag, Typography } from "antd";
+import { App, Button, Drawer, Empty, Input, Tag, Typography } from "antd";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { LogPanel } from "@/components/generation/log-panel";
+import { ReferenceOrderButtons } from "@/components/generation/reference-order-buttons";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { moveListItem, summaryLogBase, type GenerationLog } from "@/lib/generation-log";
 import { clampVideoSeconds, computeVideoSize } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "@/services/image-storage";
-import { createGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
-import { getCapabilityBatches, selectedPlatformModel } from "@/services/api/tasks";
+import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { selectedPlatformModel } from "@/services/api/tasks";
 import { useSaveToAssets } from "@/hooks/use-save-to-assets";
-import { useGenerationBatches, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
+import { useGenerationBatches, useWorkbenchBootstrap, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -43,29 +46,6 @@ type GenerationResult = {
     error?: string;
 };
 
-type GenerationLog = {
-    id: string;
-    createdAt: number;
-    title: string;
-    prompt: string;
-    time: string;
-    model: string;
-    modelId: string;
-    config: GenerationLogConfig;
-    references: ReferenceImage[];
-    referenceMediaIds: string[];
-    durationMs: number;
-    size: string;
-    resolution: string;
-    seconds: string;
-    status: "pending" | "success" | "failed";
-    video?: GeneratedVideo;
-    results: GenerationResult[];
-    error?: string;
-};
-
-type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoMode">;
-
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
 export default function VideoPage() {
@@ -80,7 +60,6 @@ export default function VideoPage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const addAsset = useSaveToAssets();
 
-    const [, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
         toLog: (detail) => detailToLog(detail, modelsRef.current),
@@ -88,7 +67,6 @@ export default function VideoPage() {
         notifyKeys: { success: "videoWorkbench.generated", title: "videoWorkbench.title" },
     });
     const preferencesRef = useRef<Record<string, unknown>>({});
-    const [initialized, setInitialized] = useState(false);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [generating, setGenerating] = useState(false);
@@ -110,54 +88,24 @@ export default function VideoPage() {
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim() && !generating);
 
-    useEffect(() => {
-        const sessionVersion = useUserStore.getState().sessionVersion;
-        let disposed = false;
-        void Promise.all([getPublicModels(), getCapabilityBatches("video"), getGenerationPreferences()]).then(async ([availableModels, batchResp, preferences]) => {
-            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-            const batches = batchResp.batches;
-            preferencesRef.current = preferences;
-            const vModels = availableModels.filter((item) => item.capability === "video");
-            modelsRef.current = vModels;
-            setModels(vModels);
-            if (typeof preferences.videoModelId === "string" && vModels.some((item) => item.id === preferences.videoModelId)) {
+    const { initialized } = useWorkbenchBootstrap({
+        capability: "video",
+        modelsRef,
+        preferencesRef,
+        batches: { setLogs, setActiveBatchIds, applyDetail, setPreviewLog, setResults },
+        toLog: (batch, models) => summaryToLog(batch, models),
+        applyPreferences: (preferences, models) => {
+            if (typeof preferences.videoModelId === "string" && models.some((item) => item.id === preferences.videoModelId)) {
                 updateConfig("videoModel", preferences.videoModelId);
             }
             for (const key of ["vquality", "videoSeconds", "videoGenerateAudio", "videoWatermark", "videoMode"] as const) {
                 if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
             }
             if (typeof preferences.videoSize === "string") updateConfig("size", preferences.videoSize);
-
-            const initialLogs = batches.map((batch) => summaryToLog(batch, vModels));
-            setLogs(initialLogs);
-
-            const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
-            if (activeBatches.length) {
-                setActiveBatchIds(activeBatches.map((b) => b.id));
-            }
-
-            const initialBatchId = targetBatchId || (batches.length ? batches[0].id : null);
-            if (initialBatchId) {
-                try {
-                    const detail = await getGenerationBatch(initialBatchId);
-                    if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-                    const applied = applyDetail(detail);
-                    setPreviewLog(applied.log);
-                    setResults(applied.results);
-                } catch {
-                    // Ignore initial batch load error
-                }
-            }
-        }).catch((error) => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) {
-                message.error(error instanceof Error ? error.message : "生成记录加载失败");
-            }
-        }).finally(() => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) setInitialized(true);
-        });
-        return () => { disposed = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        },
+        resolveInitialBatchId: (batches) => targetBatchId || batches[0]?.id || null,
+        ignoreDetailError: true,
+    });
 
     const addReferences = async (files?: FileList | null) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
@@ -438,7 +386,7 @@ export default function VideoPage() {
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
             <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
                 <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
-                    <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={deleteSelectedLogs} onPreviewLog={previewGenerationLog} />
+                    <LogPanel logs={logs} variant="video" selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={deleteSelectedLogs} onPreviewLog={previewGenerationLog} />
                 </aside>
 
                 <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -558,7 +506,7 @@ export default function VideoPage() {
                 }}
             />
             <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
-                <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={deleteSelectedLogs} onPreviewLog={previewGenerationLog} />
+                <LogPanel logs={logs} variant="video" selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={deleteSelectedLogs} onPreviewLog={previewGenerationLog} />
             </Drawer>
             <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="space-y-4 pb-4">
@@ -644,95 +592,12 @@ function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => voi
     );
 }
 
-function LogPanel({
-    logs,
-    selectedLogIds,
-    activeLogId,
-    onSelectedLogIdsChange,
-    onCreateSession,
-    onDeleteSelected,
-    onPreviewLog,
-}: {
-    logs: GenerationLog[];
-    selectedLogIds: string[];
-    activeLogId?: string;
-    onSelectedLogIdsChange: (ids: string[]) => void;
-    onCreateSession: () => void;
-    onDeleteSelected: () => void;
-    onPreviewLog: (log: GenerationLog) => void;
-}) {
-    const { t } = useTranslation();
-    const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
-    const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
-
-    return (
-        <>
-            <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold">{t("workbench.logs")}</h2>
-                <Tag className="m-0">{logs.length}</Tag>
-            </div>
-            <div className="mb-4 flex flex-wrap gap-2">
-                <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>
-                    {t("workbench.new")}
-                </Button>
-                <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
-                    {allSelected ? t("common.cancel") : t("workbench.selectAll")}
-                </Button>
-                <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
-                    {t("common.delete")}
-                </Button>
-            </div>
-            <div className="space-y-3">
-                {logs.map((log) => (
-                    <LogCard key={log.id} log={log} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onClick={() => onPreviewLog(log)} />
-                ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
-            </div>
-        </>
-    );
-}
-
-function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
-    const { t } = useTranslation();
-    return (
-        <button type="button" className={`block w-full rounded-lg border p-2 text-left transition ${active ? "border-stone-900 bg-blue-50 dark:border-stone-100 dark:bg-blue-950/20" : "border-stone-200 bg-background hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-900"}`} onClick={onClick}>
-            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
-                <Checkbox className="mt-0.5" checked={selected} onClick={(event) => event.stopPropagation()} onChange={(event) => onSelectedChange(event.target.checked)} />
-                <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold leading-5">{log.title}</div>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.size}</Tag>
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.resolution}p</Tag>
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.seconds}s</Tag>
-                    </div>
-                </div>
-                <div className="grid justify-items-end gap-2">
-                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "success" ? "blue" : log.status === "pending" ? "processing" : "red"}>
-                        {t(`workbench.${log.status === "success" ? "success" : log.status === "pending" ? "generating" : "failed"}`)}
-                    </Tag>
-                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
-                        {formatDuration(log.durationMs)}
-                    </Tag>
-                </div>
-            </div>
-        </button>
-    );
-}
-
 function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): GenerationLog {
     const parameters = batch.parameters || {};
-    const model = models.find((item) => item.id === batch.modelId);
     const config = videoLogConfig(parameters, batch.modelId);
-    const active = batch.summary.activeCount > 0;
 
     return {
-        id: batch.id,
-        createdAt: new Date(batch.createdAt).getTime(),
-        title: batch.prompt.slice(0, 12) || i18n.t("workbench.untitled"),
-        prompt: batch.prompt,
-        time: new Date(batch.createdAt).toLocaleString(i18n.resolvedLanguage, { hour12: false }),
-        model: model?.displayName || model?.name || batch.modelId,
-        modelId: batch.modelId,
+        ...summaryLogBase(batch, models),
         config,
         references: [],
         referenceMediaIds: [],
@@ -740,12 +605,12 @@ function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): Ge
         size: config.size,
         resolution: config.vquality,
         seconds: config.videoSeconds,
-        status: active ? "pending" : batch.summary.succeededCount > 0 ? "success" : "failed",
+        status: batch.summary.activeCount > 0 ? "pending" : batch.summary.succeededCount > 0 ? "success" : "failed",
         results: [],
     };
 }
 
-function videoLogConfig(parameters: Record<string, unknown>, modelId: string): GenerationLogConfig {
+function videoLogConfig(parameters: Record<string, unknown>, modelId: string): GenerationLog["config"] {
     return {
         model: modelId,
         videoModel: modelId,
@@ -821,24 +686,6 @@ function taskToResult(task: GenerationTask): GenerationResult {
         return { id: task.id, status: "failed", error: task.errorMessage || task.errorCode || i18n.t("workbench.generationFailed") };
     }
     return { id: task.id, status: task.status === "reviewing" ? "reviewing" : task.status === "running" ? "running" : "queued" };
-}
-
-function moveListItem<T>(items: T[], index: number, offset: number) {
-    const targetIndex = index + offset;
-    if (targetIndex < 0 || targetIndex >= items.length) return items;
-    const next = [...items];
-    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    return next;
-}
-
-function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {
-    if (total <= 1) return null;
-    return (
-        <div className="absolute inset-x-1 bottom-1 flex justify-between">
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
-        </div>
-    );
 }
 
 function normalizeVideoSeconds(value: string) {

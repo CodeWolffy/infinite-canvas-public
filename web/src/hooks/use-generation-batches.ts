@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { deleteGenerationBatch, getGenerationBatch, type GenerationBatchDetail, type GenerationTask } from "@/services/api/generation";
+import { deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { fetchPublicModels } from "@/hooks/use-public-models";
+import { getCapabilityBatches } from "@/services/api/tasks";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type GenerationBatchLog = { id: string; createdAt: number; status: "pending" | "success" | "failed" };
 
@@ -144,4 +147,62 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     };
 
     return { logs, setLogs, activeBatchIds, setActiveBatchIds, activeBatchIdsRef, previewLog, setPreviewLog, previewLogIdRef, watchedBatchesRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission };
+}
+
+// 生图/视频工作台共用的初始化：拉取模型、生成记录与偏好，并回填页面状态。
+export function useWorkbenchBootstrap<L extends GenerationBatchLog, R>(options: {
+    capability: "image" | "video";
+    modelsRef: { current: PublicModel[] };
+    preferencesRef: { current: Record<string, unknown> };
+    batches: {
+        setLogs: (logs: L[]) => void;
+        setActiveBatchIds: (ids: string[]) => void;
+        applyDetail: (detail: GenerationBatchDetail) => { log: L; results: R[] };
+        setPreviewLog: (log: L) => void;
+        setResults: (results: R[]) => void;
+    };
+    toLog: (batch: GenerationBatchListItem, models: PublicModel[]) => L;
+    applyPreferences: (preferences: Record<string, unknown>, models: PublicModel[]) => void;
+    resolveInitialBatchId: (batches: GenerationBatchListItem[]) => string | null | undefined;
+    onBatch?: (batch: GenerationBatchListItem) => void;
+    ignoreDetailError?: boolean;
+}): { initialized: boolean } {
+    const { message } = App.useApp();
+    const [initialized, setInitialized] = useState(false);
+
+    useEffect(() => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
+        let disposed = false;
+        void Promise.all([fetchPublicModels(), getCapabilityBatches(options.capability), getGenerationPreferences()]).then(async ([availableModels, batchResp, preferences]) => {
+            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
+            const batches = batchResp.batches;
+            const models = availableModels.filter((item) => item.capability === options.capability);
+            options.preferencesRef.current = preferences;
+            options.modelsRef.current = models;
+            options.applyPreferences(preferences, models);
+            batches.forEach((batch) => options.onBatch?.(batch));
+            options.batches.setLogs(batches.map((batch) => options.toLog(batch, models)));
+            const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
+            if (activeBatches.length) options.batches.setActiveBatchIds(activeBatches.map((batch) => batch.id));
+            const initialBatchId = options.resolveInitialBatchId(batches);
+            if (!initialBatchId) return;
+            try {
+                const detail = await getGenerationBatch(initialBatchId);
+                if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
+                const applied = options.batches.applyDetail(detail);
+                options.batches.setPreviewLog(applied.log);
+                options.batches.setResults(applied.results);
+            } catch (error) {
+                if (!options.ignoreDetailError) throw error;
+            }
+        }).catch((error) => {
+            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) message.error(error instanceof Error ? error.message : "生成记录加载失败");
+        }).finally(() => {
+            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) setInitialized(true);
+        });
+        return () => { disposed = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    return { initialized };
 }
