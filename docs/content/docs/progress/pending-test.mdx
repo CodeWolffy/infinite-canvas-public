@@ -9,6 +9,24 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+### Round 1 improvements (backend reliability, security, frontend toolchain) pending verification
+
+- Unified channel availability: after marking a channel as auto-disabled or disabling all of its keys, its models must disappear from the user model list and return once the channel is saved back to "enabled". Scheduling, quoting and channel debugging share the same rule.
+- Cancel propagation: start an image task and cancel it immediately; the upstream request must be interrupted, the task must end as canceled with the full hold refunded, and no upstream cost may be recorded.
+- Requeue on shutdown: restart the API while a task is running (`docker compose restart api`); the task must return to the queue and continue instead of failing or refunding. `SHUTDOWN_GRACE_SECONDS` controls how long shutdown waits for in-flight tasks.
+- Key rotation: follow the four steps in README "轮换渠道加密密钥"; `canvas-server rotate-keys` prints the re-encrypted row count per table. Channel keys, payment config, SMTP password, TOTP secrets and task channel snapshots must keep working after rotation and after removing `CHANNEL_ENCRYPTION_KEY_PREVIOUS`.
+- Second-factor confirmation: editing payment channels, resetting a password, adjusting a balance, clearing request logs, saving platform or mail settings and changing a user role must first show a "安全验证" dialog asking for the current password; canceling it must abort the action. Admins with two-step verification also enter a code.
+- Write rate limits: more than 10 redemptions per user per minute must return 429 with a `Retry-After` header.
+- Admin audit: every write above must add an `http.<METHOD> <route>` row to the audit list with query, status and requestId in its detail (never the request body).
+- Password rules and session renewal: registering or changing a password to the username or to digits only must be rejected in the form and by the API (`weak_password`); refreshing with less than half of the session left must extend the cookie to a full session.
+- Pagination: user management paging and filters (keyword, role, status) must return correct rows and totals; canvas lists beyond 200 items must show "加载更多"; the usage statistics page must default to the last 30 days.
+- User-side data layer: filters, paging and refresh on the usage log and personal statistics pages must behave as before, and switching accounts must never show the previous account's data.
+- Observability: with `METRICS_ADDRESS=:9090` the `/metrics` endpoint must expose `ic_http_requests_total`, `ic_tasks_queued` and friends; `/ready` returns 503 until startup completes and 200 afterwards; `LOG_FORMAT=json` switches logs to JSON, and access plus 500 error logs carry a requestId.
+- Frontend toolchain: `npm run build` runs tsc and eslint first (0 errors); `npm test` uses vitest with 65 passing cases.
+- Error fallback: making a page throw (or switching routes while an old build's chunk is stale) must show "页面出现错误" with a reload button instead of a blank page.
+- Canvas interaction regression (verify carefully after the project.tsx split): dragging, zooming, box selection, connecting, copy/paste, undo/redo, Delete, Escape, image upload drag-and-drop, image node generation, text node generation, batch generation, retry after failure, and resuming in-flight tasks after a refresh.
+- After removing the browser direct-connect settings: the settings page must no longer offer channels, local proxy, WebDAV or local storage, and a missing platform model must show "平台模型渠道未就绪，请联系管理员配置渠道".
+
 ### 性能优化（首屏体积、画布保存与后端连接）待验收
 
 - 首屏体积：Agent 面板、素材页、画布列表页与提示词页改为按需加载，语言包改为只加载当前语言（启动时先等语言包就绪再渲染），并移除全项目未使用的 Pro Components Provider。对照构建显示 Agent 面板链路约 0.9 MB（gzip 约 0.28 MB）、两份语言包约 0.24 MB（gzip 约 0.07 MB）不再进入首屏。
