@@ -44,6 +44,8 @@ type Config struct {
 	MinioSSL                                                             bool
 	// MetricsAddress 为空表示不启动指标服务；非空时在该地址暴露 /metrics 与 pprof。
 	MetricsAddress string
+	// PreviousEncryptionKey 仅在轮换期间设置，用于解密没有版本前缀的旧密文。
+	PreviousEncryptionKey string
 }
 
 type App struct {
@@ -109,6 +111,10 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		MetricsAddress: os.Getenv("METRICS_ADDRESS")}
 	if cfg.DatabaseURL == "" || len(cfg.EncryptionKey) < 32 || strings.HasPrefix(cfg.EncryptionKey, "change-me") {
 		return nil, errors.New("请配置 DATABASE_URL 和独立的 CHANNEL_ENCRYPTION_KEY（至少 32 字符）")
+	}
+	cfg.PreviousEncryptionKey = os.Getenv("CHANNEL_ENCRYPTION_KEY_PREVIOUS")
+	if cfg.PreviousEncryptionKey != "" && (len(cfg.PreviousEncryptionKey) < 32 || strings.HasPrefix(cfg.PreviousEncryptionKey, "change-me")) {
+		return nil, errors.New("CHANNEL_ENCRYPTION_KEY_PREVIOUS 至少 32 字符")
 	}
 	u, err := url.Parse(cfg.PublicURL)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || (u.Scheme != "https" && u.Scheme != "http") {
@@ -412,9 +418,12 @@ func pagination(c *gin.Context) (int, int) {
 	return limit, offset
 }
 
-func (a *App) seal(value string) (string, error) {
-	key := sha256.Sum256([]byte(a.Config.EncryptionKey))
-	block, err := aes.NewCipher(key[:])
+// cipherVersion 标记当前密文格式；轮换主密钥时靠它区分新旧格式。
+const cipherVersion = "v1:"
+
+func sealWith(key, value string) (string, error) {
+	derived := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(derived[:])
 	if err != nil {
 		return "", err
 	}
@@ -428,13 +437,14 @@ func (a *App) seal(value string) (string, error) {
 	}
 	return base64.RawStdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(value), nil)), nil
 }
-func (a *App) unseal(value string) (string, error) {
+
+func openWith(key, value string) (string, error) {
 	data, err := base64.RawStdEncoding.DecodeString(value)
 	if err != nil {
 		return "", err
 	}
-	key := sha256.Sum256([]byte(a.Config.EncryptionKey))
-	block, err := aes.NewCipher(key[:])
+	derived := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(derived[:])
 	if err != nil {
 		return "", err
 	}
@@ -447,6 +457,29 @@ func (a *App) unseal(value string) (string, error) {
 	}
 	plain, err := gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], nil)
 	return string(plain), err
+}
+
+func (a *App) seal(value string) (string, error) {
+	sealed, err := sealWith(a.Config.EncryptionKey, value)
+	if err != nil {
+		return "", err
+	}
+	return cipherVersion + sealed, nil
+}
+
+func (a *App) unseal(value string) (string, error) {
+	versioned := strings.HasPrefix(value, cipherVersion)
+	plain, err := openWith(a.Config.EncryptionKey, strings.TrimPrefix(value, cipherVersion))
+	if err == nil {
+		return plain, nil
+	}
+	// 无版本前缀的旧密文允许用上一把主密钥解密，轮换期间可平滑过渡。
+	if !versioned && a.Config.PreviousEncryptionKey != "" {
+		if legacy, legacyErr := openWith(a.Config.PreviousEncryptionKey, value); legacyErr == nil {
+			return legacy, nil
+		}
+	}
+	return "", err
 }
 
 func respond(fn func(*gin.Context) (any, error)) gin.HandlerFunc {

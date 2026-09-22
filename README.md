@@ -189,6 +189,7 @@
 | `PUBLIC_URL` | `http://localhost:3301` | 平台对外公开的基础 URL（包含协议与域名） |
 | `PUBLIC_WEB_PORT` | `3301` | 本地 Compose 映射到宿主机的 Web 端口 |
 | `CHANNEL_ENCRYPTION_KEY` | *(至少 32 位随机字符串)* | **至关重要**：用于加密保存渠道 API 密钥的 AES 密钥，必须离线备份 |
+| `CHANNEL_ENCRYPTION_KEY_PREVIOUS` | *(留空)* | 仅密钥轮换期间设置，填上一把主密钥；轮换完成后必须移除 |
 | `BOOTSTRAP_ADMIN_USERNAME` | `admin` | 系统初次初始化时的管理员账号 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | *(初始化密码)* | 系统初次初始化时的管理员密码，初次登录后建议修改 |
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` | PostgreSQL 权威数据库连接串 |
@@ -198,6 +199,17 @@
 | `LOG_LEVEL` | `info` | 日志级别，可选 `debug` / `info` / `warn` / `error` |
 | `LOG_FORMAT` | `text` | 日志格式，可选 `text` / `json` |
 | `METRICS_ADDRESS` | *(留空即关闭)* | Prometheus 指标与 pprof 监听地址（如 `:9090`）；只在内网使用，不要映射到公网 |
+
+### 轮换渠道加密密钥
+
+渠道密钥、支付配置、SMTP 密码、TOTP 密钥与任务渠道快照都由 `CHANNEL_ENCRYPTION_KEY` 加密。轮换步骤：
+
+1. 在 `.env` 中设置 `CHANNEL_ENCRYPTION_KEY_PREVIOUS=<旧密钥>`，并把 `CHANNEL_ENCRYPTION_KEY` 改成新密钥。
+2. 重启服务：`docker compose up -d api`。
+3. 执行重加密：`docker compose exec api canvas-server rotate-keys`，确认输出中各表行数符合预期。
+4. 从 `.env` 移除 `CHANNEL_ENCRYPTION_KEY_PREVIOUS`，再次重启。
+
+轮换期间新写入的密文带 `v1:` 前缀，只能用新密钥解开；没有前缀的旧密文会先用新密钥、再用上一把密钥尝试解密。重加密按表分批执行，任一记录解密失败会整表回滚，旧密钥不会被提前废弃。
 
 ---
 

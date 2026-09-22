@@ -721,3 +721,77 @@ func TestWriteEndpointsAreRateLimited(t *testing.T) {
 		t.Fatalf("第 11 次兑换应被限流，实际状态 %d", status)
 	}
 }
+
+// 密文带版本前缀；旧格式密文由 CHANNEL_ENCRYPTION_KEY_PREVIOUS 兜底，缺失时必须解密失败。
+func TestSealVersionedRoundTrip(t *testing.T) {
+	app := &App{Config: Config{EncryptionKey: strings.Repeat("n", 32), PreviousEncryptionKey: strings.Repeat("o", 32)}}
+	sealed, err := app.seal("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(sealed, cipherVersion) {
+		t.Fatalf("新密文缺少版本前缀: %s", sealed)
+	}
+	if plain, err := app.unseal(sealed); err != nil || plain != "secret" {
+		t.Fatalf("v1 密文应能用主密钥解开: %q %v", plain, err)
+	}
+	legacy, err := sealWith(strings.Repeat("o", 32), "legacy-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(legacy, cipherVersion) {
+		t.Fatal("旧格式密文不应带版本前缀")
+	}
+	if plain, err := app.unseal(legacy); err != nil || plain != "legacy-secret" {
+		t.Fatalf("旧密文应能用上一把密钥解开: %q %v", plain, err)
+	}
+	strict := &App{Config: Config{EncryptionKey: strings.Repeat("n", 32)}}
+	if _, err = strict.unseal(legacy); err == nil {
+		t.Fatal("缺少 CHANNEL_ENCRYPTION_KEY_PREVIOUS 时不应解开旧密文")
+	}
+}
+
+// rotate-keys 应把旧格式密文重加密成主密钥可解的新格式。
+func TestRotateKeysReencryptsLegacyCiphertext(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	_, _ = testUser(t, a, 0)
+	previous := strings.Repeat("p", 32)
+	legacy, err := sealWith(previous, "upstream-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelID := uuid.NewString()
+	if _, err = a.DB.Exec(ctx, "INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'轮换渠道','image','openai','https://example.invalid','active')", channelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.DB.Exec(ctx, "INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'旧密钥')", channelID, legacy); err != nil {
+		t.Fatal(err)
+	}
+	a.Config.PreviousEncryptionKey = previous
+	results, err := a.RotateKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 轮换完成后必须只靠主密钥就能解开。
+	a.Config.PreviousEncryptionKey = ""
+	var stored string
+	if err = a.DB.QueryRow(ctx, "SELECT encrypted_api_key FROM channel_keys WHERE channel_id=$1", channelID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stored, cipherVersion) {
+		t.Fatal("轮换后密文应带版本前缀")
+	}
+	if plain, err := a.unseal(stored); err != nil || plain != "upstream-key" {
+		t.Fatalf("轮换后应能用主密钥解开: %q %v", plain, err)
+	}
+	rotated := false
+	for _, item := range results {
+		if item.Table == "channel_keys" && item.Column == "encrypted_api_key" && item.Rows == 1 {
+			rotated = true
+		}
+	}
+	if !rotated {
+		t.Fatalf("轮换统计缺少 channel_keys: %v", results)
+	}
+}
