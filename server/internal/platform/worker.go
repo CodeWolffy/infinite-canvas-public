@@ -228,6 +228,12 @@ func (a *App) StartWorkers(ctx context.Context) {
 	a.startMetrics(ctx)
 	a.startMetricsSampler(ctx)
 	a.workersStarted.Store(true)
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		<-ctx.Done()
+		a.shuttingDown.Store(true)
+	}()
 	for i := 0; i < a.Config.WorkerConcurrency; i++ {
 		a.workers.Add(1)
 		go func() {
@@ -475,6 +481,12 @@ func (a *App) executeTask(root context.Context, task Row) {
 					return
 				}
 				last = classify(err)
+				// 进程退出：在途任务重排回队列，不计失败也不退款，重启后继续执行。
+				if a.shuttingDown.Load() && last.Category == "canceled" {
+					a.requeue(context.Background(), task, false)
+					task["status"] = "queued"
+					return
+				}
 				// 用户取消：任务行已由 cancelTask 改为 canceled，这里不重试也不结算。
 				if last.Category == "canceled" && root.Err() == nil {
 					canceled = true

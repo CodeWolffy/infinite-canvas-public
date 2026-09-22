@@ -71,7 +71,11 @@ func main() {
 	app.StartWorkers(ctx)
 	go func() {
 		<-ctx.Done()
-		_ = server.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), app.Config.ShutdownGrace)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("HTTP 服务未能优雅关闭", "error", err)
+		}
 	}()
 	slog.Info("Go 创作平台已启动", "address", app.Config.Address)
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

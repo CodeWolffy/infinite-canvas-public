@@ -40,6 +40,8 @@ type Config struct {
 	SessionDays, WorkerConcurrency, OrphanDays, LogDays, DBMaxConns      int
 	MaxUpload, MaxGenerated                                              int64
 	HeaderTimeout                                                        time.Duration
+	// ShutdownGrace 是退出时等待在途任务收尾的最长时间。
+	ShutdownGrace time.Duration
 	Bucket, MinioEndpoint, MinioAccessKey, MinioSecretKey                string
 	MinioSSL                                                             bool
 	// MetricsAddress 为空表示不启动指标服务；非空时在该地址暴露 /metrics 与 pprof。
@@ -63,6 +65,8 @@ type App struct {
 	running sync.Map
 	// workersStarted 在 StartWorkers 之后置位，供 /ready 区分「进程存活」与「可以接单」。
 	workersStarted atomic.Bool
+	// shuttingDown 在退出信号到达后置位：在途任务按重排处理，而不是判失败退款。
+	shuttingDown atomic.Bool
 }
 
 type Row map[string]any
@@ -151,6 +155,11 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		return nil, err
 	}
 	cfg.MaxGenerated = int64(generated)
+	grace, err := envInt("SHUTDOWN_GRACE_SECONDS", 30)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ShutdownGrace = time.Duration(grace) * time.Second
 	// 沿用已有渠道默认超时；不额外引入独立的业务超时。
 	cfg.HeaderTimeout = 480 * time.Second
 	// 连接池默认 max(4, CPU)，而 worker、SSE 与 HTTP 请求共用同一个池，显式配置上限。
@@ -300,7 +309,21 @@ func (a *App) initialize(ctx context.Context, migrations []string) error {
 }
 
 func (a *App) Close() {
-	a.workers.Wait()
+	// 先给在途任务收尾机会，超时后继续关闭连接，避免退出被长任务拖住。
+	grace := a.Config.ShutdownGrace
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		a.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(grace):
+		slog.Warn("等待在途任务超时，继续关闭连接", "grace", grace)
+	}
 	if a.Redis != nil {
 		_ = a.Redis.Close()
 	}

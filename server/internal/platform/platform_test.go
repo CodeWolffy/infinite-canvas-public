@@ -870,3 +870,70 @@ func TestCancelPropagatesToUpstream(t *testing.T) {
 	}
 	testBalance(t, a, userID, 3*moneyScale, 0)
 }
+
+// 进程退出时在途任务应重排回队列，不计失败也不退款。
+func TestShutdownRequeuesRunningTask(t *testing.T) {
+	a := testApp(t)
+	if a.Redis == nil || a.S3 == nil {
+		t.Skip("需要 TEST_REDIS_ADDR 与 TEST_MINIO_ADDR")
+	}
+	userID, cookie := testUser(t, a, 3*moneyScale)
+	ctx := context.Background()
+	upstreamStarted := make(chan struct{})
+	var startedOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		startedOnce.Do(func() { close(upstreamStarted) })
+		select {
+		case <-r.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+	}))
+	defer upstream.Close()
+	modelID, channelID := uuid.NewString(), uuid.NewString()
+	sealed, err := a.seal("test-upstream-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'shutdown-model','退出模型','image','published',1000000)", []any{modelID}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'退出渠道','image','openai',$2,'active')", []any{channelID, upstream.URL}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'shutdown-model')", []any{modelID, channelID}}} {
+		if _, err = a.DB.Exec(ctx, query.sql, query.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created := testRequest(a.Router(), "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": modelID, "prompt": "shutdown", "count": 1}, cookie)
+	if created.Code != 200 {
+		t.Fatalf("创建任务失败: %d %s", created.Code, created.Body.String())
+	}
+	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+	task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=now(),deadline=now()+interval '480 seconds' WHERE id=(SELECT id FROM generation_tasks WHERE user_id=$2 AND status='queued' LIMIT 1) RETURNING *", uuid.NewString(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.executeGuarded(root, task)
+	}()
+	select {
+	case <-upstreamStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("上游请求未开始")
+	}
+	// 先标记退出再取消上下文，模拟 SIGTERM 后在途请求被中断。
+	a.shuttingDown.Store(true)
+	stop()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("退出时任务未结束")
+	}
+	saved, err := one(ctx, a.DB, "SELECT status,deadline,worker_token,error_code FROM generation_tasks WHERE id=$1", task["id"])
+	if err != nil || saved["status"] != "queued" || saved["deadline"] != nil || saved["workerToken"] != nil || saved["errorCode"] != nil {
+		t.Fatalf("任务未按退出重排: %v %v", saved, err)
+	}
+	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+}
