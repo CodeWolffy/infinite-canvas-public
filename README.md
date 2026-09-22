@@ -199,7 +199,7 @@
 | `LOG_LEVEL` | `info` | 日志级别，可选 `debug` / `info` / `warn` / `error` |
 | `LOG_FORMAT` | `text` | 日志格式，可选 `text` / `json` |
 | `METRICS_ADDRESS` | *(留空即关闭)* | Prometheus 指标与 pprof 监听地址（如 `:9090`）；只在内网使用，不要映射到公网 |
-| `SHUTDOWN_GRACE_SECONDS` | `30` | 退出时等待在途任务收尾的最长秒数；超时未完成的任务重排回队列，不计失败也不退款 |
+| `SHUTDOWN_GRACE_SECONDS` | `30` | 退出时等待在途任务收尾的最长秒数；超时未完成的任务重排回队列，不计失败也不退款。Compose 里 `api` 服务的 `stop_grace_period` 必须大于该值（默认 40s） |
 
 ### 轮换渠道加密密钥
 

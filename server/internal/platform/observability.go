@@ -106,6 +106,8 @@ var slowRoutes = map[string]bool{
 	"/api/admin/playground/test":    true,
 	"/api/admin/channels/:id/check": true,
 	"/api/admin/channels/check-all": true,
+	// 拉取上游模型列表要等上游响应，受渠道自身超时约束，不套 60 秒时限。
+	"/api/admin/channels/:id/models": true,
 }
 
 func (a *App) requestTimeout() gin.HandlerFunc {

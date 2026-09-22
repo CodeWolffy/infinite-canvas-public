@@ -228,7 +228,8 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		return gin.H{"project": saved}, nil
 	})
 	api.POST("/canvas-projects", a.rateLimit("canvas-create", 30, time.Minute), saveProject)
-	api.PUT("/canvas-projects/:id", a.rateLimit("canvas-save", 120, time.Minute), saveProject)
+	// 内容保存 1 秒防抖、视口保存 3 秒防抖，单标签页理论上限约 80 次/分钟；放宽到 300 给多标签页留余量。
+	api.PUT("/canvas-projects/:id", a.rateLimit("canvas-save", 300, time.Minute), saveProject)
 	api.GET("/canvas-projects/:id/history", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
