@@ -574,6 +574,7 @@ func (a *App) Router() *gin.Engine {
 		}
 		c.Next()
 	})
+	admin.Use(a.adminAudit())
 	a.adminRoutes(admin)
 	a.billingAdminRoutes(admin)
 	a.referralRoutes(api, admin)
@@ -591,4 +592,23 @@ func (a *App) Router() *gin.Engine {
 func (a *App) audit(ctx context.Context, q querier, actor, action, target string, detail any) error {
 	_, err := q.Exec(ctx, "INSERT INTO audit_logs(actor_id,action,target,detail) VALUES($1,$2,$3,$4)", actor, action, target, jsonBytes(detail))
 	return err
+}
+
+// adminAudit 兜底记录管理后台所有成功的写请求；不落请求体，只记查询串、状态码与请求 ID。
+func (a *App) adminAudit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if c.Request.Method == http.MethodGet || c.Writer.Status() >= 400 {
+			return
+		}
+		target := ""
+		if len(c.Params) > 0 {
+			target = c.Params[0].Value
+		}
+		ctx := context.WithoutCancel(c.Request.Context())
+		detail := gin.H{"query": c.Request.URL.RawQuery, "status": c.Writer.Status(), "requestId": requestIDOf(c)}
+		if err := a.audit(ctx, a.DB, currentUser(c).ID, "http."+c.Request.Method+" "+c.FullPath(), target, detail); err != nil {
+			slog.Warn("管理操作审计写入失败", "path", c.FullPath(), "error", err)
+		}
+	}
 }

@@ -345,11 +345,19 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 			return nil, problem(400, "invalid_pattern", "关键词不能为空")
 		}
 		ctx := c.Request.Context()
-		word, err := one(ctx, a.DB, "INSERT INTO sensitive_words(pattern,action) VALUES($1,$2) ON CONFLICT(pattern) DO UPDATE SET action=excluded.action RETURNING id,pattern,action,created_at", pattern, input.Action)
+		// 业务写入与审计放同一个事务：审计失败即回滚，避免出现没有审计记录的敏感词变更。
+		var word Row
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			word, err = one(ctx, tx, "INSERT INTO sensitive_words(pattern,action) VALUES($1,$2) ON CONFLICT(pattern) DO UPDATE SET action=excluded.action RETURNING id,pattern,action,created_at", pattern, input.Action)
+			if err != nil {
+				return err
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "sensitive.upsert", str(word["id"]), input)
+		})
 		if err != nil {
 			return nil, err
 		}
-		return gin.H{"word": word}, a.audit(ctx, a.DB, currentUser(c).ID, "sensitive.upsert", str(word["id"]), input)
+		return gin.H{"word": word}, nil
 	}))
 	admin.DELETE("/sensitive-words/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
@@ -357,14 +365,17 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		ctx := c.Request.Context()
-		result, err := a.DB.Exec(ctx, "DELETE FROM sensitive_words WHERE id=$1", id)
-		if err != nil {
-			return nil, err
-		}
-		if result.RowsAffected() != 1 {
-			return nil, notFound
-		}
-		return nil, a.audit(ctx, a.DB, currentUser(c).ID, "sensitive.delete", id, gin.H{})
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			result, err := tx.Exec(ctx, "DELETE FROM sensitive_words WHERE id=$1", id)
+			if err != nil {
+				return err
+			}
+			if result.RowsAffected() != 1 {
+				return notFound
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "sensitive.delete", id, gin.H{})
+		})
+		return nil, err
 	}))
 
 	// 渠道余额：复用主动检测的查询实现；不支持的渠道返回明确提示。
