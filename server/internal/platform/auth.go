@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/gin-gonic/gin"
@@ -95,6 +96,60 @@ func (a *App) setCookie(c *gin.Context, token string) {
 }
 func (a *App) clearCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: a.Config.CookieName, Value: "", Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+}
+
+// validatePassword 统一注册、改密、找回与管理员重置四处调用的密码强度要求。
+func validatePassword(password, username string) error {
+	if len(password) < 10 || len(password) > 128 {
+		return problem(400, "weak_password", "密码长度需为 10–128 位")
+	}
+	weak := problem(400, "weak_password", "密码过于简单，请包含字母和数字，且不要与用户名相同")
+	if strings.EqualFold(password, strings.TrimSpace(username)) {
+		return weak
+	}
+	runes := []rune(password)
+	var hasLetter, hasDigit, hasOther, allSame = false, false, false, true
+	for i, r := range runes {
+		if i > 0 && r != runes[0] {
+			allSame = false
+		}
+		switch {
+		case unicode.IsLetter(r):
+			hasLetter = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasOther = true
+		}
+	}
+	classes := 0
+	for _, present := range []bool{hasLetter, hasDigit, hasOther} {
+		if present {
+			classes++
+		}
+	}
+	if allSame || classes < 2 {
+		return weak
+	}
+	return nil
+}
+
+// renewSession 在会话剩余有效期不足一半时滑动续期，长期活跃的用户不必被强制重新登录。
+func (a *App) renewSession(c *gin.Context) error {
+	token, err := c.Cookie(a.Config.CookieName)
+	if err != nil || token == "" {
+		return nil
+	}
+	lifetime := time.Duration(a.Config.SessionDays) * 24 * time.Hour
+	half := time.Now().Add(lifetime / 2)
+	result, err := a.DB.Exec(c.Request.Context(), "UPDATE sessions SET expires_at=now()+$2::interval WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() AND expires_at<$3", hash(token), fmt.Sprintf("%d seconds", int64(lifetime.Seconds())), half)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 1 {
+		a.setCookie(c, token)
+	}
+	return nil
 }
 func (a *App) session(ctx context.Context, q querier, userID string) (string, error) {
 	data := make([]byte, 32)
@@ -296,6 +351,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 		if input.ReferralCode != "" && !referralCodePattern.MatchString(input.ReferralCode) {
 			return nil, problem(400, "invalid_referral", "推荐码无效，请核对邀请链接")
 		}
+		if err = validatePassword(input.Password, input.Username); err != nil {
+			return nil, err
+		}
 		// 注册复用登录的账号/IP 频控边界。
 		if err = a.rate(c, "login:ip:"+hash(a.clientIP(c)), 30, 5*time.Minute); err != nil {
 			return nil, err
@@ -353,7 +411,16 @@ func (a *App) authRoutes(r *gin.Engine) {
 		a.setCookie(c, token)
 		return gin.H{"user": user}, nil
 	}))
-	r.GET("/api/auth/me", respond(func(c *gin.Context) (any, error) { u, err := a.loadUser(c); return gin.H{"user": u}, err }))
+	r.GET("/api/auth/me", respond(func(c *gin.Context) (any, error) {
+		u, err := a.loadUser(c)
+		if err != nil {
+			return nil, err
+		}
+		if err = a.renewSession(c); err != nil {
+			return nil, err
+		}
+		return gin.H{"user": u}, nil
+	}))
 	r.POST("/api/auth/logout", respond(func(c *gin.Context) (any, error) {
 		token, _ := c.Cookie(a.Config.CookieName)
 		_, err := a.DB.Exec(c.Request.Context(), "UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", hash(token))
@@ -381,6 +448,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 		}
 		if input.CurrentPassword == input.NewPassword {
 			return nil, problem(400, "password_unchanged", "新密码不能与当前密码相同")
+		}
+		if err = validatePassword(input.NewPassword, u.Username); err != nil {
+			return nil, err
 		}
 		encoded, err := argon2id.CreateHash(input.NewPassword, argon2id.DefaultParams)
 		if err != nil {

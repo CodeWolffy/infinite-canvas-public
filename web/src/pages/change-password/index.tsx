@@ -5,6 +5,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { useUserStore } from "@/stores/use-user-store";
 import { authReturnPath } from "@/lib/auth-return-path";
+import { PASSWORD_HINT, passwordRule } from "@/lib/password-rules";
 
 type PasswordValues = { currentPassword: string; newPassword: string; confirmPassword: string };
 
@@ -46,8 +47,8 @@ export default function ChangePasswordPage() {
                     <Form.Item name="currentPassword" label="当前临时密码" rules={[{ required: true, message: "请输入当前临时密码" }]}>
                         <Input.Password size="large" autoComplete="current-password" />
                     </Form.Item>
-                    <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: "请输入新密码" }, { min: 10, message: "新密码至少需要 10 位" }]}>
-                        <Input.Password size="large" autoComplete="new-password" />
+                    <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: "请输入新密码" }, passwordRule(user?.username)]}>
+                        <Input.Password size="large" autoComplete="new-password" placeholder={PASSWORD_HINT} />
                     </Form.Item>
                     <Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{ required: true, message: "请再次输入新密码" }, ({ getFieldValue }) => ({ validator(_, value) { return !value || getFieldValue("newPassword") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")); } })]}>
                         <Input.Password size="large" autoComplete="new-password" />

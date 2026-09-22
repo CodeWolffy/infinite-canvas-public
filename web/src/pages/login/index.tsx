@@ -7,6 +7,7 @@ import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { authReturnPath } from "@/lib/auth-return-path";
+import { PASSWORD_HINT, passwordRule } from "@/lib/password-rules";
 import { affiliateCodeFromSearch, getAffiliateCode, saveAffiliateCode } from "@/lib/affiliate";
 
 type LoginValues = { username: string; password: string; displayName?: string; invitationCode?: string; code?: string; referralCode?: string };
@@ -14,6 +15,8 @@ type LoginValues = { username: string; password: string; displayName?: string; i
 export default function LoginPage() {
     const navigate = useNavigate();
     const location = useLocation();
+    const [form] = Form.useForm<LoginValues>();
+    const username = Form.useWatch("username", form);
     const target = authReturnPath((location.state as { from?: string } | null)?.from);
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
@@ -82,14 +85,14 @@ export default function LoginPage() {
                     <h2 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-stone-950 dark:text-stone-100">{challenge ? "完成两步验证" : registering ? "加入创作平台" : "登录创作平台"}</h2>
                     <p className="mt-3 text-sm leading-6 text-stone-500 dark:text-stone-400">{registering ? "使用邀请码注册，开启你的创作空间。" : "登录后继续你的创作，也可以使用邀请码加入。"}</p>
                     {error || status === "error" ? <Alert className="mt-6" type="error" showIcon message={error || "暂时无法连接到平台服务"} /> : null}
-                    <Form<LoginValues> layout="vertical" requiredMark={false} className="mt-8" initialValues={{ referralCode }} onFinish={(values) => void submit(values)}>
+                    <Form<LoginValues> form={form} layout="vertical" requiredMark={false} className="mt-8" initialValues={{ referralCode }} onFinish={(values) => void submit(values)}>
                         {challenge ? <><Form.Item name="code" label="验证码或恢复码" rules={[{ required: true, message: "请输入验证器中的验证码" }]}><Input size="large" autoComplete="one-time-code" autoFocus placeholder="输入最新验证码" /></Form.Item><p className="mb-5 text-xs leading-5 text-muted-foreground">使用验证器中的 6 位验证码。恢复码只能使用一次，使用后会关闭两步验证，请重新绑定验证器。</p></> : <>
                         <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}>
                             <Input size="large" prefix={<UserRound className="size-4 text-stone-400" />} autoComplete="username" placeholder="请输入用户名" autoFocus />
                         </Form.Item>
                         {registering ? <Form.Item name="displayName" label="昵称" rules={[{ required: true, message: "请输入昵称" }, { max: 80 }]}><Input size="large" autoComplete="nickname" placeholder="创作时使用的名字" /></Form.Item> : null}
-                        <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }, ...(registering ? [{ min: 10, max: 128, message: "密码需为 10–128 个字符" }] : [])]}>
-                            <Input.Password size="large" prefix={<LockKeyhole className="size-4 text-stone-400" />} autoComplete={registering ? "new-password" : "current-password"} placeholder="请输入密码" />
+                        <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }, ...(registering ? [passwordRule(username)] : [])]}>
+                            <Input.Password size="large" prefix={<LockKeyhole className="size-4 text-stone-400" />} autoComplete={registering ? "new-password" : "current-password"} placeholder={registering ? PASSWORD_HINT : "请输入密码"} />
                         </Form.Item>
                         {registering ? <Form.Item name="invitationCode" label="邀请码" rules={[{ required: true, message: "请输入邀请码" }]}><Input size="large" autoComplete="off" placeholder="请输入管理员提供的邀请码" /></Form.Item> : null}
                         {registering ? <Form.Item name="referralCode" label="好友邀请码（选填）" extra="邀请码用于记录邀请返利关系，注册仍需填写上方邀请码。"><Input autoComplete="off" placeholder="通过好友邀请链接可自动填入" /></Form.Item> : null}

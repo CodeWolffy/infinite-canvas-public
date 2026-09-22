@@ -243,6 +243,13 @@ func (a *App) authSecurityRoutes(r *gin.Engine) {
 			if err != nil {
 				return err
 			}
+			var username string
+			if err = tx.QueryRow(ctx, "SELECT username FROM users WHERE id=$1", entry["userId"]).Scan(&username); err != nil {
+				return err
+			}
+			if err = validatePassword(input.Password, username); err != nil {
+				return err
+			}
 			result, err := tx.Exec(ctx, "UPDATE users SET password_hash=$2,must_change_password=false,updated_at=now() WHERE id=$1 AND email=$3 AND email_verified_at IS NOT NULL", entry["userId"], encoded, entry["value"])
 			if err != nil {
 				return err

@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -170,6 +171,16 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			TemporaryPassword string `json:"temporaryPassword" binding:"required,min=10,max=128"`
 		}](c)
 		if err != nil {
+			return nil, err
+		}
+		var username string
+		if err = a.DB.QueryRow(c.Request.Context(), "SELECT username FROM users WHERE id=$1", id).Scan(&username); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, notFound
+			}
+			return nil, err
+		}
+		if err = validatePassword(input.TemporaryPassword, username); err != nil {
 			return nil, err
 		}
 		encoded, err := argon2id.CreateHash(input.TemporaryPassword, argon2id.DefaultParams)
