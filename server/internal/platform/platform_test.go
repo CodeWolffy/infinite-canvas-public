@@ -59,20 +59,24 @@ func testApp(t *testing.T) *App {
 		_, _ = admin.Exec(context.Background(), "DROP SCHEMA "+quoted+" CASCADE")
 		admin.Close()
 	})
-	ddl, err := os.ReadFile("../../migrations/001_platform.sql")
+	// 目录里的脚本按文件名顺序全部执行，新增迁移不需要再改测试。
+	entries, err := os.ReadDir("../../migrations")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(ctx, string(ddl)); err != nil {
-		t.Fatal(err)
+	if len(entries) == 0 {
+		t.Fatal("migrations 目录为空")
 	}
-	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql", "../../migrations/012_channel_routing.sql", "../../migrations/013_moderation_and_rewards.sql", "../../migrations/014_channel_capability.sql", "../../migrations/015_conversation_soft_delete.sql", "../../migrations/016_channel_endpoint.sql", "../../migrations/017_referral_code_ci_unique.sql", "../../migrations/018_request_failure_tracking.sql", "../../migrations/019_remove_generation_probe.sql", "../../migrations/020_indexes_and_available_channels.sql"} {
-		extra, err := os.ReadFile(migration)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		extra, err := os.ReadFile("../../migrations/" + entry.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err = db.Exec(ctx, string(extra)); err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", entry.Name(), err)
 		}
 	}
 	a := &App{DB: db, Config: Config{EncryptionKey: strings.Repeat("k", 32), CookieName: "test_session", SessionDays: 7, PublicURL: "http://localhost", Origins: []string{"http://localhost"}, MaxUpload: 50 * 1024 * 1024, MaxGenerated: 50 * 1024 * 1024, AllowPrivateHosts: true, TrustProxy: true, Bucket: strings.ReplaceAll(schema, "_", "-")}, startedAt: time.Now()}

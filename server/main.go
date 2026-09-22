@@ -2,75 +2,41 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 
 	"infinite-canvas-public/server/internal/platform"
 )
 
-//go:embed migrations/001_platform.sql
-var schema string
+//go:embed migrations/*.sql
+var migrationFS embed.FS
 
-//go:embed migrations/002_token_pricing.sql
-var tokenPricing string
-
-//go:embed migrations/003_platform_features.sql
-var platformFeatures string
-
-//go:embed migrations/004_platform_operations.sql
-var platformOperations string
-
-//go:embed migrations/005_platform_ops.sql
-var platformOps string
-
-//go:embed migrations/006_storage_quota.sql
-var storageQuota string
-
-//go:embed migrations/007_monitor_cost_link.sql
-var monitorCostLink string
-
-//go:embed migrations/008_multi_upstream_models.sql
-var multiUpstreamModels string
-
-//go:embed migrations/009_soft_delete_channels.sql
-var softDeleteChannels string
-
-//go:embed migrations/010_media_upload_state.sql
-var mediaUploadState string
-
-//go:embed migrations/011_probe_deadlines.sql
-var probeDeadlines string
-
-//go:embed migrations/012_channel_routing.sql
-var channelRouting string
-
-//go:embed migrations/013_moderation_and_rewards.sql
-var moderationAndRewards string
-
-//go:embed migrations/014_channel_capability.sql
-var channelCapability string
-
-//go:embed migrations/015_conversation_soft_delete.sql
-var conversationSoftDelete string
-
-//go:embed migrations/016_channel_endpoint.sql
-var channelEndpoint string
-
-//go:embed migrations/017_referral_code_ci_unique.sql
-var referralCodeCiUnique string
-
-//go:embed migrations/018_request_failure_tracking.sql
-var requestFailureTracking string
-
-//go:embed migrations/019_remove_generation_probe.sql
-var removeGenerationProbe string
-
-//go:embed migrations/020_indexes_and_available_channels.sql
-var indexesAndAvailableChannels string
+// loadMigrations 读取全部迁移脚本并按文件名排序；版本号即切片下标加一，顺序由文件名前缀保证。
+func loadMigrations(fsys fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(fsys, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	migrations := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		content, err := fs.ReadFile(fsys, path.Join("migrations", entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		migrations = append(migrations, string(content))
+	}
+	return migrations, nil
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
@@ -86,7 +52,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app, err := platform.New(ctx, []string{schema, tokenPricing, platformFeatures, platformOperations, platformOps, storageQuota, monitorCostLink, multiUpstreamModels, softDeleteChannels, mediaUploadState, probeDeadlines, channelRouting, moderationAndRewards, channelCapability, conversationSoftDelete, channelEndpoint, referralCodeCiUnique, requestFailureTracking, removeGenerationProbe, indexesAndAvailableChannels})
+	migrations, err := loadMigrations(migrationFS)
+	if err != nil {
+		slog.Error("读取迁移脚本失败", "error", err)
+		os.Exit(1)
+	}
+	app, err := platform.New(ctx, migrations)
 	if err != nil {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)
