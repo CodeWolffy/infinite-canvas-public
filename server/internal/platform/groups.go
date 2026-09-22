@@ -71,7 +71,14 @@ func (a *App) modelAccess(ctx context.Context, q querier, userID, modelID string
 
 func (a *App) groupRoutes(api *gin.RouterGroup) {
 	// 兑换码充值：与签到入账一致走 changeWallet，唯一约束保证一个码每用户只入账一次。
-	api.POST("/user/redeem", respond(func(c *gin.Context) (any, error) {
+	// 除按用户限额外再加一层按 IP 的限额，避免单个账号被用来撞码。
+	api.POST("/user/redeem", func(c *gin.Context) {
+		if err := a.rate(c, "redeem:ip:"+hash(a.clientIP(c)), 30, time.Minute); err != nil {
+			fail(c, err)
+			return
+		}
+		c.Next()
+	}, a.rateLimit("redeem", 10, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Code string `json:"code" binding:"required,min=8,max=128"`
 		}](c)

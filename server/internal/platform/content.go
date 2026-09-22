@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -220,8 +221,8 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		}
 		return gin.H{"project": saved}, nil
 	})
-	api.POST("/canvas-projects", saveProject)
-	api.PUT("/canvas-projects/:id", saveProject)
+	api.POST("/canvas-projects", a.rateLimit("canvas-create", 30, time.Minute), saveProject)
+	api.PUT("/canvas-projects/:id", a.rateLimit("canvas-save", 120, time.Minute), saveProject)
 	api.GET("/canvas-projects/:id/history", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {

@@ -334,7 +334,7 @@ func (a *App) mediaRoutes(api *gin.RouterGroup) {
 		row["quotaBytes"] = quota
 		return row, nil
 	}))
-	api.POST("/media", respond(func(c *gin.Context) (any, error) {
+	api.POST("/media", a.rateLimit("media", 60, time.Minute), respond(func(c *gin.Context) (any, error) {
 		reader, err := c.Request.MultipartReader()
 		if err != nil {
 			return nil, problem(400, "file_required", "请选择文件")

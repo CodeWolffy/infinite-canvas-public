@@ -704,3 +704,20 @@ func TestModelListHidesUnavailableChannels(t *testing.T) {
 		t.Fatalf("渠道无可用 Key 时不应返回模型: %v", got)
 	}
 }
+
+// 写接口按用户限流：兑换码 10 次/分钟，第 11 次必须被拒绝。
+func TestWriteEndpointsAreRateLimited(t *testing.T) {
+	a := testApp(t)
+	if a.Redis == nil {
+		t.Skip("需要 TEST_REDIS_ADDR")
+	}
+	_, cookie := testUser(t, a, 0)
+	router := a.Router()
+	status := 0
+	for i := 0; i < 11; i++ {
+		status = testRequest(router, "POST", "/api/user/redeem", map[string]string{"code": "CD-test-invalid"}, cookie).Code
+	}
+	if status != 429 {
+		t.Fatalf("第 11 次兑换应被限流，实际状态 %d", status)
+	}
+}

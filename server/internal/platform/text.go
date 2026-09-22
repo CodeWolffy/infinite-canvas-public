@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -64,7 +65,7 @@ func modelTextParameters(model Row, params map[string]any) (map[string]any, erro
 
 func (a *App) textRoutes(api *gin.RouterGroup) {
 	api.GET("/text/requests/:id/events", a.textEvents)
-	api.POST("/text/conversations", respond(func(c *gin.Context) (any, error) {
+	api.POST("/text/conversations", a.rateLimit("conversation", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			CanvasProjectID string `json:"canvasProjectId" binding:"omitempty,uuid"`
 			Title           string `json:"title" binding:"max=200"`

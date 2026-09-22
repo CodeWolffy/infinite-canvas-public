@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -96,7 +97,7 @@ func promptEstimate(ctx context.Context, q querier, conversation, content, syste
 }
 
 func (a *App) quoteRoutes(api *gin.RouterGroup) {
-	api.POST("/generation-quote", respond(func(c *gin.Context) (any, error) {
+	api.POST("/generation-quote", a.rateLimit("quote", 120, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			ModelID        string         `json:"modelId" binding:"required,uuid"`
 			Count          int            `json:"count" binding:"required,min=1,max=20"`

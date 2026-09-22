@@ -200,6 +200,17 @@ func (a *App) rate(c *gin.Context, key string, limit int, window time.Duration) 
 	return nil
 }
 
+// rateLimit 是 a.rate 的中间件形式：按 `<用途>:user:<用户ID>` 限流，超出直接返回 429。
+func (a *App) rateLimit(purpose string, limit int, window time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := a.rate(c, purpose+":user:"+currentUser(c).ID, limit, window); err != nil {
+			fail(c, err)
+			return
+		}
+		c.Next()
+	}
+}
+
 func (a *App) authRoutes(r *gin.Engine) {
 	r.POST("/api/auth/login", respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
