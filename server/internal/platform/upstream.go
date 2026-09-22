@@ -210,16 +210,37 @@ type referenceMedia struct {
 	MIME, Name string
 }
 
-func (a *App) references(ctx context.Context, kind, id string) ([]referenceMedia, error) {
-	items, err := rows(ctx, a.DB, "SELECT m.* FROM media_references r JOIN media_objects m ON m.id=r.media_id WHERE r.owner_kind=$1 AND r.owner_id=$2 AND m.status='ready' ORDER BY r.position", kind, id)
+// prefetchReferences 一次取出多个 owner 的附件并按 owner id 分组，替代逐条查询。
+func (a *App) prefetchReferences(ctx context.Context, kind string, ids []string) (map[string][]Row, error) {
+	grouped := map[string][]Row{}
+	if len(ids) == 0 {
+		return grouped, nil
+	}
+	items, err := rows(ctx, a.DB, "SELECT r.owner_id AS ref_id, m.* FROM media_references r JOIN media_objects m ON m.id=r.media_id WHERE r.owner_kind=$1 AND r.owner_id=ANY($2::uuid[]) AND m.status='ready' ORDER BY r.position", kind, ids)
 	if err != nil {
 		return nil, err
 	}
+	for _, item := range items {
+		owner := str(item["refId"])
+		delete(item, "refId")
+		grouped[owner] = append(grouped[owner], item)
+	}
+	return grouped, nil
+}
+
+// references 从预取结果取附件；同一 media_id 在本次请求内只读一次对象存储。
+func (a *App) references(ctx context.Context, grouped map[string][]Row, id string, cache map[string][]byte) ([]referenceMedia, error) {
 	refs := []referenceMedia{}
-	for _, row := range items {
-		data, err := a.readMedia(ctx, row)
-		if err != nil {
-			return nil, err
+	for _, row := range grouped[id] {
+		mediaID := str(row["id"])
+		data, ok := cache[mediaID]
+		if !ok {
+			var err error
+			data, err = a.readMedia(ctx, row)
+			if err != nil {
+				return nil, err
+			}
+			cache[mediaID] = data
 		}
 		refs = append(refs, referenceMedia{data, str(row["mimeType"]), str(row["originalName"])})
 	}
@@ -248,7 +269,11 @@ func (a *App) generate(ctx context.Context, c channel, task Row) (generationResu
 	var refs []referenceMedia
 	var err error
 	if task["probe"] != true {
-		refs, err = a.references(ctx, "batch", str(task["batchId"]))
+		grouped, prefetchErr := a.prefetchReferences(ctx, "batch", []string{str(task["batchId"])})
+		if prefetchErr != nil {
+			return generationResult{}, &upstreamError{Category: "storage", Message: "参考文件暂时无法读取，请检查文件后重试"}
+		}
+		refs, err = a.references(ctx, grouped, str(task["batchId"]), map[string][]byte{})
 		if err != nil {
 			return generationResult{}, &upstreamError{Category: "storage", Message: "参考文件暂时无法读取，请检查文件后重试"}
 		}
@@ -385,6 +410,29 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			return generationResult{}, &upstreamError{Category: "storage", Message: "对话暂时无法读取，请稍后重试"}
 		}
 	}
+	attachments := map[string][]referenceMedia{}
+	if len(stored) > 0 {
+		messageIDs := make([]string, 0, len(stored))
+		for _, m := range stored {
+			if m["id"] != nil {
+				messageIDs = append(messageIDs, str(m["id"]))
+			}
+		}
+		grouped, err := a.prefetchReferences(ctx, "message", messageIDs)
+		if err != nil {
+			return generationResult{}, &upstreamError{Category: "storage", Message: "对话附件暂时无法读取，请检查文件后重试"}
+		}
+		cache := map[string][]byte{}
+		for _, id := range messageIDs {
+			refs, err := a.references(ctx, grouped, id, cache)
+			if err != nil {
+				return generationResult{}, &upstreamError{Category: "storage", Message: "对话附件暂时无法读取，请检查文件后重试"}
+			}
+			if len(refs) > 0 {
+				attachments[id] = refs
+			}
+		}
+	}
 	messages := []any{}
 	anthropicMessages := []any{}
 	contents := []any{}
@@ -393,13 +441,7 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 		messages = append(messages, map[string]any{"role": "system", "content": system})
 	}
 	for _, m := range stored {
-		var refs []referenceMedia
-		if m["id"] != nil {
-			refs, err = a.references(ctx, "message", str(m["id"]))
-			if err != nil {
-				return generationResult{}, &upstreamError{Category: "storage", Message: "对话附件暂时无法读取，请检查文件后重试"}
-			}
-		}
+		refs := attachments[str(m["id"])]
 		parts := []any{}
 		openParts := []any{}
 		claudeParts := []any{}
