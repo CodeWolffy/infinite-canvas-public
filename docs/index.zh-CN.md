@@ -1,12 +1,11 @@
 # 无限画布文档索引
 
-- [Go 公益平台：架构、支付、边界配置与部署](public-platform.md) — 当前分支的运行说明；原 `api/` 与企业版文档保留为参考。
+- [Go 公益平台：架构、支付、边界配置与部署](public-platform.md) — 当前分支的运行说明；旧 Node 版接口已归档在 `legacy-node-api` 标签，不再随仓库提供。
 
 ## 项目介绍
 
 - [快速开始](/zh-CN/docs/overview/quick-start)
 - [功能介绍](/zh-CN/docs/overview/features)
-- [Render 部署](/zh-CN/docs/overview/render)
 - [Docker 部署](/zh-CN/docs/overview/docker)
 - [第三方提示词来源](/zh-CN/docs/overview/third-party-prompt-repositories)
 

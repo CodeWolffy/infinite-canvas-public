@@ -1,12 +1,11 @@
 # Infinite Canvas Documentation Index
 
-- [Go 公益平台：架构、支付、边界配置与部署](public-platform.md) — 当前分支的运行说明；原 `api/` 与企业版文档保留为参考。
+- [Go 公益平台：架构、支付、边界配置与部署](public-platform.md) — 当前分支的运行说明；旧 Node 版接口已归档在 `legacy-node-api` 标签，不再随仓库提供。
 
 ## Overview
 
 - [Quick Start](/docs/overview/quick-start)
 - [Features](/docs/overview/features)
-- [Deploy on Render](/docs/overview/render)
 - [Docker Deployment](/docs/overview/docker)
 - [Third-party Prompt Sources](/docs/overview/third-party-prompt-repositories)
 
