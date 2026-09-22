@@ -7,7 +7,9 @@ import { evaluate, findNode, sourceFile } from "./support/source-loader";
 const source = sourceFile("pages/canvas/project.tsx", ts.ScriptKind.TSX);
 const declares = (statement: ts.Statement, name: string) =>
     ts.isVariableStatement(statement) && statement.declarationList.declarations.some((item) => ts.isIdentifier(item.name) && item.name.text === name);
-const recovery = findNode(source, (node) => ts.isArrowFunction(node) && ts.isBlock(node.body) && node.body.statements.some((item) => declares(item, "pollPendingImage"))) as ts.ArrowFunction;
+// 图片恢复轮询已迁到 use-canvas-generation-recovery，生成尾部仍在画布页面里。
+const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-recovery.ts");
+const recovery = findNode(recoverySource, (node) => ts.isArrowFunction(node) && ts.isBlock(node.body) && node.body.statements.some((item) => declares(item, "pollPendingImage"))) as ts.ArrowFunction;
 const generation = findNode(source, (node) => ts.isTryStatement(node) && node.tryBlock.statements.some((item) => declares(item, "generatedImages"))) as ts.TryStatement;
 expect(recovery && generation).toBeTruthy();
 const generationBlock = generation.parent as ts.Block;
@@ -38,6 +40,8 @@ for (const terminalStatus of ["succeeded", "failed"]) {
             nodes, projectLoaded: true,
             connections: [{ fromNodeId: "source", toNodeId: "image" }],
             generationRequestsRef: { current: new Map([["image", {}]]) },
+            // 恢复轮询从 pendingImagesRef 读取待恢复的图片槽位。
+            pendingImagesRef: { get current() { return nodes[1].metadata.images.map((image: any) => ({ nodeId: "image", image })); } },
             restoringGenerationImagesRef: { current: new Set() },
             finishGenerationRequest: (id: string) => context.generationRequestsRef.current.delete(id),
             fitNodeSize: (width: number, height: number) => ({ width, height }),
@@ -52,7 +56,7 @@ for (const terminalStatus of ["succeeded", "failed"]) {
         expect(nodes[1].metadata.images[0].generationTaskId).toBe("task");
         expect(context.generationRequestsRef.current.has("image")).toBe(false);
 
-        const cleanup = evaluate(recovery.getText(source), context)();
+        const cleanup = evaluate(recovery.getText(recoverySource), context)();
         try {
             await tick();
             expect(nodes[1].metadata.images[0].status).toBe("loading");

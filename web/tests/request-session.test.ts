@@ -171,7 +171,7 @@ test("clipboard preparation cannot upload into a replacement account", async () 
 test("canvas clipboard reads cannot create images after session replacement", async () => {
     const auth = session();
     let finish!: (value: any) => void; let uploads = 0;
-    const { run } = load(callback("pages/canvas/project.tsx", "pasteSystemClipboard"), {
+    const { run } = load(callback("pages/canvas/hooks/use-canvas-clipboard.ts", "pasteSystemClipboard"), {
         ...auth,
         navigator: { clipboard: { read: async () => [{ types: ["image/png"], getType: () => new Promise((resolve) => { finish = resolve; }) }] } },
         createImageFileNode: async () => { uploads++; }, getCanvasCenter: () => ({ x: 0, y: 0 }),

@@ -57,6 +57,7 @@ function deferred() {
 }
 function textGeneration({ count = 2, request, failBeforeSubmit = false, reasoningEffort = "auto", reasoningEfforts = [] as string[] }: { count?: number; request?: (input: any, index: number) => Promise<any>; failBeforeSubmit?: boolean; reasoningEffort?: string; reasoningEfforts?: string[] } = {}) {
     const project = sourceFile("pages/canvas/project.tsx", ts.ScriptKind.TSX);
+const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-recovery.ts");
     const api = sourceFile("services/api/image.ts");
     const user = { sessionVersion: 1 };
     const requests: any[] = [], errors: any[] = [], started: any[] = [];
@@ -89,7 +90,8 @@ function textGeneration({ count = 2, request, failBeforeSubmit = false, reasonin
     const batchBlock = batch.parent as ts.Block;
     const batchCode = batchBlock.statements.slice(batchBlock.statements.indexOf(batch)).map((part) => part.getText(project)).join("\n");
     const retry = ((findNode(project, (part) => ts.isVariableDeclaration(part) && part.name.getText(project) === "handleRetryNode") as ts.VariableDeclaration).initializer as ts.CallExpression).arguments[0];
-    const recovery = (findNode(project, (part) => ts.isCallExpression(part) && ts.isPropertyAccessExpression(part.expression) && part.expression.name.text === "then" && part.expression.expression.getText(project) === "getTextRequest(requestId)") as ts.CallExpression).arguments[0];
+    // 文本恢复已改为复用 SSE，取订阅回调里应用快照的 applyTextDetail。
+    const recovery = (findNode(recoverySource, (part) => ts.isVariableDeclaration(part) && part.name.getText(recoverySource) === "applyTextDetail") as ts.VariableDeclaration).initializer;
     return {
         user, context, requests, errors, started,
         get root() { return nodes.find((item) => item.id === "node"); },
@@ -97,7 +99,7 @@ function textGeneration({ count = 2, request, failBeforeSubmit = false, reasonin
         setRoot: (root: any) => context.setNodes((items: any[]) => items.map((item) => item.id === root.id ? root : item)),
         generate: () => loadModule(`export async function generate() { ${batchCode} }`, context).generate(),
         retry: (root: any) => loadModule(`export const retry = ${retry.getText(project)};`, context).retry(root),
-        recover: (requestId: string, status: string, content = "") => loadModule(`export const recover = ${recovery.getText(project)};`, { ...context, nodeId: "node", requestId }).recover({ request: { status, errorCode: status === "failed" ? "channel_error" : null }, message: status === "succeeded" ? { content } : null }),
+        recover: (requestId: string, status: string, content = "") => loadModule(`export const recover = ${recovery.getText(recoverySource)};`, { ...context, nodeId: "node", requestId, missingTextRequestsRef: { current: new Map() } }).recover("node", requestId, { request: { status, errorCode: status === "failed" ? "channel_error" : null }, message: status === "succeeded" ? { content } : null }),
     };
 }
 
