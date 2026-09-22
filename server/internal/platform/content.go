@@ -110,8 +110,14 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		return gin.H{"announcement": json.RawMessage(raw)}, err
 	}))
 	api.GET("/canvas-projects", respond(func(c *gin.Context) (any, error) {
-		projects, err := rows(c.Request.Context(), a.DB, "SELECT "+canvasSummary+" FROM canvas_projects WHERE user_id=$1 ORDER BY updated_at DESC", currentUser(c).ID)
-		return gin.H{"projects": projects}, err
+		limit, offset := paginationWith(c, 200, 500)
+		ctx, userID := c.Request.Context(), currentUser(c).ID
+		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM canvas_projects WHERE user_id=$1", userID)
+		if err != nil {
+			return nil, err
+		}
+		projects, err := rows(ctx, a.DB, "SELECT "+canvasSummary+" FROM canvas_projects WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3", userID, limit, offset)
+		return gin.H{"projects": projects, "total": integer(total["total"])}, err
 	}))
 	api.GET("/canvas-projects/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

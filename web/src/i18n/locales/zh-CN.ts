@@ -221,6 +221,7 @@ export default {
         deleteSelected: "删除选中",
         deleteAll: "删除全部",
         import: "导入画布",
+        loadMore: "加载更多",
         create: "新建画布",
         empty: "还没有画布",
         emptyDescription: "新建一个画布后，就可以独立保存节点、连线和画布外观。",

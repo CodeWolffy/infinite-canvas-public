@@ -13,8 +13,9 @@ import { formatBytes } from "@/lib/image-utils";
 type Filters = { range: [Dayjs, Dayjs]; userId?: string; modelId?: string; channelId?: string };
 
 export default function AdminStatsPage() {
-    const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().startOf("day"), dayjs().startOf("day")] }));
-    const [preset, setPresetState] = useState<number | null>(1);
+    // 默认统计最近 30 天：后端在没有时间范围时也会按 30 天兜底，前端保持同一口径。
+    const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().subtract(29, "day").startOf("day"), dayjs().startOf("day")] }));
+    const [preset, setPresetState] = useState<number | null>(30);
     const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });

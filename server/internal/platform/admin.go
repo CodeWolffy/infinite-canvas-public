@@ -71,14 +71,36 @@ func validateChannelBinding(ctx context.Context, q querier, modelID, channelID s
 
 func (a *App) adminRoutes(admin *gin.RouterGroup) {
 	admin.GET("/users", respond(func(c *gin.Context) (any, error) {
-		items, err := rows(c.Request.Context(), a.DB, "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.group_id,g.name AS group_name,w.balance_micros,w.frozen_micros FROM users u LEFT JOIN user_groups g ON g.id=u.group_id JOIN wallets w ON w.user_id=u.id ORDER BY u.created_at DESC")
+		limit, offset := pagination(c)
+		ctx := c.Request.Context()
+		// 分页后筛选必须落在服务端，否则只过滤当前页会给出错误结果。
+		where, args := "true", []any{}
+		add := func(column, value string) {
+			if value != "" {
+				args = append(args, value)
+				where += " AND " + column + "=$" + str(len(args))
+			}
+		}
+		add("u.role", c.Query("role"))
+		add("u.status", c.Query("status"))
+		if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+			args = append(args, "%"+keyword+"%")
+			placeholder := "$" + str(len(args))
+			where += " AND (u.username ILIKE " + placeholder + " OR u.display_name ILIKE " + placeholder + ")"
+		}
+		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM users u WHERE "+where, args...)
+		if err != nil {
+			return nil, err
+		}
+		query := "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.group_id,g.name AS group_name,w.balance_micros,w.frozen_micros FROM users u LEFT JOIN user_groups g ON g.id=u.group_id JOIN wallets w ON w.user_id=u.id WHERE " + where + " ORDER BY u.created_at DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
+		items, err := rows(ctx, a.DB, query, append(args, limit, offset)...)
 		for _, row := range items {
 			row["balance"] = money(integer(row["balanceMicros"]))
 			row["frozen"] = money(integer(row["frozenMicros"]))
 			delete(row, "balanceMicros")
 			delete(row, "frozenMicros")
 		}
-		return gin.H{"users": items}, err
+		return gin.H{"users": items, "total": integer(total["total"])}, err
 	}))
 	admin.POST("/users", respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
@@ -769,7 +791,7 @@ func (a *App) userRoutes(api *gin.RouterGroup) {
 	}))
 }
 
-func logFilter(c *gin.Context, admin bool) (string, []any) {
+func logFilter(c *gin.Context, admin bool, defaultDays int) (string, []any) {
 	where := "true"
 	args := []any{}
 	add := func(column, value string) {
@@ -795,6 +817,11 @@ func logFilter(c *gin.Context, admin bool) (string, []any) {
 			}
 		}
 	}
+	// 未指定时间范围时默认取最近 N 天，避免聚合查询全表扫描。
+	if defaultDays > 0 && c.Query("from") == "" && c.Query("to") == "" {
+		args = append(args, time.Now().AddDate(0, 0, -defaultDays))
+		where += " AND l.started_at>=$" + str(len(args))
+	}
 	return where, args
 }
 // 用户端使用日志把钱包到账类变动并入同一时间线；冻结/结算/退回属调用自身账务环节，不单独展示。
@@ -810,7 +837,7 @@ func (a *App) listLogs(c *gin.Context, admin bool) (any, error) {
 	if !admin && slices.Contains(fundLogKinds, c.Query("type")) {
 		return a.listFundLogs(c, limit, offset)
 	}
-	where, args := logFilter(c, admin)
+	where, args := logFilter(c, admin, 0)
 	totals, err := one(ctx, a.DB, "SELECT count(*)::bigint AS total,count(*) FILTER(WHERE l.status='succeeded')::int AS succeeded,count(*) FILTER(WHERE l.status='failed')::int AS failed,count(*) FILTER(WHERE l.status='running')::int AS running,coalesce(sum(l.billed_amount),0)::text AS billed_amount FROM request_logs l WHERE "+where, args...)
 	if err != nil {
 		return nil, err
@@ -895,7 +922,7 @@ func formatFundLogs(items []Row) {
 
 func (a *App) adminStats(c *gin.Context) (any, error) {
 	ctx := c.Request.Context()
-	where, args := logFilter(c, true)
+	where, args := logFilter(c, true, 30)
 	totals, err := one(ctx, a.DB, "SELECT count(DISTINCT l.task_id)::int AS request_count,count(DISTINCT l.task_id) FILTER(WHERE l.status='succeeded')::int AS succeeded_task_count,count(*) FILTER(WHERE l.type='image' AND l.status='succeeded')::int AS success_image_count,coalesce(sum(l.billed_amount),0)::text AS estimated_cost,count(*)::int AS attempt_count,count(*) FILTER(WHERE l.status='succeeded')::int AS succeeded_attempt_count,coalesce(avg(l.duration_ms),0)::float8 AS average_duration_ms,coalesce(percentile_cont(.5) WITHIN GROUP(ORDER BY l.duration_ms),0) AS p50_duration_ms,coalesce(percentile_cont(.95) WITHIN GROUP(ORDER BY l.duration_ms),0) AS p95_duration_ms FROM request_logs l WHERE "+where, args...)
 	if err != nil {
 		return nil, err

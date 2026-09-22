@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDeferredValue, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -7,7 +7,7 @@ import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus, Users } from
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useSecurityProof } from "@/hooks/use-security-proof";
-import { createAdminUser, getAdminUsers, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
+import { createAdminUser, getAdminUsersPage, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
 import { getUserGroups, setUserGroup } from "@/services/api/billing";
 import type { AuthUser, UserRole } from "@/services/api/auth";
 import { useUserStore } from "@/stores/use-user-store";
@@ -33,25 +33,26 @@ export default function AdminUsersPage() {
     const [credential, setCredential] = useState<Credential | null>(null);
     const [createForm] = Form.useForm<CreateValues>();
     const [resetForm] = Form.useForm<{ temporaryPassword: string }>();
-    const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
+    const [page, setPage] = useState(1);
+    // 筛选条件交给服务端，翻页不会只过滤当前页。
+    const deferredKeyword = useDeferredValue(keyword);
+    const usersQuery = useQuery({
+        queryKey: ["admin", "users", page, deferredKeyword, roleFilter, statusFilter],
+        queryFn: () => getAdminUsersPage({ page, role: roleFilter, status: statusFilter, keyword: deferredKeyword }),
+        placeholderData: keepPreviousData,
+    });
     const groupsQuery = useQuery({ queryKey: ["admin", "user-groups"], queryFn: getUserGroups });
 
-    const updateUserCache = (user: AuthUser) => queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => users.map((item) => (item.id === user.id ? user : item)));
-    const createMutation = useMutation({ mutationFn: createAdminUser, onSuccess: (user, variables) => { queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => [user, ...users]); setCreateOpen(false); createForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
-    const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: "active" | "disabled" }) => updateAdminUserStatus(id, status), onSuccess: (user) => { updateUserCache(user); message.success(user.status === "active" ? "账号已启用" : "账号已禁用"); }, onError: showError(message.error) });
-    const roleMutation = useMutation({ mutationFn: async ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role, await requestProof()), onSuccess: (user) => { updateUserCache(user); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
+    const updateUserCache = () => void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    const createMutation = useMutation({ mutationFn: createAdminUser, onSuccess: (user, variables) => { updateUserCache(); setCreateOpen(false); createForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
+    const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: "active" | "disabled" }) => updateAdminUserStatus(id, status), onSuccess: (user) => { updateUserCache(); message.success(user.status === "active" ? "账号已启用" : "账号已禁用"); }, onError: showError(message.error) });
+    const roleMutation = useMutation({ mutationFn: async ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role, await requestProof()), onSuccess: (user) => { updateUserCache(); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
     const groupMutation = useMutation({ mutationFn: ({ id, groupId }: { id: string; groupId: string | null }) => setUserGroup(id, groupId), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); setGroupUser(null); message.success("分组已调整"); }, onError: showError(message.error) });
-    const resetMutation = useMutation({ mutationFn: async ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword, await requestProof()), onSuccess: (user, variables) => { updateUserCache(user); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
+    const resetMutation = useMutation({ mutationFn: async ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword, await requestProof()), onSuccess: (user, variables) => { updateUserCache(); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
 
-    const users = useMemo(() => {
-        const normalized = keyword.trim().toLowerCase();
-        return (usersQuery.data || []).filter((user) => {
-            if (roleFilter && user.role !== roleFilter) return false;
-            if (statusFilter && user.status !== statusFilter) return false;
-            if (!normalized) return true;
-            return `${user.displayName} ${user.username}`.toLowerCase().includes(normalized);
-        });
-    }, [keyword, usersQuery.data, roleFilter, statusFilter]);
+    const users = usersQuery.data?.users || [];
+    const total = usersQuery.data?.total || 0;
+    const setFilter = (apply: () => void) => { setPage(1); apply(); };
 
     const changeStatus = (user: AuthUser, active: boolean) => {
         const status = active ? "active" : "disabled";
@@ -89,13 +90,13 @@ export default function AdminUsersPage() {
             <div className="overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 p-4 dark:border-stone-800">
                     <div className="flex flex-wrap items-center gap-2">
-                        <Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索姓名或用户名" value={keyword} onChange={(event) => setKeyword(event.target.value)} className="max-w-xs" />
-                        <Select allowClear placeholder="全部角色" value={roleFilter} onChange={setRoleFilter} className="w-32" options={[{ value: "admin", label: "管理员" }, { value: "user", label: "普通用户" }]} />
-                        <Select allowClear placeholder="全部状态" value={statusFilter} onChange={setStatusFilter} className="w-32" options={[{ value: "active", label: "已启用" }, { value: "disabled", label: "已禁用" }]} />
+                        <Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索姓名或用户名" value={keyword} onChange={(event) => setFilter(() => setKeyword(event.target.value))} className="max-w-xs" />
+                        <Select allowClear placeholder="全部角色" value={roleFilter} onChange={(value) => setFilter(() => setRoleFilter(value))} className="w-32" options={[{ value: "admin", label: "管理员" }, { value: "user", label: "普通用户" }]} />
+                        <Select allowClear placeholder="全部状态" value={statusFilter} onChange={(value) => setFilter(() => setStatusFilter(value))} className="w-32" options={[{ value: "active", label: "已启用" }, { value: "disabled", label: "已禁用" }]} />
                     </div>
-                    <span className="text-xs text-stone-500">共 {usersQuery.data?.length || 0} 个账号</span>
+                    <span className="text-xs text-stone-500">共 {total} 个账号</span>
                 </div>
-                <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={false} scroll={{ x: 980 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
+                <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, onChange: setPage }} scroll={{ x: 980 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
             </div>
 
             <Modal title="创建用户" open={createOpen} footer={null} onCancel={() => setCreateOpen(false)} destroyOnHidden>

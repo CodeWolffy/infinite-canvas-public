@@ -12,8 +12,8 @@ export type CanvasProjectSummary = {
 
 export type CanvasProjectDetail = CanvasProjectSummary & { snapshot: unknown };
 
-export async function listCanvasProjects() {
-    return (await apiRequest<{ projects: CanvasProjectSummary[] }>("/api/canvas-projects")).projects;
+export async function listCanvasProjects(offset = 0) {
+    return await apiRequest<{ projects: CanvasProjectSummary[]; total: number }>(`/api/canvas-projects?offset=${offset}`);
 }
 
 export async function getCanvasProject(id: string) {

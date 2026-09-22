@@ -429,13 +429,18 @@ func body[T any](c *gin.Context, defaults ...T) (T, error) {
 	return value, nil
 }
 func pagination(c *gin.Context) (int, int) {
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	return paginationWith(c, 50, 200)
+}
+
+// paginationWith 让调用方自定义默认值与上限；用于画布列表这类条数更多的接口。
+func paginationWith(c *gin.Context, defaultLimit, maxLimit int) (int, int) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultLimit)))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	if limit < 1 {
-		limit = 50
+		limit = defaultLimit
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > maxLimit {
+		limit = maxLimit
 	}
 	if offset < 0 {
 		offset = 0

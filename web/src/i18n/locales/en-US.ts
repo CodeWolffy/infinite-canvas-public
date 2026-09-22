@@ -221,6 +221,7 @@ export default {
         deleteSelected: "Delete selected",
         deleteAll: "Delete all",
         import: "Import canvas",
+        loadMore: "Load more",
         create: "New canvas",
         empty: "No canvases yet",
         emptyDescription: "Create a canvas to save its nodes, connections, and appearance independently.",

@@ -35,9 +35,11 @@ type CanvasStore = {
     hydrated: boolean;
     hydratedUserId: string;
     projects: CanvasProject[];
+    projectTotal: number;
     deletedProjects: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
     hydrateProjects: (userId: string) => Promise<void>;
+    loadMoreProjects: () => Promise<void>;
     createProject: (title?: string) => Promise<string>;
     importProject: (project: Partial<CanvasProject>) => Promise<string>;
     loadProject: (id: string) => Promise<CanvasProject | null>;
@@ -221,6 +223,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             hydrated: false,
             hydratedUserId: "",
             projects: [],
+            projectTotal: 0,
             deletedProjects: [],
             saveError: null,
             hydrateProjects: async (userId) => {
@@ -231,13 +234,22 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 let request = hydratePromises.get(userId);
                 if (!request) {
                     request = canvasApi.listCanvasProjects().then((records) => {
-                        if (useUserStore.getState().sessionVersion === sessionVersion) set({ projects: records.map(listProject), hydrated: true });
+                        if (useUserStore.getState().sessionVersion === sessionVersion) set({ projects: records.projects.map(listProject), projectTotal: records.total, hydrated: true });
                     }).finally(() => {
                         if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
                     });
                     hydratePromises.set(userId, request);
                 }
                 await request;
+            },
+            // 画布列表默认只取前 200 个，超出部分由页面上的「加载更多」按需追加。
+            loadMoreProjects: async () => {
+                const { sessionVersion, user } = useUserStore.getState();
+                if (!user) return;
+                const offset = get().projects.length;
+                const records = await canvasApi.listCanvasProjects(offset);
+                assertCurrentSession(sessionVersion);
+                set((state) => ({ projects: [...state.projects, ...records.projects.map(listProject).filter((item) => !state.projects.some((existing) => existing.id === item.id))], projectTotal: records.total }));
             },
             createProject: async (title = i18n.t("canvas.project.untitled")) => {
                 const sessionVersion = useUserStore.getState().sessionVersion;

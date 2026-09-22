@@ -26,6 +26,8 @@ export default function CanvasPage() {
     const autoOpenRef = useRef(false);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
+    const projectTotal = useCanvasStore((state) => state.projectTotal);
+    const loadMoreProjects = useCanvasStore((state) => state.loadMoreProjects);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
     const loadProjects = useCanvasStore((state) => state.loadProjects);
@@ -132,10 +134,17 @@ export default function CanvasPage() {
                 {!hydrated ? (
                     <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">{t("canvas.loading")}</section>
                 ) : projects.length ? (
-                    <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-                        {projects.map((project) => (
-                            <CanvasProjectCard key={project.id} project={project} />
-                        ))}
+                    <div className="flex flex-col gap-6">
+                        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                            {projects.map((project) => (
+                                <CanvasProjectCard key={project.id} project={project} />
+                            ))}
+                        </div>
+                        {projectTotal > projects.length ? (
+                            <Button className="mx-auto" disabled={!hydrated} onClick={() => void loadMoreProjects()}>
+                                {t("canvas.loadMore")}
+                            </Button>
+                        ) : null}
                     </div>
                 ) : (
                     <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-stone-200 text-center dark:border-stone-800">
