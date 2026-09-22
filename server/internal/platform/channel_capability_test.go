@@ -17,7 +17,8 @@ func TestChannelCapabilityMigrationPreservesExistingChannels(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
 	// 恢复升级前的渠道结构，再走实际迁移 SQL；空库无法覆盖这次启动故障。
-	if _, err := a.DB.Exec(ctx, "ALTER TABLE channels DROP COLUMN capability"); err != nil {
+	// 020 的可用渠道视图依赖 channels.capability，升级前状态里同样不存在，先一并移除。
+	if _, err := a.DB.Exec(ctx, "DROP VIEW IF EXISTS available_model_channels; ALTER TABLE channels DROP COLUMN capability"); err != nil {
 		t.Fatal(err)
 	}
 	shared := uuid.NewString()

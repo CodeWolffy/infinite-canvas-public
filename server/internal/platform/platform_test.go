@@ -66,7 +66,7 @@ func testApp(t *testing.T) *App {
 	if _, err = db.Exec(ctx, string(ddl)); err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql", "../../migrations/012_channel_routing.sql", "../../migrations/013_moderation_and_rewards.sql", "../../migrations/014_channel_capability.sql", "../../migrations/015_conversation_soft_delete.sql", "../../migrations/016_channel_endpoint.sql", "../../migrations/017_referral_code_ci_unique.sql", "../../migrations/018_request_failure_tracking.sql", "../../migrations/019_remove_generation_probe.sql"} {
+	for _, migration := range []string{"../../migrations/002_token_pricing.sql", "../../migrations/003_platform_features.sql", "../../migrations/004_platform_operations.sql", "../../migrations/005_platform_ops.sql", "../../migrations/006_storage_quota.sql", "../../migrations/007_monitor_cost_link.sql", "../../migrations/008_multi_upstream_models.sql", "../../migrations/009_soft_delete_channels.sql", "../../migrations/010_media_upload_state.sql", "../../migrations/011_probe_deadlines.sql", "../../migrations/012_channel_routing.sql", "../../migrations/013_moderation_and_rewards.sql", "../../migrations/014_channel_capability.sql", "../../migrations/015_conversation_soft_delete.sql", "../../migrations/016_channel_endpoint.sql", "../../migrations/017_referral_code_ci_unique.sql", "../../migrations/018_request_failure_tracking.sql", "../../migrations/019_remove_generation_probe.sql", "../../migrations/020_indexes_and_available_channels.sql"} {
 		extra, err := os.ReadFile(migration)
 		if err != nil {
 			t.Fatal(err)
@@ -640,5 +640,63 @@ func TestPlatformFeaturesRedeemGroupAndSensitive(t *testing.T) {
 	blocked := testRequest(router, "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": modelID, "prompt": "包含 forbidden-word 的提示词", "count": 1}, cookie)
 	if blocked.Code != 400 {
 		t.Fatalf("敏感词应拦截: %d %s", blocked.Code, blocked.Body.String())
+	}
+}
+
+// 渠道自动停用或 Key 全部失效后，用户模型列表不应再返回该模型。
+func TestModelListHidesUnavailableChannels(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	_, cookie := testUser(t, a, 0)
+	modelID, channelID := uuid.NewString(), uuid.NewString()
+	sealed, err := a.seal("test-upstream-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{{"INSERT INTO models(id,name,display_name,capability,status,price_micros) VALUES($1,'listed-model','列表模型','image','published',1000000)", []any{modelID}}, {"INSERT INTO channels(id,name,capability,protocol,base_url,status) VALUES($1,'列表渠道','image','openai','https://upstream.example','active')", []any{channelID}}, {"INSERT INTO channel_keys(channel_id,encrypted_api_key,key_hint) VALUES($1,$2,'已配置')", []any{channelID, sealed}}, {"INSERT INTO model_channels(model_id,channel_id,upstream_model) VALUES($1,$2,'listed-model')", []any{modelID, channelID}}} {
+		if _, err = a.DB.Exec(ctx, query.sql, query.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := a.Router()
+	listed := func() []string {
+		response := testRequest(router, "GET", "/api/models", nil, cookie)
+		if response.Code != 200 {
+			t.Fatalf("模型列表请求失败: %d %s", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		}
+		if err = json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, model := range payload.Models {
+			ids = append(ids, model.ID)
+		}
+		return ids
+	}
+	if got := listed(); len(got) != 1 || got[0] != modelID {
+		t.Fatalf("渠道可用时应返回模型: %v", got)
+	}
+	if _, err = a.DB.Exec(ctx, "UPDATE channels SET auto_disabled_at=now() WHERE id=$1", channelID); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(); len(got) != 0 {
+		t.Fatalf("渠道自动停用后不应返回模型: %v", got)
+	}
+	if _, err = a.DB.Exec(ctx, "UPDATE channels SET auto_disabled_at=NULL WHERE id=$1", channelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.DB.Exec(ctx, "UPDATE channel_keys SET status='disabled' WHERE channel_id=$1", channelID); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(); len(got) != 0 {
+		t.Fatalf("渠道无可用 Key 时不应返回模型: %v", got)
 	}
 }

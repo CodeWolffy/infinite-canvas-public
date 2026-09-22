@@ -158,12 +158,11 @@ func (a *App) channelFromRow(row Row) (channel, error) {
 	return c, nil
 }
 func (a *App) candidates(ctx context.Context, modelID string, excludedChannels, excludedKeys []string) ([]channel, error) {
-	items, err := rows(ctx, a.DB, `SELECT c.*,b.id AS binding_id,b.upstream_model,b.priority,b.weight,b.cost_config
-		FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id
-		WHERE b.model_id=$1 AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL
-		AND m.status='published' AND m.deleted_at IS NULL AND c.capability=m.capability AND (c.protocol<>'anthropic' OR m.capability='text') AND (c.cooldown_until IS NULL OR c.cooldown_until<=now())
+	items, err := rows(ctx, a.DB, `SELECT c.*,v.binding_id,v.upstream_model,v.priority,v.weight,v.cost_config
+		FROM available_model_channels v JOIN channels c ON c.id=v.channel_id
+		WHERE v.model_id=$1 AND (v.cooldown_until IS NULL OR v.cooldown_until<=now())
 		AND NOT(c.id=ANY(coalesce($2::text[]::uuid[],'{}'))) AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active' AND NOT(k.id=ANY(coalesce($3::text[]::uuid[],'{}'))))
-		ORDER BY b.priority DESC`, modelID, excludedChannels, excludedKeys)
+		ORDER BY v.priority DESC`, modelID, excludedChannels, excludedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +358,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 			return
 		}
 		var configured bool
-		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND b.enabled AND c.capability=m.capability AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active') AND m.status='published' AND m.deleted_at IS NULL)", task["modelId"]).Scan(&configured)
+		err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM available_model_channels v WHERE v.model_id=$1)", task["modelId"]).Scan(&configured)
 		if err != nil {
 			return
 		}
@@ -408,9 +407,9 @@ func (a *App) executeTask(root context.Context, task Row) {
 			if !resuming {
 				var eligible bool
 				if candidate.BindingID != "" {
-					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.id=$1 AND b.enabled AND c.capability=m.capability AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM available_model_channels v WHERE v.binding_id=$1 AND (v.cooldown_until IS NULL OR v.cooldown_until<=now()))", candidate.BindingID).Scan(&eligible)
 				} else {
-					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id JOIN models m ON m.id=b.model_id WHERE b.model_id=$1 AND c.id=$2 AND b.enabled AND c.capability=m.capability AND c.status='active' AND c.deleted_at IS NULL AND m.status='published' AND m.deleted_at IS NULL AND (c.cooldown_until IS NULL OR c.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
+					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM available_model_channels v WHERE v.model_id=$1 AND v.channel_id=$2 AND (v.cooldown_until IS NULL OR v.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
 				}
 				if err != nil || !eligible {
 					return
@@ -592,11 +591,11 @@ func (a *App) retryTask(ctx context.Context, task Row, ch channel, failure *upst
 		failed_channel_ids=CASE WHEN $5='authentication' THEN failed_channel_ids ELSE array_append(failed_channel_ids,$3::uuid) END,
 		error_code=$5,error_message=$4,available_at=now()
 		WHERE id=$1 AND worker_token=$2 AND status='running' AND attempt_count<max_attempts AND upstream_task_id IS NULL AND partial_text='' AND NOT upstream_completed
-		AND EXISTS(SELECT 1 FROM model_channels b JOIN channels c ON c.id=b.channel_id
-			WHERE b.model_id=generation_tasks.model_id AND b.enabled AND c.status='active' AND c.deleted_at IS NULL AND c.auto_disabled_at IS NULL
-			AND c.capability=generation_tasks.capability AND (c.protocol<>'anthropic' OR generation_tasks.capability='text') AND (c.cooldown_until IS NULL OR c.cooldown_until<=now())
-			AND NOT(c.id=ANY(generation_tasks.failed_channel_ids)) AND ($5='authentication' OR c.id<>$3::uuid)
-			AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=c.id AND k.status='active' AND NOT(k.id=ANY(generation_tasks.attempted_key_ids))))`,
+		AND EXISTS(SELECT 1 FROM available_model_channels v
+			WHERE v.model_id=generation_tasks.model_id
+			AND v.capability=generation_tasks.capability AND (v.cooldown_until IS NULL OR v.cooldown_until<=now())
+			AND NOT(v.channel_id=ANY(generation_tasks.failed_channel_ids)) AND ($5='authentication' OR v.channel_id<>$3::uuid)
+			AND EXISTS(SELECT 1 FROM channel_keys k WHERE k.channel_id=v.channel_id AND k.status='active' AND NOT(k.id=ANY(generation_tasks.attempted_key_ids))))`,
 		task["id"], task["workerToken"], nullable(ch.ID), failure.Error(), failure.Category)
 	return result.RowsAffected() == 1, err
 }
