@@ -55,7 +55,7 @@
 | A2 | `npm ci` + `npm run build` | 通过 |
 | A2 | `docker build -t ic-web-test .` / `docker build -f server/Dockerfile -t ic-api-test .` | 均成功 |
 | C1–C17 | `go vet ./...` / `go build ./...` | 通过 |
-| C1–C17 | `go test -count=1 ./...`（带 TEST_* 环境变量） | `ok server` / `ok platform`；**58 PASS / 0 FAIL / 1 SKIP**（`TestAudioDurationBillingAndProbeIsolation` 需要 ffprobe） |
+| C1–C17 | `go test -count=1 -v ./...`（带 TEST_* 环境变量） | `ok server` / `ok platform`；**70 个顶层用例 PASS / 0 FAIL / 1 SKIP**（`TestAudioDurationBillingAndProbeIsolation` 需要 ffprobe） |
 | C3 | 起真实服务：`/ready` 200；`/metrics` 含 `ic_http_requests_total`/`ic_tasks_queued`；`X-Request-ID` 合法值回显、非法值换 uuid；`LOG_FORMAT=json` 生效；`/ready`、`/metrics` 不记访问日志 | 全部符合预期 |
 | C4 | `TestWriteEndpointsAreRateLimited` | 第 11 次兑换返回 429 |
 | C6 | `TestSealVersionedRoundTrip` / `TestRotateKeysReencryptsLegacyCiphertext` | 通过（轮换后旧密钥不再需要） |
@@ -75,16 +75,16 @@
 
 | 指标 | 改进前 | 改进后 |
 | :--- | :--- | :--- |
-| `web/src/services/api/image.ts` | 1054 行 | **338 行** |
-| `web/src/stores/use-config-store.ts` | 573 行 | **250 行** |
+| `web/src/services/api/image.ts` | 1054 行 | **339 行** |
+| `web/src/stores/use-config-store.ts` | 573 行 | **251 行** |
 | `web/src/pages/canvas/project.tsx` | 3779 行 | **3388 行**（目标 ≤1800，第 4、5 步未完成） |
 | `web/src/components/agent/local-agent-panel.tsx` | 1666 行 | **613 行** |
 | `web/src/pages/image/index.tsx` | 946 行 | **749 行** |
 | `web/src/pages/video/index.tsx` | 847 行 | **694 行** |
-| `dist/assets/index-*.js`（未 gzip） | 1,350,479 B | **238,215 B**（gzip 81.6 kB） |
+| `dist/assets/index-*.js`（未 gzip） | 1,350,479 B | **238,598 B**（gzip 81.8 kB） |
 | 前端用例数 | 56（node:test + 手工 transpile 源码） | **65**（vitest + Testing Library） |
 | ESLint error | 无 ESLint | **0** |
-| 后端测试（带数据库） | 约 44 个用例 | **58 PASS / 0 FAIL / 1 SKIP** |
+| 后端测试（带数据库） | 约 44 个用例 | **70 PASS / 0 FAIL / 1 SKIP** |
 
 D3 拆出的 chunk：`antd` 1198 kB、`react-vendor` 285 kB、`motion` 124 kB、`i18n` 61 kB、`query` 37 kB。`mermaid` 已是独立懒加载 chunk（505 kB），不在入口。
 
