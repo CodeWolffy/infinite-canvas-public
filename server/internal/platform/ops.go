@@ -123,7 +123,7 @@ func (a *App) opsRoutes(admin *gin.RouterGroup) {
 			ok, err := a.S3.BucketExists(ctx, a.Config.Bucket)
 			storageOK = err == nil && ok
 		}
-		queue, err := one(ctx, a.DB, "SELECT count(*) FILTER(WHERE status='queued')::bigint AS queued,count(*) FILTER(WHERE status='running')::bigint AS running FROM generation_tasks")
+		queue, err := one(ctx, a.DB, "SELECT count(*) FILTER(WHERE status='queued')::bigint AS queued,count(*) FILTER(WHERE status='running')::bigint AS running,coalesce(extract(epoch FROM(now()-min(queued_at) FILTER(WHERE status='queued'))),0)::bigint AS oldest_queued_seconds,count(*) FILTER(WHERE status='running' AND deadline<now())::bigint AS overdue_running FROM generation_tasks")
 		if err != nil {
 			return nil, err
 		}

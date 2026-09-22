@@ -224,6 +224,9 @@ func (a *App) StartWorkers(ctx context.Context) {
 	a.startTextEvents(ctx)
 	a.startMail(ctx)
 	a.startMonitoring(ctx)
+	a.startMetrics(ctx)
+	a.startMetricsSampler(ctx)
+	a.workersStarted.Store(true)
 	for i := 0; i < a.Config.WorkerConcurrency; i++ {
 		a.workers.Add(1)
 		go func() {
@@ -235,7 +238,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 					continue
 				}
 				if !errors.Is(err, notFound) && ctx.Err() == nil {
-					slog.Warn("暂时无法领取任务")
+					slog.Warn("暂时无法领取任务", "error", err)
 				}
 				timer := time.NewTimer(queuePoll)
 				select {
@@ -296,6 +299,13 @@ func (a *App) executeGuarded(ctx context.Context, task Row) {
 	a.guardExecution(ctx, task, func() { a.executeTask(ctx, task) })
 }
 
+// 结算失败只记日志：租约到期后恢复循环会重新接管，worker 不应因此退出。
+func (a *App) settle(ctx context.Context, task, media Row, result *generationResult, failure *upstreamError) {
+	if err := a.finishTask(ctx, task, media, result, failure); err != nil {
+		slog.Warn("任务结算失败", "task", str(task["id"]), "error", err)
+	}
+}
+
 func (a *App) guardExecution(ctx context.Context, task Row, run func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -313,11 +323,11 @@ func (a *App) executeTask(root context.Context, task Row) {
 		return
 	}
 	if !active {
-		_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: "account_disabled"})
+		a.settle(ctx, task, nil, nil, &upstreamError{Category: "account_disabled"})
 		return
 	}
 	if err := a.modelAccess(ctx, a.DB, str(task["userId"]), str(task["modelId"])); err != nil {
-		_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: "model_forbidden"})
+		a.settle(ctx, task, nil, nil, &upstreamError{Category: "model_forbidden"})
 		return
 	}
 	var candidates []channel
@@ -330,19 +340,19 @@ func (a *App) executeTask(root context.Context, task Row) {
 			return
 		}
 		if integer(task["attemptCount"]) >= integer(task["maxAttempts"]) {
-			_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
+			a.settle(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
 			return
 		}
 	}
 	if resuming {
 		raw, err := a.unseal(str(task["channelSnapshot"]))
 		if err != nil {
-			_ = a.finishTask(ctx, task, nil, nil, classify(err))
+			a.settle(ctx, task, nil, nil, classify(err))
 			return
 		}
 		var saved channel
 		if err = json.Unmarshal([]byte(raw), &saved); err != nil {
-			_ = a.finishTask(ctx, task, nil, nil, classify(err))
+			a.settle(ctx, task, nil, nil, classify(err))
 			return
 		}
 		candidates = []channel{saved}
@@ -354,7 +364,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 	}
 	if len(candidates) == 0 {
 		if integer(task["attemptCount"]) > 0 {
-			_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
+			a.settle(ctx, task, nil, nil, &upstreamError{Category: str(task["errorCode"]), Message: str(task["errorMessage"])})
 			return
 		}
 		var configured bool
@@ -367,7 +377,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 			return
 		}
 		a.notifyNoChannel(ctx, str(task["modelId"]))
-		_ = a.finishTask(ctx, task, nil, nil, &upstreamError{Category: "no_channel"})
+		a.settle(ctx, task, nil, nil, &upstreamError{Category: "no_channel"})
 		return
 	}
 	var last *upstreamError
@@ -382,7 +392,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 		acquired, err := a.slot(ctx, candidate, task, deadline)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				_ = a.finishTask(ctx, task, nil, nil, classify(err))
+				a.settle(ctx, task, nil, nil, classify(err))
 			} else {
 				a.requeue(ctx, task, resuming)
 			}
@@ -575,10 +585,12 @@ func (a *App) executeTask(root context.Context, task Row) {
 }
 
 func (a *App) requeue(ctx context.Context, task Row, resuming bool) {
+	query := "UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'"
 	if resuming {
-		_, _ = a.DB.Exec(ctx, "UPDATE generation_tasks SET status='queued',worker_token=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
-	} else {
-		_, _ = a.DB.Exec(ctx, "UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'", task["id"], task["workerToken"])
+		query = "UPDATE generation_tasks SET status='queued',worker_token=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'"
+	}
+	if _, err := a.DB.Exec(ctx, query, task["id"], task["workerToken"]); err != nil {
+		slog.Warn("任务重排失败", "task", str(task["id"]), "resuming", resuming, "error", err)
 	}
 }
 
@@ -600,6 +612,7 @@ func (a *App) retryTask(ctx context.Context, task Row, ch channel, failure *upst
 	return result.RowsAffected() == 1, err
 }
 func (a *App) recordAttemptFailure(ctx context.Context, c channel, logID string, failure *upstreamError) error {
+	upstreamAttemptsTotal.WithLabelValues(c.ID, failure.Category).Inc()
 	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',duration_ms=coalesce(duration_ms,(extract(epoch FROM(now()-created_at))*1000)::bigint),updated_at=now() WHERE id=$1", logID); err != nil {
 			return err
@@ -773,20 +786,23 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		a.publishText(ctx, str(original["id"]))
 	}
 	if err == nil && failure == nil {
+		upstreamAttemptsTotal.WithLabelValues(str(original["channelId"]), "success").Inc()
 		_ = a.notifyLowBalance(ctx, a.DB, str(original["userId"]))
 	}
 	return err
 }
 func (a *App) recoverTasks(ctx context.Context) {
-	_, _ = a.DB.Exec(ctx, "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE task_id IS NULL AND status='running' AND deadline<now()")
+	a.logExec(ctx, "回收超时上游成本记录", "UPDATE upstream_cost_entries SET status='failed',updated_at=now() WHERE task_id IS NULL AND status='running' AND deadline<now()")
 	tasks, err := rows(ctx, a.DB, "SELECT * FROM generation_tasks WHERE status='running' AND deadline<now() ORDER BY deadline LIMIT 100")
 	if err != nil {
+		slog.Warn("读取超时任务失败", "error", err)
 		return
 	}
-	for _, task := range tasks {
+	for _, pending := range tasks {
 		// 先接管过期租约，旧 worker 的迟到结果无法结算或覆盖下一次尝试。
-		task, err = one(ctx, a.DB, "UPDATE generation_tasks SET worker_token=$3 WHERE id=$1 AND worker_token=$2 AND status='running' AND deadline<now() RETURNING *", task["id"], task["workerToken"], uuid.NewString())
+		task, err := one(ctx, a.DB, "UPDATE generation_tasks SET worker_token=$3 WHERE id=$1 AND worker_token=$2 AND status='running' AND deadline<now() RETURNING *", pending["id"], pending["workerToken"], uuid.NewString())
 		if err != nil {
+			slog.Warn("恢复任务失败", "task", str(pending["id"]), "error", err)
 			continue
 		}
 		failure := &upstreamError{Category: "timeout", Retryable: true}
@@ -801,16 +817,18 @@ func (a *App) recoverTasks(ctx context.Context) {
 					failure = &upstreamError{Category: str(log["errorCategory"]), Message: str(log["errorMessage"]), Status: int(integer(log["httpStatus"]))}
 					failure.Retryable = channelFailure(failure)
 				} else if err = a.recordAttemptFailure(ctx, ch, str(log["id"]), failure); err != nil {
+					slog.Warn("恢复任务记录失败尝试失败", "task", str(task["id"]), "error", err)
 					continue
 				}
 			}
 			if retry, err := a.retryTask(ctx, task, ch, failure); err != nil || retry {
+				if err != nil {
+					slog.Warn("恢复任务重排失败", "task", str(task["id"]), "error", err)
+				}
 				continue
 			}
 		}
-		if err = a.finishTask(ctx, task, nil, nil, failure); err != nil {
-			slog.Warn("恢复任务结算失败", "task", task["id"])
-		}
+		a.settle(ctx, task, nil, nil, failure)
 	}
 }
 func (a *App) reconcileExpiredOrders(ctx context.Context) {
@@ -830,15 +848,16 @@ func (a *App) reconcileExpiredOrders(ctx context.Context) {
 }
 
 func (a *App) cleanup(ctx context.Context) {
-	_, _ = a.DB.Exec(ctx, "DELETE FROM auth_tokens WHERE expires_at<now()")
-	_, _ = a.DB.Exec(ctx, "DELETE FROM mail_outbox WHERE created_at<now()-($1*interval '1 day') AND status IN('sent','failed')", a.Config.LogDays)
-	_, _ = a.DB.Exec(ctx, "DELETE FROM sessions WHERE expires_at<now()")
-	_, _ = a.DB.Exec(ctx, "DELETE FROM request_logs WHERE started_at<now()-($1*interval '1 day') AND status<>'running'", a.Config.LogDays)
-	_, _ = a.DB.Exec(ctx, "DELETE FROM channel_checks WHERE created_at<now()-($1*interval '1 day')", checkRetentionDays)
-	_, _ = a.DB.Exec(ctx, "DELETE FROM notifications WHERE created_at<now()-($1*interval '1 day')", notificationRetentionDays)
-	_, _ = a.DB.Exec(ctx, "DELETE FROM audit_logs WHERE created_at<now()-($1*interval '1 day') AND action<>'cost.reconciled'", auditRetentionDays)
+	a.logExec(ctx, "清理过期登录令牌", "DELETE FROM auth_tokens WHERE expires_at<now()")
+	a.logExec(ctx, "清理过期邮件", "DELETE FROM mail_outbox WHERE created_at<now()-($1*interval '1 day') AND status IN('sent','failed')", a.Config.LogDays)
+	a.logExec(ctx, "清理过期会话", "DELETE FROM sessions WHERE expires_at<now()")
+	a.logExec(ctx, "清理过期请求日志", "DELETE FROM request_logs WHERE started_at<now()-($1*interval '1 day') AND status<>'running'", a.Config.LogDays)
+	a.logExec(ctx, "清理过期渠道检测记录", "DELETE FROM channel_checks WHERE created_at<now()-($1*interval '1 day')", checkRetentionDays)
+	a.logExec(ctx, "清理过期通知", "DELETE FROM notifications WHERE created_at<now()-($1*interval '1 day')", notificationRetentionDays)
+	a.logExec(ctx, "清理过期审计日志", "DELETE FROM audit_logs WHERE created_at<now()-($1*interval '1 day') AND action<>'cost.reconciled'", auditRetentionDays)
 	items, err := rows(ctx, a.DB, "SELECT id FROM media_objects WHERE (status='deleting' OR created_at<now()-($1*interval '1 day')) AND NOT EXISTS(SELECT 1 FROM media_references WHERE media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM assets WHERE media_id=media_objects.id)", a.Config.OrphanDays)
 	if err != nil {
+		slog.Warn("读取待清理媒体失败", "error", err)
 		return
 	}
 	for _, item := range items {

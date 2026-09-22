@@ -52,6 +52,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	logger, err := platform.NewLogger()
+	if err != nil {
+		slog.Error("日志配置不正确", "error", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(logger)
 	migrations, err := loadMigrations(migrationFS)
 	if err != nil {
 		slog.Error("读取迁移脚本失败", "error", err)

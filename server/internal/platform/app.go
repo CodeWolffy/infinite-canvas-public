@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,8 @@ type Config struct {
 	HeaderTimeout                                                        time.Duration
 	Bucket, MinioEndpoint, MinioAccessKey, MinioSecretKey                string
 	MinioSSL                                                             bool
+	// MetricsAddress 为空表示不启动指标服务；非空时在该地址暴露 /metrics 与 pprof。
+	MetricsAddress string
 }
 
 type App struct {
@@ -54,6 +57,8 @@ type App struct {
 	streamSinks map[string]map[chan struct{}]struct{}
 	shutdown    <-chan struct{}
 	startedAt   time.Time
+	// workersStarted 在 StartWorkers 之后置位，供 /ready 区分「进程存活」与「可以接单」。
+	workersStarted atomic.Bool
 }
 
 type Row map[string]any
@@ -92,12 +97,16 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 			return nil, fmt.Errorf("%s 必须为 true 或 false", key)
 		}
 	}
+	if _, _, err := logSettings(); err != nil {
+		return nil, err
+	}
 	cfg := Config{Address: env("LISTEN_ADDRESS", ":3001"), DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: env("REDIS_URL", "redis://redis:6379/0"),
 		PublicURL: strings.TrimRight(env("PUBLIC_URL", "http://localhost:3000"), "/"), CookieName: env("COOKIE_NAME", "infinite_canvas_public_session"),
 		EncryptionKey: os.Getenv("CHANNEL_ENCRYPTION_KEY"), SecureCookie: env("COOKIE_SECURE", "true") == "true",
 		TrustProxy: env("TRUST_PROXY", "false") == "true", AllowPrivateHosts: env("ALLOW_PRIVATE_IMAGE_HOSTS", "false") == "true",
 		Bucket: env("MINIO_BUCKET", "infinite-canvas-public"), MinioEndpoint: env("MINIO_ENDPOINT", "minio") + ":" + env("MINIO_PORT", "9000"),
-		MinioAccessKey: os.Getenv("MINIO_ACCESS_KEY"), MinioSecretKey: os.Getenv("MINIO_SECRET_KEY"), MinioSSL: env("MINIO_USE_SSL", "false") == "true"}
+		MinioAccessKey: os.Getenv("MINIO_ACCESS_KEY"), MinioSecretKey: os.Getenv("MINIO_SECRET_KEY"), MinioSSL: env("MINIO_USE_SSL", "false") == "true",
+		MetricsAddress: os.Getenv("METRICS_ADDRESS")}
 	if cfg.DatabaseURL == "" || len(cfg.EncryptionKey) < 32 || strings.HasPrefix(cfg.EncryptionKey, "change-me") {
 		return nil, errors.New("请配置 DATABASE_URL 和独立的 CHANNEL_ENCRYPTION_KEY（至少 32 字符）")
 	}
@@ -477,7 +486,7 @@ func fail(c *gin.Context, err error) {
 		}
 	}
 	// 不记录请求正文、数据库参数或第三方错误，避免渠道/支付密钥回显。
-	slog.Error("请求处理失败", "path", c.FullPath(), "type", fmt.Sprintf("%T", err))
+	slog.Error("请求处理失败", "requestId", requestIDOf(c), "method", c.Request.Method, "path", c.FullPath(), "userId", userIDOf(c), "error", truncate(err.Error(), errorLogLimit))
 	c.AbortWithStatusJSON(500, gin.H{"error": "internal_error", "message": "服务暂时不可用"})
 }
 
@@ -486,6 +495,9 @@ func (a *App) Router() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) { fail(c, errors.New("panic")) }))
 	_ = r.SetTrustedProxies(nil)
+	// 请求 ID 与访问日志包在来源校验外层，被拒绝的请求同样能追踪。
+	r.Use(requestID())
+	r.Use(a.accessLog())
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "SAMEORIGIN")
@@ -535,6 +547,14 @@ func (a *App) Router() *gin.Engine {
 		}
 		return gin.H{"status": "ok"}, nil
 	}))
+	// 就绪探针只看进程自身状态：依赖不可用时 /health 已经会失败，这里不再重复探测。
+	r.GET("/ready", func(c *gin.Context) {
+		if a.startedAt.IsZero() || !a.workersStarted.Load() {
+			c.JSON(503, gin.H{"status": "starting"})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ready"})
+	})
 	a.authRoutes(r)
 	a.authSecurityRoutes(r)
 	a.paymentCallbacks(r)
