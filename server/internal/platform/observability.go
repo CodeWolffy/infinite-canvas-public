@@ -96,6 +96,31 @@ func userIDOf(c *gin.Context) string {
 	return ""
 }
 
+// requestTimeout 给普通接口加统一处理时限；SSE 长连接、大文件上传下载与需要等上游的检测接口不设限。
+const requestTimeout = 60 * time.Second
+
+var slowRoutes = map[string]bool{
+	"/api/text/requests/:id/events": true,
+	"/api/media":                    true,
+	"/api/media/:id":                true,
+	"/api/admin/playground/test":    true,
+	"/api/admin/channels/:id/check": true,
+	"/api/admin/channels/check-all": true,
+}
+
+func (a *App) requestTimeout() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if slowRoutes[c.FullPath()] {
+			c.Next()
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), requestTimeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
+
 // requestID 采用上游传入的合法请求 ID，否则生成一个，便于串联访问日志与错误日志。
 func requestID() gin.HandlerFunc {
 	return func(c *gin.Context) {

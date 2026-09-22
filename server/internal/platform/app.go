@@ -532,6 +532,10 @@ func fail(c *gin.Context, err error) {
 		c.AbortWithStatusJSON(e.Status, gin.H{"error": e.Code, "message": e.Message})
 		return
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		c.AbortWithStatusJSON(504, gin.H{"error": "timeout", "message": "请求处理超时，请稍后重试"})
+		return
+	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		if pg.Code == "23505" {
@@ -556,6 +560,7 @@ func (a *App) Router() *gin.Engine {
 	// 请求 ID 与访问日志包在来源校验外层，被拒绝的请求同样能追踪。
 	r.Use(requestID())
 	r.Use(a.accessLog())
+	r.Use(a.requestTimeout())
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "SAMEORIGIN")

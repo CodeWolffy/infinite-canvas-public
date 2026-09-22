@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 	"syscall"
+	"time"
 
 	"infinite-canvas-public/server/internal/platform"
 )
@@ -67,7 +68,7 @@ func main() {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)
 	}
-	server := &http.Server{Addr: app.Config.Address, Handler: app.Router(), ReadHeaderTimeout: app.Config.HeaderTimeout}
+	server := &http.Server{Addr: app.Config.Address, Handler: app.Router(), ReadHeaderTimeout: app.Config.HeaderTimeout, IdleTimeout: 120 * time.Second}
 	app.StartWorkers(ctx)
 	go func() {
 		<-ctx.Done()
