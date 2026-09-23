@@ -9,6 +9,18 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   api:
@@ -60,10 +72,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    mem_limit: 1024m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   postgres:
     image: postgres:17-alpine
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-infinite_canvas_public}
       POSTGRES_USER: ${POSTGRES_USER:-infinite_canvas_public}
@@ -75,6 +94,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    mem_limit: 1024m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   redis:
@@ -89,6 +114,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    mem_limit: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   minio:
@@ -104,6 +135,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    mem_limit: 1024m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

@@ -152,25 +152,27 @@
 
 3. **配置反向代理 (Nginx / 1Panel)**
    生产环境推荐在前端加设 Nginx 统一处理 HTTPS 证书与静态转发。反代宿主机 `127.0.0.1:3000` 即可：
-   ```nginx
-   server {
-       listen 443 ssl http2;
-       server_name your-domain.com;
+    ```nginx
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name your-domain.com;
 
-       ssl_certificate /path/to/fullchain.pem;
-       ssl_certificate_key /path/to/privkey.pem;
+        ssl_certificate /path/to/fullchain.pem;
+        ssl_certificate_key /path/to/privkey.pem;
 
-       location / {
-           proxy_pass http://127.0.0.1:3000;
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto https;
-           proxy_buffering off;
-           proxy_read_timeout 300s;
-       }
-   }
-   ```
+        location / {
+            proxy_pass http://127.0.0.1:3000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_buffering off;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+        }
+    }
+    ```
 
 4. **版本平滑更新**
    ```sh
@@ -188,11 +190,14 @@
 | :--- | :--- | :--- |
 | `PUBLIC_URL` | `http://localhost:3301` | 平台对外公开的基础 URL（包含协议与域名） |
 | `PUBLIC_WEB_PORT` | `3301` | 本地 Compose 映射到宿主机的 Web 端口 |
+| `CORS_ORIGIN` | `https://canvas.example.com` | 允许跨域请求来源列表，生产环境通常与 `PUBLIC_URL` 一致 |
+| `COOKIE_SECURE` | `true` (生产) / `false` (本地) | 会话 Cookie 是否仅允许在 HTTPS 下传输 |
 | `CHANNEL_ENCRYPTION_KEY` | *(至少 32 位随机字符串)* | **至关重要**：用于加密保存渠道 API 密钥的 AES 密钥，必须离线备份 |
 | `CHANNEL_ENCRYPTION_KEY_PREVIOUS` | *(留空)* | 仅密钥轮换期间设置，填上一把主密钥；轮换完成后必须移除 |
 | `BOOTSTRAP_ADMIN_USERNAME` | `admin` | 系统初次初始化时的管理员账号 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | *(初始化密码)* | 系统初次初始化时的管理员密码，初次登录后建议修改 |
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` | PostgreSQL 权威数据库连接串 |
+| `DB_MAX_CONNS` | `20` | 后端数据库连接池最大连接数，必须小于 PostgreSQL 的 `max_connections` |
 | `REDIS_URL` | `redis://:pass@host:6379/0` | Redis 实例连接串，用于跨实例频控与渠道并发控制 |
 | `WORKER_CONCURRENCY` | `50` (默认 20) | 本机异步生成与流式任务并发协程工作池上限（兼顾图文音视所有类型） |
 | `TRUST_PROXY` | `true` (生产) / `false` (本地) | 是否信任反向代理传递的 `X-Forwarded-*` 标头 |

@@ -17,4 +17,7 @@ server/*.exe
 web/public/plugins
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
-web/public/plugins
+
+# 统一使用 npm 锁文件，防止根目录、web 与 agent 误提交 bun 锁（docs/ 文档站自身保留）
+bun.lock*
+!docs/bun.lock

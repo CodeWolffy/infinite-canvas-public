@@ -9,6 +9,15 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+### Deployment, CI & Ops improvements pending verification
+
+- Frontend & Agent CI: workflows triggered on push/PR with `web/**` or `canvas-agent/**`, running typecheck, unit tests (vitest / tsx), and build.
+- Vulnerability scanning & Dependabot: `govulncheck` integrated in backend CI; Dependabot configured for weekly updates across web, canvas-agent, server, and github-actions.
+- Nginx container healthcheck: `app` container includes wget-based healthcheck and reaches `healthy` state in `docker compose ps`.
+- Logging rotation & memory limits: Compose services configured with 10m/3 files json-file rotation and explicit `mem_limit`.
+- Nginx security headers: static frontend returns `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, and `Content-Security-Policy-Report-Only`.
+- Reverse proxy timeout & configuration table: README updated with modern `http2 on;`, 600s proxy timeout, and missing core environment variables (`CORS_ORIGIN`, `COOKIE_SECURE`, `DB_MAX_CONNS`).
+
 ### Round 1 improvements (backend reliability, security, frontend toolchain) pending verification
 
 - Unified channel availability: after marking a channel as auto-disabled or disabling all of its keys, its models must disappear from the user model list and return once the channel is saved back to "enabled". Scheduling, quoting and channel debugging share the same rule.

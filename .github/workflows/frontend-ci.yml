@@ -1,0 +1,76 @@
+name: Frontend & Agent CI
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - "web/**"
+      - "canvas-agent/**"
+      - "VERSION"
+      - "CHANGELOG.md"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "canvas-agent/**"
+      - "VERSION"
+      - "CHANGELOG.md"
+      - ".github/workflows/frontend-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  web-ci:
+    name: Test & Build Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build web assets
+        run: npm run build
+
+  agent-ci:
+    name: Test & Build Canvas Agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: canvas-agent
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: canvas-agent/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build agent binary
+        run: npm run build
