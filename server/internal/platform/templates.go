@@ -68,11 +68,12 @@ func (a *App) templateRoutes(api *gin.RouterGroup, admin *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			tpl, err = one(ctx, tx, "INSERT INTO canvas_templates(title,description,snapshot,created_by) VALUES($1,$2,$3,$4) RETURNING "+templateSummary, input.Title, input.Description, jsonBytes(source["snapshot"]), u.ID)
+			snapshot := publicCanvasSnapshot(source["snapshot"])
+			tpl, err = one(ctx, tx, "INSERT INTO canvas_templates(title,description,snapshot,created_by) VALUES($1,$2,$3,$4) RETURNING "+templateSummary, input.Title, input.Description, jsonBytes(snapshot), u.ID)
 			if err != nil {
 				return err
 			}
-			return syncMediaRefs(ctx, tx, "template", str(tpl["id"]), u.ID, extractMediaIDs(source["snapshot"]))
+			return syncMediaRefs(ctx, tx, "template", str(tpl["id"]), u.ID, extractMediaIDs(snapshot))
 		})
 		return gin.H{"template": tpl}, err
 	}))

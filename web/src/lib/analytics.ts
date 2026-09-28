@@ -69,14 +69,21 @@ export function initAnalytics() {
     }
 }
 
-// Report SPA route changes to every enabled analytics provider.
+// Report SPA route changes without leaking bootstrap credentials or URL fragments to providers.
 export function trackPageview(path: string) {
     try {
+        const url = new URL(path, window.location.origin);
+        if (url.origin !== window.location.origin) return;
+        url.hash = "";
+        for (const key of Array.from(url.searchParams.keys())) {
+            if (/(?:token|secret|password|credential|auth|api.?key|agent.?url|session)/i.test(key)) url.searchParams.delete(key);
+        }
+        const pagePath = `${url.pathname}${url.search}`;
         if (active.ga4 && window.gtag) {
-            window.gtag("event", "page_view", { page_path: path, page_location: window.location.href });
+            window.gtag("event", "page_view", { page_path: pagePath, page_location: `${window.location.origin}${pagePath}` });
         }
         if (active.baidu && window._hmt) {
-            window._hmt.push(["_trackPageview", path]);
+            window._hmt.push(["_trackPageview", pagePath]);
         }
     } catch {
         /* Ignore analytics reporting errors. */

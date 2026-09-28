@@ -6,6 +6,7 @@ export type CanvasProjectSummary = {
     title: string;
     createdAt: string;
     updatedAt: string;
+    revision: number;
     nodeCount: number;
     connectionCount: number;
     /** 当前用户的有效角色：owner/editor/viewer；viewer 只能读不能写。 */
@@ -30,8 +31,16 @@ export async function createCanvasProject(input: { title: string; snapshot: unkn
     return (await apiRequest<{ project: CanvasProjectDetail }>("/api/canvas-projects", { method: "POST", body: input })).project;
 }
 
-export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown; workspaceId?: string | null }) {
-    return (await apiRequest<{ project: CanvasProjectSummary }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
+let onWorkspaceMove: (record: CanvasProjectSummary) => void = () => {};
+
+export function onCanvasWorkspaceMove(listener: (record: CanvasProjectSummary) => void) {
+    onWorkspaceMove = listener;
+}
+
+export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown; workspaceId?: string | null; expectedRevision?: number }) {
+    const record = (await apiRequest<{ project: CanvasProjectSummary }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
+    if (input.workspaceId !== undefined && input.title === undefined && input.snapshot === undefined && input.viewport === undefined) onWorkspaceMove(record);
+    return record;
 }
 
 export async function deleteCanvasProject(id: string) {

@@ -26,6 +26,8 @@ export default function CanvasPage() {
     const inputRef = useRef<HTMLInputElement>(null);
     const autoOpenRef = useRef(false);
     const [templatesOpen, setTemplatesOpen] = useState(false);
+    const [loadingAllProjects, setLoadingAllProjects] = useState(false);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const projectTotal = useCanvasStore((state) => state.projectTotal);
@@ -37,6 +39,8 @@ export default function CanvasPage() {
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
+    useEffect(() => setLoadingAllProjects(false), [sessionVersion]);
+
     const mode = searchParams.get("mode");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
     const agentQuery = agentMode ? `?${searchParams.toString()}` : "";
@@ -47,6 +51,25 @@ export default function CanvasPage() {
     const createAndEnter = async () => enterProject(await createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
     // 列表只有元数据，导出前先把选中项目的完整快照拉回来。
     const exportSelected = async () => exportCanvasProjects(await loadProjects(selectedIds), `${t("canvas.title")}-${selectedIds.length}`);
+    const selectAllForDeletion = async () => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
+        setLoadingAllProjects(true);
+        try {
+            while (useCanvasStore.getState().projects.length < useCanvasStore.getState().projectTotal) {
+                const before = useCanvasStore.getState().projects.length;
+                await loadMoreProjects();
+                assertCurrentSession(sessionVersion);
+                if (useCanvasStore.getState().projects.length <= before) throw new Error(t("common.requestFailed"));
+            }
+            assertCurrentSession(sessionVersion);
+            const deletableIds = useCanvasStore.getState().projects.filter((project) => project.canDelete).map((project) => project.id);
+            if (deletableIds.length) setDeleteIds(deletableIds);
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === sessionVersion) message.error(error instanceof Error ? error.message : t("common.requestFailed"));
+        } finally {
+            if (useUserStore.getState().sessionVersion === sessionVersion) setLoadingAllProjects(false);
+        }
+    };
     const importCanvas = async (file?: File) => {
         if (!file) return;
         const sessionVersion = useUserStore.getState().sessionVersion;
@@ -120,8 +143,8 @@ export default function CanvasPage() {
                                 </Button>
                             </>
                         ) : null}
-                        {projects.length ? (
-                            <Button disabled={!hydrated} onClick={() => setDeleteIds(projects.map((project) => project.id))}>
+                        {projects.some((project) => project.canDelete) ? (
+                            <Button disabled={!hydrated || loadingAllProjects} loading={loadingAllProjects} onClick={() => void selectAllForDeletion()}>
                                 {t("canvas.deleteAll")}
                             </Button>
                         ) : null}

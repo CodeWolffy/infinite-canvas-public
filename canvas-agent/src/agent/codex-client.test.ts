@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 
 import { CodexAppClient } from "./codex-client.js";
-import { assertDraftHasNoSensitiveValues, canvasSkillSource } from "./codex.js";
+import { assertDraftHasNoSensitiveValues, canvasSkillSource, runCodexTurn } from "./codex.js";
 
 type TestClient = {
     currentThreadId: string;
@@ -178,11 +179,66 @@ test("MCP 启动状态区分空对话预热与正常 turn 运行", async () => {
     await running;
 
     assert.deepEqual(events.filter((event) => event.type === "agent_bootstrap"), [
-        { type: "agent_bootstrap", payload: { type: "mcp.startup", phase: "preheat", threadId: "thread-1", name: "notion", status: "starting", error: undefined, failureReason: undefined } },
+        { type: "agent_bootstrap", payload: { type: "mcp.startup", phase: "runtime", threadId: "thread-1", name: "notion", status: "starting", error: undefined, failureReason: undefined } },
         { type: "agent_bootstrap", payload: { type: "mcp.startup", phase: "preheat", threadId: "thread-1", name: "notion", status: "failed", error: undefined, failureReason: undefined } },
         { type: "agent_bootstrap", payload: { type: "mcp.complete", phase: "preheat", threadId: "thread-1", services: [{ name: "notion", authStatus: "notLoggedIn" }] } },
         { type: "agent_bootstrap", payload: { type: "mcp.startup", phase: "runtime", threadId: "thread-1", name: "notion", status: "ready", error: undefined, failureReason: undefined } },
     ]);
+});
+
+test("别的线程预热时，当前线程 MCP 启动通知仍属于 runtime", async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const events: Array<{ type: string; payload: unknown }> = [];
+    const child = { stdin: { write: (line: string) => (writes.push(JSON.parse(line)), true) } };
+    const client = Reflect.construct(CodexAppClient, [child, (type: string, payload: unknown) => events.push({ type, payload }), emptyEventHistory]) as CodexAppClient;
+    const testClient = client as unknown as TestClient;
+    testClient.currentThreadId = "active-thread";
+
+    const starting = client.startThread("D:\\site", "request", true);
+    testClient.handleNotification("mcpServer/startupStatus/updated", { threadId: "active-thread", name: "notion", status: "ready" });
+    const request = writes.find((item) => item.method === "thread/start");
+    assert.ok(request);
+    testClient.handle({ id: request.id, result: { thread: { id: "new-thread" } } });
+    await new Promise((resolve) => setImmediate(resolve));
+    testClient.handleNotification("mcpServer/startupStatus/updated", { threadId: "active-thread", name: "notion", status: "ready" });
+    testClient.handleNotification("mcpServer/startupStatus/updated", { threadId: "new-thread", name: "notion", status: "starting" });
+    const statusRequest = writes.find((item) => item.method === "mcpServerStatus/list");
+    assert.ok(statusRequest);
+    testClient.handle({ id: statusRequest.id, result: { data: [], nextCursor: null } });
+    await starting;
+
+    assert.deepEqual(events.filter((event) => event.type === "agent_bootstrap").map((event) => ({ threadId: (event.payload as { threadId: string }).threadId, phase: (event.payload as { phase: string }).phase })), [
+        { threadId: "active-thread", phase: "runtime" },
+        { threadId: "active-thread", phase: "runtime" },
+        { threadId: "new-thread", phase: "preheat" },
+        { threadId: "new-thread", phase: "preheat" },
+    ]);
+});
+
+test("附件部分写入失败会删除已写入的临时文件", async () => {
+    const originalWriteFile = fs.writeFile;
+    const originalUnlink = fs.unlink;
+    const written: string[] = [];
+    const deleted: string[] = [];
+    const failure = new Error("write failed");
+    (fs as { writeFile: typeof fs.writeFile }).writeFile = (async (file: string) => {
+        written.push(file);
+        if (written.length === 2) throw failure;
+    }) as typeof fs.writeFile;
+    (fs as { unlink: typeof fs.unlink }).unlink = (async (file: string) => { deleted.push(file); }) as typeof fs.unlink;
+    try {
+        const events: Array<{ type: string; payload: unknown }> = [];
+        await runCodexTurn("test", (type, payload) => events.push({ type, payload }), [
+            { name: "first", dataUrl: "data:image/png;base64,AA==" },
+            { name: "second", dataUrl: "data:image/png;base64,AA==" },
+        ]);
+        assert.equal(written.length, 2);
+        assert.deepEqual(new Set(deleted), new Set(written));
+        assert.ok(events.some((event) => event.type === "agent_error" && (event.payload as { message: string }).message === failure.message));
+    } finally {
+        (fs as { writeFile: typeof fs.writeFile }).writeFile = originalWriteFile;
+        (fs as { unlink: typeof fs.unlink }).unlink = originalUnlink;
+    }
 });
 
 test("静默 Skill 草稿 turn 只返回结构化结果，不广播也不写历史", async () => {

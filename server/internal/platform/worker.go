@@ -952,11 +952,23 @@ func (a *App) cleanup(ctx context.Context) {
 			objects <- minio.ObjectInfo{Key: item.key}
 		}
 		close(objects)
+		failed := make(map[string]bool)
+		batchFailed := false
 		for failure := range a.S3.RemoveObjects(ctx, a.Config.Bucket, objects, minio.RemoveObjectsOptions{}) {
 			slog.Warn("删除媒体对象失败", "key", failure.ObjectName, "error", failure.Err)
+			if failure.ObjectName == "" {
+				batchFailed = true
+			} else {
+				failed[failure.ObjectName] = true
+			}
+		}
+		if batchFailed {
+			continue
 		}
 		for _, item := range pending {
-			a.logExec(ctx, "清理媒体记录", "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", item.id)
+			if !failed[item.key] {
+				a.logExec(ctx, "清理媒体记录", "DELETE FROM media_objects WHERE id=$1 AND status='deleting'", item.id)
+			}
 		}
 	}
 }

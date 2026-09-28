@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
@@ -33,15 +34,22 @@ func TestCanvasProjectLifecycle(t *testing.T) {
 	if created.Code != 200 {
 		t.Fatalf("创建画布失败: %d %s", created.Code, created.Body.String())
 	}
-	projectID := str(object(responseRow(t, created)["project"])["id"])
+	createdProject := object(responseRow(t, created)["project"])
+	projectID := str(createdProject["id"])
+	if createdProject["revision"] != float64(0) {
+		t.Fatalf("新画布版本应为 0: %v", createdProject["revision"])
+	}
 	var refs int
 	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM media_references WHERE owner_kind='canvas' AND owner_id=$1", projectID).Scan(&refs); err != nil || refs != 1 {
 		t.Fatalf("画布应登记 1 条媒体引用: %d %v", refs, err)
 	}
 
-	saved := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"viewport": map[string]any{"x": 12.0, "y": 34.0, "k": 1.5}}, cookie)
+	saved := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"viewport": map[string]any{"x": 12.0, "y": 34.0, "k": 1.5}, "expectedRevision": 0}, cookie)
 	if saved.Code != 200 {
 		t.Fatalf("保存视口失败: %d %s", saved.Code, saved.Body.String())
+	}
+	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(1) {
+		t.Fatalf("视口保存应推进版本到 1: %v", revision)
 	}
 	viewport, err := one(ctx, a.DB, "SELECT snapshot->'viewport' AS viewport FROM canvas_projects WHERE id=$1", projectID)
 	if err != nil {
@@ -60,8 +68,11 @@ func TestCanvasProjectLifecycle(t *testing.T) {
 	}
 	snapshot := canvasTestSnapshot(mediaID)
 	snapshot["nodes"] = []any{map[string]any{"id": "n2", "type": "text", "metadata": map[string]any{}}}
-	if saved = testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": snapshot}, cookie); saved.Code != 200 {
+	if saved = testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": snapshot, "expectedRevision": 1}, cookie); saved.Code != 200 {
 		t.Fatalf("保存快照失败: %d %s", saved.Code, saved.Body.String())
+	}
+	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(2) {
+		t.Fatalf("快照保存应推进版本到 2: %v", revision)
 	}
 	var history int
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM canvas_project_history WHERE project_id=$1", projectID).Scan(&history); err != nil || history != 20 {
@@ -82,6 +93,167 @@ func TestCanvasProjectLifecycle(t *testing.T) {
 	var orphans int
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM canvas_project_history h WHERE h.project_id=$1 AND NOT EXISTS(SELECT 1 FROM canvas_projects p WHERE p.id=h.project_id)", projectID).Scan(&orphans); err != nil || orphans != 0 {
 		t.Fatalf("删除画布后不应残留历史记录: %d %v", orphans, err)
+	}
+}
+
+func TestCanvasProjectPutRejectsUnauthorized(t *testing.T) {
+	a := testApp(t)
+	ownerID, ownerCookie := testUser(t, a, 0)
+	viewerID, viewerCookie := testUser(t, a, 0)
+	_, otherCookie := testUser(t, a, 0)
+	ctx := context.Background()
+	router := a.Router()
+	workspaceID := uuid.NewString()
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspaces(id,name,owner_id) VALUES($1,'共享工作区',$2)", workspaceID, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'viewer')", workspaceID, ownerID, viewerID); err != nil {
+		t.Fatal(err)
+	}
+	created := testRequest(router, "POST", "/api/canvas-projects", map[string]any{"title": "原画布", "snapshot": canvasTestSnapshot(""), "workspaceId": workspaceID}, ownerCookie)
+	if created.Code != 200 {
+		t.Fatalf("创建画布失败: %d %s", created.Code, created.Body.String())
+	}
+	projectID := str(object(responseRow(t, created)["project"])["id"])
+	for _, attempt := range []struct {
+		name, id string
+		cookie   *http.Cookie
+	}{
+		{"无权限用户", projectID, otherCookie},
+		{"只读成员", projectID, viewerCookie},
+		{"不存在的画布", uuid.NewString(), ownerCookie},
+	} {
+		response := testRequest(router, "PUT", "/api/canvas-projects/"+attempt.id, map[string]any{"title": "被篡改", "snapshot": canvasTestSnapshot(""), "expectedRevision": 0}, attempt.cookie)
+		if response.Code != 404 {
+			t.Fatalf("%s 保存画布应返回 404，实际 %d %s", attempt.name, response.Code, response.Body.String())
+		}
+	}
+	var title string
+	var history int
+	if err := a.DB.QueryRow(ctx, "SELECT title FROM canvas_projects WHERE id=$1", projectID).Scan(&title); err != nil || title != "原画布" {
+		t.Fatalf("越权请求改动了画布: %s %v", title, err)
+	}
+	if err := a.DB.QueryRow(ctx, "SELECT count(*) FROM canvas_project_history WHERE project_id=$1", projectID).Scan(&history); err != nil || history != 0 {
+		t.Fatalf("越权请求创建了画布历史: %d %v", history, err)
+	}
+}
+
+func TestCanvasProjectPutMovesWorkspaceAndSavesPriorSnapshot(t *testing.T) {
+	a := testApp(t)
+	ownerID, ownerCookie := testUser(t, a, 0)
+	editorID, editorCookie := testUser(t, a, 0)
+	ctx := context.Background()
+	router := a.Router()
+	workspaceID := uuid.NewString()
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspaces(id,name,owner_id) VALUES($1,'目标工作区',$2)", workspaceID, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'editor')", workspaceID, ownerID, editorID); err != nil {
+		t.Fatal(err)
+	}
+	created := testRequest(router, "POST", "/api/canvas-projects", map[string]any{"title": "原画布", "snapshot": canvasTestSnapshot("")}, ownerCookie)
+	if created.Code != 200 {
+		t.Fatalf("创建画布失败: %d %s", created.Code, created.Body.String())
+	}
+	projectID := str(object(responseRow(t, created)["project"])["id"])
+	prior := canvasTestSnapshot("")
+	next := canvasTestSnapshot("")
+	next["nodes"] = []any{map[string]any{"id": "n2", "type": "text", "metadata": map[string]any{}}}
+	updated := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"workspaceId": workspaceID, "snapshot": next, "expectedRevision": 0}, ownerCookie)
+	if updated.Code != 200 {
+		t.Fatalf("移动并保存画布失败: %d %s", updated.Code, updated.Body.String())
+	}
+	if got := str(object(responseRow(t, updated)["project"])["workspaceId"]); got != workspaceID {
+		t.Fatalf("响应中的工作区未更新: %s", got)
+	}
+	if revision := object(responseRow(t, updated)["project"])["revision"]; revision != float64(1) {
+		t.Fatalf("合并工作区与快照写入应只推进一次版本: %v", revision)
+	}
+	project, err := one(ctx, a.DB, "SELECT workspace_id,snapshot FROM canvas_projects WHERE id=$1", projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if str(project["workspaceId"]) != workspaceID || string(jsonBytes(project["snapshot"])) != string(jsonBytes(next)) {
+		t.Fatalf("画布工作区或快照未持久化: %v", project)
+	}
+	history, err := rows(ctx, a.DB, "SELECT title,snapshot FROM canvas_project_history WHERE project_id=$1", projectID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("应保存一条更新前的历史: %v %v", history, err)
+	}
+	if str(history[0]["title"]) != "原画布" || string(jsonBytes(history[0]["snapshot"])) != string(jsonBytes(prior)) {
+		t.Fatalf("历史未保存更新前的快照: %v", history[0])
+	}
+	if response := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"workspaceId": ""}, editorCookie); response.Code != 403 {
+		t.Fatalf("编辑者移动画布应返回 403，实际 %d %s", response.Code, response.Body.String())
+	}
+	var stillWorkspace string
+	if err := a.DB.QueryRow(ctx, "SELECT workspace_id FROM canvas_projects WHERE id=$1", projectID).Scan(&stillWorkspace); err != nil || stillWorkspace != workspaceID {
+		t.Fatalf("编辑者改动了工作区: %s %v", stillWorkspace, err)
+	}
+}
+
+func TestCanvasProjectRevisionConflictPreservesCommittedSnapshot(t *testing.T) {
+	a := testApp(t)
+	ownerID, ownerCookie := testUser(t, a, 0)
+	editorID, editorCookie := testUser(t, a, 0)
+	ctx := context.Background()
+	router := a.Router()
+	workspaceID := uuid.NewString()
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspaces(id,name,owner_id) VALUES($1,'协作工作区',$2)", workspaceID, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	// 第二个写入者是同一工作区的编辑者，两人从同一个版本开始编辑。
+	if _, err := a.DB.Exec(ctx, "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'editor')", workspaceID, ownerID, editorID); err != nil {
+		t.Fatal(err)
+	}
+	created := testRequest(router, "POST", "/api/canvas-projects", map[string]any{"title": "协作画布", "snapshot": canvasTestSnapshot(""), "workspaceId": workspaceID}, ownerCookie)
+	if created.Code != 200 {
+		t.Fatalf("创建画布失败: %d %s", created.Code, created.Body.String())
+	}
+	projectID := str(object(responseRow(t, created)["project"])["id"])
+	first := canvasTestSnapshot("")
+	first["nodes"] = []any{map[string]any{"id": "owner-node", "type": "text", "metadata": map[string]any{}}}
+	second := canvasTestSnapshot("")
+	second["nodes"] = []any{map[string]any{"id": "editor-node", "type": "text", "metadata": map[string]any{}}}
+	committed := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": first, "expectedRevision": 0}, ownerCookie)
+	if committed.Code != 200 || object(responseRow(t, committed)["project"])["revision"] != float64(1) {
+		t.Fatalf("首个写入应成功并推进版本: %d %s", committed.Code, committed.Body.String())
+	}
+	conflict := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": second, "expectedRevision": 0}, editorCookie)
+	if conflict.Code != 409 || responseRow(t, conflict)["error"] != "canvas_revision_conflict" {
+		t.Fatalf("过期快照应返回版本冲突: %d %s", conflict.Code, conflict.Body.String())
+	}
+	stored, err := one(ctx, a.DB, "SELECT snapshot,revision FROM canvas_projects WHERE id=$1", projectID)
+	if err != nil || string(jsonBytes(stored["snapshot"])) != string(jsonBytes(first)) || integer(stored["revision"]) != 1 {
+		t.Fatalf("冲突不得覆盖已提交快照: %v %v", stored, err)
+	}
+	missing := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": second}, editorCookie)
+	if missing.Code != 400 {
+		t.Fatalf("内容编辑缺少版本应拒绝: %d %s", missing.Code, missing.Body.String())
+	}
+	move := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"workspaceId": ""}, ownerCookie)
+	if move.Code != 200 || object(responseRow(t, move)["project"])["revision"] != float64(2) {
+		t.Fatalf("工作区移动无需版本但仍须推进版本: %d %s", move.Code, move.Body.String())
+	}
+	detail := testRequest(router, "GET", "/api/canvas-projects/"+projectID, nil, ownerCookie)
+	if detail.Code != 200 || object(responseRow(t, detail)["project"])["revision"] != float64(2) {
+		t.Fatalf("画布详情应包含最新版本: %d %s", detail.Code, detail.Body.String())
+	}
+	list := testRequest(router, "GET", "/api/canvas-projects", nil, ownerCookie)
+	if list.Code != 200 {
+		t.Fatalf("画布列表失败: %d %s", list.Code, list.Body.String())
+	}
+	projects := responseRow(t, list)["projects"].([]any)
+	if len(projects) == 0 || object(projects[0])["revision"] != float64(2) {
+		t.Fatalf("画布列表应包含最新版本: %v", projects)
+	}
+	history, err := one(ctx, a.DB, "SELECT id FROM canvas_project_history WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1", projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := testRequest(router, "POST", "/api/canvas-projects/"+projectID+"/history/"+str(history["id"])+"/restore", nil, ownerCookie)
+	if restored.Code != 200 || object(responseRow(t, restored)["project"])["revision"] != float64(3) {
+		t.Fatalf("恢复历史应推进版本: %d %s", restored.Code, restored.Body.String())
 	}
 }
 

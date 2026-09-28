@@ -17,7 +17,7 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
     const channels: any[] = [];
     const browserStorage = new Map<string, string>();
     const auth: any = { __esModule: true, login: async ({ username }: { username: string }) => ({ id: username }) };
-    const canvasApi: any = { __esModule: true };
+    const canvasApi: any = { __esModule: true, onCanvasWorkspaceMove: () => {} };
     const assetApi: any = { __esModule: true };
     const profile: any = {};
     const imports: Record<string, any> = {

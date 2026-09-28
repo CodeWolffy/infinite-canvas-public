@@ -9,7 +9,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { listAssetPage } from "@/services/api/assets";
+import { ASSET_PAGE_SIZE, listAssetPage } from "@/services/api/assets";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, normalizeAsset, useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
@@ -48,6 +48,7 @@ export default function AssetsPage() {
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [importing, setImporting] = useState(false);
+    const [exportingSession, setExportingSession] = useState<number | null>(null);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [page, setPage] = useState(1);
@@ -64,6 +65,7 @@ export default function AssetsPage() {
     const content = Form.useWatch("content", form) || "";
     // 素材列表改为服务端分页：关键词与类型筛选随分页一起下发，避免只过滤当前页。
     const sessionVersion = useUserStore((state) => state.sessionVersion);
+    const exporting = exportingSession === sessionVersion;
     const assetsQuery = useQuery({
         queryKey: ["assets", sessionVersion, page, pageSize, kindFilter, keyword.trim()],
         queryFn: () => listAssetPage({ page, size: pageSize, kind: kindFilter, keyword }),
@@ -72,7 +74,6 @@ export default function AssetsPage() {
     const visibleAssets = (assetsQuery.data?.assets || []).map(normalizeAsset);
     const total = assetsQuery.data?.total || 0;
     const refreshAssets = () => { void queryClient.invalidateQueries({ queryKey: ["assets"] }); };
-    const validAssets = visibleAssets;
 
     const openCreate = () => {
         setEditingAsset(null);
@@ -186,11 +187,29 @@ export default function AssetsPage() {
     };
 
     const exportAllAssets = async () => {
-        if (!validAssets.length) {
-            message.warning(t("assets.noneToExport"));
-            return;
+        if (exporting) return;
+        const session = useUserStore.getState().sessionVersion;
+        const kind = kindFilter;
+        const search = keyword.trim();
+        setExportingSession(session);
+        try {
+            const assets: Asset[] = [];
+            let total = 0;
+            let nextPage = 1;
+            do {
+                const result = await listAssetPage({ page: nextPage++, size: ASSET_PAGE_SIZE, kind, keyword: search });
+                assertCurrentSession(session);
+                total = result.total;
+                assets.push(...result.assets.map(normalizeAsset));
+                if (!result.assets.length) break;
+            } while (assets.length < total);
+            if (!assets.length) message.warning(t("assets.noneToExport"));
+            else await exportAssets(assets, t("assets.packageName"));
+        } catch (error) {
+            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "素材导出失败");
+        } finally {
+            if (useUserStore.getState().sessionVersion === session) setExportingSession(null);
         }
-        await exportAssets(validAssets, t("assets.packageName"));
     };
 
     const importAssetZip = async (file?: File) => {
@@ -285,8 +304,10 @@ export default function AssetsPage() {
                                     type="button"
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={() => void exportAllAssets()}
+                                    disabled={exporting}
+                                    aria-busy={exporting}
                                 >
-                                    {t("assets.export")}
+                                    {exporting ? "导出中…" : t("assets.export")}
                                 </button>
                                 <button
                                     type="button"

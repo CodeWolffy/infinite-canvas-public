@@ -172,7 +172,7 @@ test("canvas clipboard reads cannot create images after session replacement", as
     const auth = session();
     let finish!: (value: any) => void; let uploads = 0;
     const { run } = load(callback("pages/canvas/hooks/use-canvas-clipboard.ts", "pasteSystemClipboard"), {
-        ...auth,
+        ...auth, canEdit: () => true,
         navigator: { clipboard: { read: async () => [{ types: ["image/png"], getType: () => new Promise((resolve) => { finish = resolve; }) }] } },
         createImageFileNode: async () => { uploads++; }, getCanvasCenter: () => ({ x: 0, y: 0 }),
         message: { success() {} }, t: (key: string) => key,
@@ -207,7 +207,7 @@ for (const [name, processor] of [["cropImageNode", "cropDataUrl"], ["splitImageN
         const auth = session();
         let finish!: (value: any) => void; let uploads = 0;
         const { run } = load(callback("pages/canvas/project.tsx", name), {
-            ...auth,
+            ...auth, canEditRef: { current: true },
             [processor]: () => new Promise((resolve) => { finish = resolve; }),
             uploadImage: async () => { uploads++; return { width: 1, height: 1 }; },
             fitNodeSize: () => ({ width: 1, height: 1 }), nanoid: () => "image", imageMetadata: () => ({}),

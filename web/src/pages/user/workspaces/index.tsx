@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button, Empty, Input, List, Modal, Popconfirm, Select, Spin, Table, Tag } from "antd";
 import { LogOut, Plus, Trash2, Users } from "lucide-react";
@@ -17,11 +17,16 @@ export default function WorkspacesPage() {
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const user = useUserStore((state) => state.user);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
     const adoptProject = useCanvasStore((state) => state.adoptProject);
-    const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
-    const [detailLoading, setDetailLoading] = useState(false);
+    const [workspaceResult, setWorkspaceResult] = useState<{ session: number; items: Workspace[] } | null>(null);
+    const workspaces = workspaceResult?.session === sessionVersion ? workspaceResult.items : [];
+    const [loadingSession, setLoadingSession] = useState<number | null>(null);
+    const loading = loadingSession !== sessionVersion || workspaceResult?.session !== sessionVersion;
+    const [detailResult, setDetailResult] = useState<{ session: number; value: WorkspaceDetail } | null>(null);
+    const [detailLoadingKey, setDetailLoadingKey] = useState("");
+    const listRequest = useRef(0);
+    const detailRequest = useRef(0);
     const [creating, setCreating] = useState(false);
     const [name, setName] = useState("");
     const [renameOpen, setRenameOpen] = useState(false);
@@ -31,70 +36,99 @@ export default function WorkspacesPage() {
     const [memberRole, setMemberRole] = useState<"editor" | "viewer">("editor");
     const [memberSaving, setMemberSaving] = useState(false);
     const selectedId = searchParams.get("id") || workspaces[0]?.id || "";
+    const detailLoading = detailLoadingKey === `${sessionVersion}:${selectedId}`;
+    const detail = detailResult?.session === sessionVersion && detailResult.value.workspace.id === selectedId ? detailResult.value : null;
+    const selectedIdRef = useRef(selectedId);
+    selectedIdRef.current = selectedId;
+    const isCurrent = useCallback((session: number, id?: string) =>
+        useUserStore.getState().sessionVersion === session && (id === undefined || selectedIdRef.current === id), []);
 
     const reloadList = useCallback(async () => {
+        const session = useUserStore.getState().sessionVersion;
+        const request = ++listRequest.current;
         const items = await listWorkspaces();
-        setWorkspaces(items);
+        if (isCurrent(session) && request === listRequest.current) setWorkspaceResult({ session, items });
         return items;
-    }, []);
+    }, [isCurrent]);
     const reloadDetail = useCallback(async (id: string) => {
+        const session = useUserStore.getState().sessionVersion;
+        const request = ++detailRequest.current;
+        setDetailResult(null);
         if (!id) {
-            setDetail(null);
+            setDetailLoadingKey("");
             return;
         }
-        setDetailLoading(true);
+        setDetailLoadingKey(`${session}:${id}`);
         try {
-            setDetail(await getWorkspace(id));
+            const value = await getWorkspace(id);
+            if (isCurrent(session, id) && request === detailRequest.current) setDetailResult({ session, value });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.loadFailed"));
-            setDetail(null);
+            if (isCurrent(session, id) && request === detailRequest.current) message.error(error instanceof Error ? error.message : t("workspace.loadFailed"));
         } finally {
-            setDetailLoading(false);
+            if (isCurrent(session, id) && request === detailRequest.current) setDetailLoadingKey("");
         }
-    }, [message, t]);
+    }, [isCurrent, message, t]);
 
     useEffect(() => {
-        setLoading(true);
+        const session = sessionVersion;
+        setLoadingSession(null);
+        setDetailResult(null);
         reloadList()
-            .catch((error) => message.error(error instanceof Error ? error.message : t("workspace.loadFailed")))
-            .finally(() => setLoading(false));
-    }, [reloadList, message, t]);
+            .catch((error) => {
+                if (isCurrent(session)) {
+                    setWorkspaceResult({ session, items: [] });
+                    message.error(error instanceof Error ? error.message : t("workspace.loadFailed"));
+                }
+            })
+            .finally(() => { if (isCurrent(session)) setLoadingSession(session); });
+    }, [sessionVersion, reloadList, isCurrent, message, t]);
     useEffect(() => {
         void reloadDetail(selectedId);
-    }, [selectedId, reloadDetail]);
+    }, [selectedId, sessionVersion, reloadDetail]);
 
-    const select = (id: string) => setSearchParams(id ? { id } : {});
+    const select = (id: string) => {
+        selectedIdRef.current = id;
+        detailRequest.current++;
+        setDetailResult(null);
+        setSearchParams(id ? { id } : {});
+    };
     const isOwner = detail?.workspace.myRole === "owner" || (detail ? detail.workspace.ownerId === user?.id : false);
 
     const create = async () => {
         const trimmed = name.trim();
-        if (!trimmed) return;
+        if (!trimmed || creating) return;
+        const session = useUserStore.getState().sessionVersion;
+        const selected = selectedId;
         setCreating(true);
         try {
             const workspace = await createWorkspace(trimmed);
+            if (!isCurrent(session, selected)) return;
             setName("");
-            await reloadList();
             select(workspace.id);
-            message.success(t("workspace.created"));
+            await reloadList();
+            if (isCurrent(session, workspace.id)) message.success(t("workspace.created"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.createFailed"));
+            if (isCurrent(session, selected)) message.error(error instanceof Error ? error.message : t("workspace.createFailed"));
         } finally {
-            setCreating(false);
+            if (isCurrent(session)) setCreating(false);
         }
     };
     const addMember = async () => {
         const username = memberName.trim();
-        if (!username || !detail) return;
+        if (!username || !detail || memberSaving) return;
+        const session = useUserStore.getState().sessionVersion;
+        const id = detail.workspace.id;
         setMemberSaving(true);
         try {
-            await addWorkspaceMember(detail.workspace.id, username, memberRole);
+            await addWorkspaceMember(id, username, memberRole);
+            if (!isCurrent(session, id)) return;
             setMemberName("");
-            await reloadDetail(detail.workspace.id);
-            message.success(t("workspace.memberAdded"));
+            await reloadDetail(id);
+            if (isCurrent(session, id)) message.success(t("workspace.memberAdded"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.memberAddFailed"));
+            if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.memberAddFailed"));
         } finally {
-            setMemberSaving(false);
+            if (isCurrent(session)) setMemberSaving(false);
         }
     };
     const openRename = () => {
@@ -103,57 +137,69 @@ export default function WorkspacesPage() {
         setRenameOpen(true);
     };
     const saveRename = async () => {
-        if (!detail) return;
+        if (!detail || renaming) return;
         const next = renameDraft.trim();
         if (!next) return;
         if (next === detail.workspace.name) {
             setRenameOpen(false);
             return;
         }
+        const session = useUserStore.getState().sessionVersion;
+        const id = detail.workspace.id;
         setRenaming(true);
         try {
-            await updateWorkspace(detail.workspace.id, next);
+            await updateWorkspace(id, next);
+            if (!isCurrent(session, id)) return;
             setRenameOpen(false);
-            await Promise.all([reloadList(), reloadDetail(detail.workspace.id)]);
-            message.success(t("workspace.moved"));
+            await Promise.all([reloadList(), reloadDetail(id)]);
+            if (isCurrent(session, id)) message.success(t("workspace.moved"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.renameFailed"));
+            if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.renameFailed"));
         } finally {
-            setRenaming(false);
+            if (isCurrent(session)) setRenaming(false);
         }
     };
     const removeWorkspace = async () => {
         if (!detail) return;
+        const session = useUserStore.getState().sessionVersion;
+        const id = detail.workspace.id;
         try {
-            await deleteWorkspace(detail.workspace.id);
+            await deleteWorkspace(id);
+            if (!isCurrent(session, id)) return;
             select("");
+            setDetailResult(null);
             await reloadList();
-            setDetail(null);
-            message.success(t("workspace.deleted"));
+            if (isCurrent(session)) message.success(t("workspace.deleted"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.deleteFailed"));
+            if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.deleteFailed"));
         }
     };
     const leave = async () => {
         if (!detail || !user) return;
+        const session = useUserStore.getState().sessionVersion;
+        const id = detail.workspace.id;
         try {
-            await removeWorkspaceMember(detail.workspace.id, user.id);
+            await removeWorkspaceMember(id, user.id);
+            if (!isCurrent(session, id)) return;
             select("");
+            setDetailResult(null);
             await reloadList();
-            setDetail(null);
-            message.success(t("workspace.left"));
+            if (isCurrent(session)) message.success(t("workspace.left"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.leaveFailed"));
+            if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.leaveFailed"));
         }
     };
     const createCanvas = async () => {
         if (!detail) return;
+        const session = useUserStore.getState().sessionVersion;
+        const id = detail.workspace.id;
         try {
-            const record = await createCanvasProject({ title: t("canvas.project.untitled"), snapshot: { nodes: [], connections: [] }, workspaceId: detail.workspace.id });
+            const record = await createCanvasProject({ title: t("canvas.project.untitled"), snapshot: { nodes: [], connections: [] }, workspaceId: id });
+            if (!isCurrent(session, id)) return;
             adoptProject(record);
             navigate(`/canvas/${record.id}`);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workspace.createCanvasFailed"));
+            if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.createCanvasFailed"));
         }
     };
 
@@ -255,7 +301,13 @@ export default function WorkspacesPage() {
                                                                 { label: t("workspace.roles.editor"), value: "editor" },
                                                                 { label: t("workspace.roles.viewer"), value: "viewer" },
                                                             ]}
-                                                            onChange={(role) => void updateWorkspaceMember(detail.workspace.id, member.userId, role).then(() => reloadDetail(detail.workspace.id)).catch((error) => message.error(error instanceof Error ? error.message : t("workspace.roleFailed")))}
+                                                            onChange={(role) => {
+                                                                const session = useUserStore.getState().sessionVersion;
+                                                                const id = detail.workspace.id;
+                                                                void updateWorkspaceMember(id, member.userId, role)
+                                                                    .then(() => { if (isCurrent(session, id)) return reloadDetail(id); })
+                                                                    .catch((error) => { if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.roleFailed")); });
+                                                            }}
                                                         />
                                                     ) : (
                                                         <Tag className="m-0">{t(ROLE_LABEL[member.role])}</Tag>
@@ -272,7 +324,16 @@ export default function WorkspacesPage() {
                                                             danger
                                                             icon={<Trash2 className="size-3.5" />}
                                                             aria-label={t("workspace.removeMember")}
-                                                            onClick={() => void removeWorkspaceMember(detail.workspace.id, member.userId).then(() => reloadDetail(detail.workspace.id)).then(reloadList).catch((error) => message.error(error instanceof Error ? error.message : t("workspace.removeFailed")))}
+                                                            onClick={() => {
+                                                                const session = useUserStore.getState().sessionVersion;
+                                                                const id = detail.workspace.id;
+                                                                void removeWorkspaceMember(id, member.userId)
+                                                                    .then(async () => {
+                                                                        if (!isCurrent(session, id)) return;
+                                                                        await Promise.all([reloadDetail(id), reloadList()]);
+                                                                    })
+                                                                    .catch((error) => { if (isCurrent(session, id)) message.error(error instanceof Error ? error.message : t("workspace.removeFailed")); });
+                                                            }}
                                                         />
                                                     ) : null,
                                             },

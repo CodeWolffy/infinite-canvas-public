@@ -1,6 +1,16 @@
 // SVG 节点:编辑与渲染 SVG,透明背景直接融入画布;无自身内容时可取上游文本节点里的 SVG 源码。
 import { definePlugin, useEffect, useRef, useState } from "@infinite-canvas/plugin-sdk";
 import type { CanvasNodeContentProps } from "@infinite-canvas/plugin-sdk";
+import DOMPurify from "dompurify";
+
+function sanitizeSvg(source: string): string {
+    const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
+    if (parsed.documentElement.localName !== "svg" || (parsed.documentElement.namespaceURI && parsed.documentElement.namespaceURI !== "http://www.w3.org/2000/svg")) return "";
+    const template = document.createElement("template");
+    template.innerHTML = DOMPurify.sanitize(source, { USE_PROFILES: { svg: true, svgFilters: true } });
+    const svg = template.content.firstElementChild;
+    return svg?.namespaceURI === "http://www.w3.org/2000/svg" && svg.localName === "svg" ? svg.outerHTML : "";
+}
 
 function SvgContent({ ctx }: CanvasNodeContentProps) {
     const [editing, setEditing] = useState(false);
@@ -12,7 +22,7 @@ function SvgContent({ ctx }: CanvasNodeContentProps) {
         .map((node) => node.metadata?.content)
         .find((text): text is string => typeof text === "string" && text.trim().startsWith("<svg"));
     const value = stored ?? "";
-    const svg = value.trim() || upstream || "";
+    const svg = sanitizeSvg(value.trim() || upstream || "");
 
     // 无自身内容但有上游 SVG:自动采用上游源码
     useEffect(() => {

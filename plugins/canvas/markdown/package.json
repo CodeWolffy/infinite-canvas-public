@@ -9,6 +9,10 @@
         "dev": "node build.mjs --watch",
         "typecheck": "tsc --noEmit"
     },
+    "dependencies": {
+        "dompurify": "3.4.16",
+        "marked": "14.1.4"
+    },
     "devDependencies": {
         "@infinite-canvas/plugin-sdk": "file:../sdk",
         "@types/react": "19.1.12",

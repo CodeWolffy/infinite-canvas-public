@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent as ReactChangeEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { ChangeEvent as ReactChangeEvent, Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, SetStateAction } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
@@ -158,6 +158,7 @@ function InfiniteCanvasPage() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const projectId = params.id || "";
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
     const localAgentConnected = useAgentStore((state) => state.connected);
     const localAgentActivity = useAgentStore((state) => state.activity);
     const localAgentEnabled = useAgentStore((state) => state.enabled);
@@ -174,6 +175,8 @@ function InfiniteCanvasPage() {
     const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const applyingHistoryRef = useRef(false);
     const historyPausedRef = useRef(false);
+    const restoredSnapshotRef = useRef<CanvasHistoryEntry | null>(null);
+    const restoredViewportRef = useRef<ViewportTransform | null>(null);
     const didInitialCenterRef = useRef(false);
     const rafRef = useRef<number | null>(null);
     const nodeDraggingRef = useRef(false);
@@ -205,24 +208,27 @@ function InfiniteCanvasPage() {
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
+    const readOnly = currentProject?.accessRole === "viewer";
+    const accessRoleRef = useRef(currentProject?.accessRole);
+    accessRoleRef.current = currentProject?.accessRole;
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     useEffect(() => {
         const handleBeforeUnload = () => {
-            if (projectId) {
+            if (projectId && !readOnly) {
                 void flushProject(projectId);
             }
         };
         window.addEventListener("beforeunload", handleBeforeUnload);
         return () => {
             window.removeEventListener("beforeunload", handleBeforeUnload);
-            if (projectId) {
+            if (projectId && !readOnly) {
                 void flushProject(projectId);
             }
         };
-    }, [projectId, flushProject]);
-    const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
-    const [connections, setConnections] = useState<CanvasConnection[]>([]);
+    }, [projectId, flushProject, readOnly]);
+    const [nodes, setRawNodes] = useState<CanvasNodeData[]>([]);
+    const [connections, setRawConnections] = useState<CanvasConnection[]>([]);
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
@@ -246,6 +252,16 @@ function InfiniteCanvasPage() {
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
     const loadedProjectIdRef = useRef<string | null>(null);
+    const loadedSessionVersionRef = useRef<number | null>(null);
+    const canEdit = hydrated && projectLoaded && loadedProjectIdRef.current === projectId && loadedSessionVersionRef.current === sessionVersion && !readOnly;
+    const canEditRef = useRef(false);
+    canEditRef.current = canEdit;
+    const setNodes: Dispatch<SetStateAction<CanvasNodeData[]>> = useCallback((value) => {
+        if (canEditRef.current && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion) setRawNodes(value);
+    }, []);
+    const setConnections: Dispatch<SetStateAction<CanvasConnection[]>> = useCallback((value) => {
+        if (canEditRef.current && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion) setRawConnections(value);
+    }, []);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
@@ -450,20 +466,24 @@ function InfiniteCanvasPage() {
         if (!hydrated) return;
         setProjectLoaded(false);
         loadedProjectIdRef.current = null;
+        loadedSessionVersionRef.current = null;
+        restoredSnapshotRef.current = null;
+        restoredViewportRef.current = null;
+        const sessionVersion = useUserStore.getState().sessionVersion;
         let cancelled = false;
 
         const restore = async () => {
             const project = await loadProject(projectId).catch(() => undefined);
-            if (cancelled) return;
+            if (cancelled || useUserStore.getState().sessionVersion !== sessionVersion) return;
             if (!project) {
                 navigate("/canvas", { replace: true });
                 return;
             }
             const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes, project.connections));
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            if (cancelled) return;
-            setNodes(restoredNodes);
-            setConnections(project.connections);
+            if (cancelled || useUserStore.getState().sessionVersion !== sessionVersion) return;
+            setRawNodes(restoredNodes);
+            setRawConnections(project.connections);
             setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
             setBackgroundMode(project.backgroundMode);
@@ -484,29 +504,42 @@ function InfiniteCanvasPage() {
             };
             setHistoryState({ canUndo: false, canRedo: false });
             loadedProjectIdRef.current = project.id;
+            loadedSessionVersionRef.current = sessionVersion;
             setProjectLoaded(true);
         };
         void restore();
         return () => {
             cancelled = true;
         };
-    }, [hydrated, navigate, loadProject, projectId]);
+    }, [hydrated, navigate, loadProject, projectId, sessionVersion]);
 
     useEffect(() => {
-        if (!projectLoaded) return;
+        setSelectedNodeIds(new Set());
+        setSelectedConnectionId(null);
+        setContextMenu(null);
+        setDialogNodeId(null);
+        setHistoryModalOpen(false);
+        setAssetPickerOpen(false);
+        setClearConfirmOpen(false);
+    }, [sessionVersion]);
+
+    useEffect(() => {
+        if (!canEdit) return;
         nodesRef.current.filter(hasResumableVideoTask).forEach((node) => void pollVideoNodeTask(node, true));
         nodesRef.current.filter((node) => node.type === CanvasNodeType.Audio && node.metadata?.audioTaskId && !node.metadata.content).forEach((node) => void pollAudioNodeTask(node));
         // Resume once after the current canvas is restored, not on later config identity changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [projectLoaded]);
+    }, [projectLoaded, canEdit]);
 
     useEffect(() => {
-        if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
+        if (!canEdit || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
         if (!searchParams.has("agentUrl") && !localAgentEnabled && !fragmentBootstrap) openAgentPanel();
-    }, [fragmentBootstrap, localAgentEnabled, openAgentPanel, projectLoaded, searchParams]);
+    }, [fragmentBootstrap, localAgentEnabled, openAgentPanel, projectLoaded, searchParams, canEdit]);
 
     useEffect(() => {
-        if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
+        if (!canEdit || applyingHistoryRef.current || historyPausedRef.current) return;
+        const restored = restoredSnapshotRef.current;
+        if (restored && restored.nodes === nodes && restored.connections === connections && restored.chatSessions === chatSessions && restored.activeChatId === activeChatId && restored.backgroundMode === backgroundMode && restored.showImageInfo === showImageInfo) return;
         const next = createHistoryEntry();
         const previous = lastHistoryRef.current;
         if (
@@ -521,6 +554,7 @@ function InfiniteCanvasPage() {
 
         if (historyCommitTimerRef.current) clearTimeout(historyCommitTimerRef.current);
         historyCommitTimerRef.current = setTimeout(() => {
+            if (!canEditRef.current) return;
             const current = createHistoryEntry();
             const last = lastHistoryRef.current;
             if (!last) return;
@@ -537,24 +571,61 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, isNodeResizing, nodes, projectLoaded, showImageInfo]);
+    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, isNodeResizing, nodes, projectLoaded, showImageInfo, canEdit]);
 
-    useCanvasGenerationRecovery({ nodes, connections, projectLoaded, setNodes, t, generationRequestsRef });
+    useCanvasGenerationRecovery({ nodes, connections, projectLoaded: canEdit, setNodes, t, generationRequestsRef });
 
     useEffect(() => {
-        if (!projectLoaded || loadedProjectIdRef.current !== projectId || historyPausedRef.current) return;
+        if (!canEdit || historyPausedRef.current) return;
+        const restored = restoredSnapshotRef.current;
+        if (restored) {
+            if (restored.nodes === nodes && restored.connections === connections && restored.chatSessions === chatSessions && restored.activeChatId === activeChatId && restored.backgroundMode === backgroundMode && restored.showImageInfo === showImageInfo) return;
+            restoredSnapshotRef.current = null;
+        }
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
-    }, [activeChatId, backgroundMode, chatSessions, connections, isNodeResizing, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+    }, [activeChatId, backgroundMode, chatSessions, connections, isNodeResizing, nodes, projectId, projectLoaded, showImageInfo, updateProject, canEdit]);
+
+    useEffect(() => {
+        if (canEdit) return;
+        canEditRef.current = false;
+        dragRef.current.isDraggingNode = false;
+        nodeDraggingRef.current = false;
+        historyPausedRef.current = false;
+        setIsNodeDragging(false);
+        setIsNodeResizing(false);
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        generationRequestsRef.current.forEach((request) => request.controller.abort());
+        generationRequestsRef.current.clear();
+        setDialogNodeId(null);
+        setReferencePickerNodeId(null);
+        setNodeCreatePosition(null);
+        setContextMenu(null);
+        setHistoryModalOpen(false);
+        setAssetPickerOpen(false);
+        setClearConfirmOpen(false);
+        setPendingConnectionCreate(null);
+        setConnectingParams(null);
+        if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
+        viewportSaveTimerRef.current = null;
+        if (historyCommitTimerRef.current) clearTimeout(historyCommitTimerRef.current);
+        historyCommitTimerRef.current = null;
+    }, [canEdit]);
 
     useEffect(() => {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
     }, [dialogNodeId]);
 
     useEffect(() => {
-        if (!projectLoaded || loadedProjectIdRef.current !== projectId) return;
+        if (!canEdit) return;
+        if (restoredViewportRef.current === viewport) {
+            restoredViewportRef.current = null;
+            return;
+        }
+        restoredViewportRef.current = null;
         if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         viewportSaveTimerRef.current = setTimeout(() => {
-            if (loadedProjectIdRef.current !== projectId) return;
+            if (!canEditRef.current || loadedProjectIdRef.current !== projectId) return;
             updateProject(projectId, { viewport: viewportRef.current });
             viewportSaveTimerRef.current = null;
             // 视口走独立的小写入，间隔可以比内容保存更宽松。
@@ -562,7 +633,7 @@ function InfiniteCanvasPage() {
         return () => {
             if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         };
-    }, [projectId, projectLoaded, updateProject, viewport]);
+    }, [projectId, projectLoaded, updateProject, viewport, canEdit]);
 
     useLayoutEffect(() => {
         nodesRef.current = nodes;
@@ -825,7 +896,7 @@ function InfiniteCanvasPage() {
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
-        paused: isNodeResizing,
+        paused: isNodeResizing || !canEdit,
         nodes,
         connections,
         selectedNodeIds,
@@ -852,10 +923,14 @@ function InfiniteCanvasPage() {
         viewportRef,
         setNodes,
         setDialogNodeId,
-        applyAgentOps,
+        applyAgentOps: (ops) => {
+            if (!canEditRef.current || accessRoleRef.current === "viewer" || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
+            return applyAgentOps(ops);
+        },
     });
     const createNode = useCallback(
         (type: CanvasNodeTypeId, position?: Position) => {
+            if (!canEditRef.current) return;
             const targetPosition = position || getCanvasCenter();
             const configMetadata =
                 type === CanvasNodeType.Config
@@ -888,7 +963,7 @@ function InfiniteCanvasPage() {
 
     const deleteNodes = useCallback(
         (ids: Set<string>) => {
-            if (!ids.size) return;
+            if (!canEditRef.current || !ids.size) return;
             const allIds = new Set(ids);
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));
@@ -1002,6 +1077,7 @@ function InfiniteCanvasPage() {
     }, [cancelPendingConnectionCreate]);
 
     const clearCanvas = useCallback(() => {
+        if (!canEditRef.current) return;
         setNodes([]);
         setConnections([]);
         setInfoNodeId(null);
@@ -1083,13 +1159,14 @@ function InfiniteCanvasPage() {
     );
 
     const applyHistory = useCallback((entry: CanvasHistoryEntry) => {
+        if (!canEditRef.current) return;
         if (historyCommitTimerRef.current) {
             clearTimeout(historyCommitTimerRef.current);
             historyCommitTimerRef.current = null;
         }
         applyingHistoryRef.current = true;
-        setNodes(entry.nodes);
-        setConnections(entry.connections);
+        setRawNodes(entry.nodes);
+        setRawConnections(entry.connections);
         setChatSessions(entry.chatSessions);
         setActiveChatId(entry.activeChatId);
         setBackgroundMode(entry.backgroundMode);
@@ -1097,14 +1174,15 @@ function InfiniteCanvasPage() {
         setSelectedNodeIds(new Set());
         setSelectedConnectionId(null);
         setContextMenu(null);
+        lastHistoryRef.current = entry;
         setTimeout(() => {
-            lastHistoryRef.current = entry;
             applyingHistoryRef.current = false;
             setHistoryState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
         });
     }, []);
 
     const undoCanvas = useCallback(() => {
+        if (!canEditRef.current) return;
         const previous = historyRef.current.past.pop();
         const current = lastHistoryRef.current;
         if (!previous || !current) return;
@@ -1113,6 +1191,7 @@ function InfiniteCanvasPage() {
     }, [applyHistory]);
 
     const redoCanvas = useCallback(() => {
+        if (!canEditRef.current) return;
         const next = historyRef.current.future.pop();
         const current = lastHistoryRef.current;
         if (!next || !current) return;
@@ -1126,6 +1205,7 @@ function InfiniteCanvasPage() {
     }, [createProject, navigate, t]);
 
     const deleteCurrentProject = useCallback(async () => {
+        if (loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion || !useCanvasStore.getState().projects.find((project) => project.id === projectId)?.canDelete) return;
         await deleteProjects([projectId]);
         cleanupAssetImages();
         navigate("/canvas");
@@ -1211,6 +1291,7 @@ function InfiniteCanvasPage() {
 
     const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
         event.stopPropagation();
+        if (!canEditRef.current) return;
         // Capture already selected the node; this only starts dragging, with a fallback selection if capture did not run.
         const currentNodes = nodesRef.current;
         const nextSelected = pendingSelectionRef.current ?? selectNodeByEvent(event, nodeId).nextSelected;
@@ -1248,6 +1329,7 @@ function InfiniteCanvasPage() {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
+        if (!canEditRef.current) return;
         if (!dragRef.current.isDraggingNode) return;
 
         const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.size === 1;
@@ -1416,6 +1498,7 @@ function InfiniteCanvasPage() {
     }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
 
     const { copySelectedNodes, pasteCopiedNodes, pasteSystemClipboard, createImageFileNode, handleDrop } = useCanvasClipboard({
+        canEdit: () => canEditRef.current && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion,
         nodesRef,
         connectionsRef,
         selectedNodeIdsRef,
@@ -1473,18 +1556,19 @@ function InfiniteCanvasPage() {
         undo: undoCanvas,
         redo: redoCanvas,
         selectAll: selectAllNodes,
-        group: groupSelectedNodes,
-        ungroup: ungroupSelectedNodes,
+        group: () => canEditRef.current && groupSelectedNodes(),
+        ungroup: () => canEditRef.current && ungroupSelectedNodes(),
         copy: copySelectedNodes,
         paste: pasteCopiedNodes,
         pasteSystem: () => void pasteSystemClipboard(),
-        deleteSelection: deleteSelectedNodes,
+        deleteSelection: () => { if (canEditRef.current) deleteSelectedNodes(); },
         escape: escapeCanvasInteraction,
     });
 
     const handleConnectStart = useCallback(
         (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
             event.stopPropagation();
+            if (!canEditRef.current) return;
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             setConnecting({ nodeId, handleType });
             connectionTargetNodeIdRef.current = null;
@@ -1509,10 +1593,12 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleNodeResizeStart = useCallback(() => {
+        if (!canEditRef.current) return;
         historyPausedRef.current = true;
         setIsNodeResizing(true);
     }, []);
     const handleNodeResizeEnd = useCallback(() => {
+        if (!canEditRef.current) return;
         historyPausedRef.current = false;
         setIsNodeResizing(false);
     }, []);
@@ -1640,6 +1726,7 @@ function InfiniteCanvasPage() {
 
     const captureVideoNodeFrame = useCallback(
         async (nodeId: string, position: VideoFramePosition) => {
+            if (!canEditRef.current) return;
             const sessionVersion = useUserStore.getState().sessionVersion;
             setContextMenu(null);
             const node = nodesRef.current.find((item) => item.id === nodeId);
@@ -1767,7 +1854,7 @@ function InfiniteCanvasPage() {
     );
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
-        if (!node.metadata?.content) return;
+        if (!canEditRef.current || !node.metadata?.content) return;
         const sessionVersion = useUserStore.getState().sessionVersion;
         const cropped = await cropDataUrl(node.metadata.content, crop);
         assertCurrentSession(sessionVersion);
@@ -1796,7 +1883,7 @@ function InfiniteCanvasPage() {
 
     const splitImageNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageSplitParams) => {
-            if (!node.metadata?.content) return;
+            if (!canEditRef.current || !node.metadata?.content) return;
             const sessionVersion = useUserStore.getState().sessionVersion;
             setSplitNodeId(null);
             const pieces = await splitDataUrl(node.metadata.content, params);
@@ -1837,7 +1924,7 @@ function InfiniteCanvasPage() {
 
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
-            if (!node.metadata?.content) return;
+            if (!canEditRef.current || !node.metadata?.content) return;
             const generationConfig = { ...buildGenerationConfig(config, node, "image"), count: "1", size: node.metadata?.size || "auto" };
             if (payload.generate && !hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
@@ -1905,7 +1992,7 @@ function InfiniteCanvasPage() {
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
-        if (!node.metadata?.content) return;
+        if (!canEditRef.current || !node.metadata?.content) return;
         const sessionVersion = useUserStore.getState().sessionVersion;
         setUpscaleNodeId(null);
         const upscaled = await upscaleDataUrl(node.metadata.content, params);
@@ -1934,7 +2021,7 @@ function InfiniteCanvasPage() {
 
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
-            if (!node.metadata?.content) return;
+            if (!canEditRef.current || !node.metadata?.content) return;
             const generationConfig = { ...buildGenerationConfig(config, node, "image"), count: "1" };
             if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
@@ -1992,12 +2079,15 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleUploadRequest = useCallback((nodeId?: string, position?: Position) => {
+        if (!canEditRef.current) return;
         uploadTargetRef.current = { nodeId, position };
         imageInputRef.current?.click();
     }, []);
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
+            const sessionVersion = useUserStore.getState().sessionVersion;
+            if (!canEditRef.current) { event.target.value = ""; return; }
             const files = Array.from(event.target.files || []).filter(isSupportedCanvasImage);
             if (!files.length) {
                 uploadTargetRef.current = null;
@@ -2020,6 +2110,7 @@ function InfiniteCanvasPage() {
 
                 // Replace the target node with the first file.
                 const image = await uploadImage(first);
+                if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
                 const s = fitNodeSize(image.width, image.height);
                 setNodes((prev) =>
                     prev.map((node) =>
@@ -2055,14 +2146,14 @@ function InfiniteCanvasPage() {
                 for (let i = 0; i < rest.length; i++) {
                     const offsetPos = { x: basePosition.x + (i + 1) * STAGGER, y: basePosition.y + (i + 1) * STAGGER };
                     const f = rest[i];
-                    void createImageFileNode(f, offsetPos);
+                    void createImageFileNode(f, offsetPos, sessionVersion);
                 }
             } else {
                 // Without a replacement target, create all files near the canvas center.
                 for (let i = 0; i < files.length; i++) {
                     const offsetPos = { x: basePosition.x + i * STAGGER, y: basePosition.y + i * STAGGER };
                     const f = files[i];
-                    void createImageFileNode(f, offsetPos);
+                    void createImageFileNode(f, offsetPos, sessionVersion);
                 }
             }
 
@@ -2078,6 +2169,7 @@ function InfiniteCanvasPage() {
     }, [currentProject?.title, t]);
 
     const finishTitleEditing = useCallback(() => {
+        if (!canEditRef.current) { setTitleEditing(false); return; }
         const nextTitle = titleDraft.trim();
         if (nextTitle) void renameProject(projectId, nextTitle);
         setTitleEditing(false);
@@ -2091,6 +2183,7 @@ function InfiniteCanvasPage() {
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
+            if (!canEditRef.current || accessRoleRef.current === "viewer" || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(config, sourceNode, mode);
             if (!hasPlatformModel(generationConfig, generationConfig.model)) {
@@ -2647,6 +2740,7 @@ function InfiniteCanvasPage() {
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData, imageId?: string) => {
+            if (!canEditRef.current || accessRoleRef.current === "viewer" || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
             const sessionVersion = useUserStore.getState().sessionVersion;
             if (hasResumableVideoTask(node)) {
                 await pollVideoNodeTask(node);
@@ -2853,6 +2947,7 @@ function InfiniteCanvasPage() {
 
     const generateImageFromTextNode = useCallback(
         (node: CanvasNodeData) => {
+            if (!canEditRef.current) return;
             const prompt = (node.metadata?.content || node.metadata?.prompt || "").trim();
             if (!prompt) {
                 message.warning(t("canvas.projectPage.emptyTextImage"));
@@ -2890,9 +2985,14 @@ function InfiniteCanvasPage() {
 
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage) => {
+            if (!canEditRef.current) return;
+            const sessionVersion = useUserStore.getState().sessionVersion;
             const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
+            if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
             await ensureImagePreview(storedImage.storageKey);
+            if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
+            if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
             const config = fitNodeSize(meta.width, meta.height);
             const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -2906,6 +3006,7 @@ function InfiniteCanvasPage() {
                 metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }), prompt: image.prompt },
             };
 
+            if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
             setNodes((prev) => [...prev, node]);
             setSelectedNodeIds(new Set([id]));
             setSelectedConnectionId(null);
@@ -2931,6 +3032,7 @@ function InfiniteCanvasPage() {
 
     const handleAssetInsert = useCallback(
         (payload: InsertAssetPayload) => {
+            if (!canEditRef.current) return;
             if (payload.kind === "text") {
                 insertAssistantText(payload.content, payload.title);
             } else if (payload.kind === "audio") {
@@ -2982,6 +3084,7 @@ function InfiniteCanvasPage() {
     }, []);
     const handleNodeRetry = useCallback(
         (node: CanvasNodeData) => {
+            if (!canEditRef.current) return;
             if (node.type === CanvasNodeType.Text && (node.metadata?.textCount || 1) > 1) {
                 void generateNodeRef.current?.(node.id, "text", node.metadata?.prompt || "");
                 return;
@@ -2993,6 +3096,7 @@ function InfiniteCanvasPage() {
     const handleNodeContextMenu = useCallback((event: ReactMouseEvent, nodeId: string) => {
         event.preventDefault();
         event.stopPropagation();
+        if (!canEditRef.current) return;
         setSelectedNodeIds((current) => (current.has(nodeId) ? current : new Set([nodeId])));
         setSelectedConnectionId(null);
         setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId });
@@ -3055,7 +3159,7 @@ function InfiniteCanvasPage() {
         [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
     );
 
-    if (!projectLoaded) return <CanvasRefreshShell />;
+    if (!projectLoaded || !hydrated || loadedProjectIdRef.current !== projectId || loadedSessionVersionRef.current !== sessionVersion) return <CanvasRefreshShell />;
 
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
@@ -3069,21 +3173,21 @@ function InfiniteCanvasPage() {
                     onStartTitleEditing={startTitleEditing}
                     onFinishTitleEditing={finishTitleEditing}
                     onCancelTitleEditing={() => setTitleEditing(false)}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
+                    canUndo={canEdit && historyState.canUndo}
+                    canRedo={canEdit && historyState.canRedo}
                     onHome={() => navigate("/")}
                     onProjects={() => navigate("/canvas")}
                     onCreateProject={createAndOpenProject}
                     onDeleteProject={deleteCurrentProject}
                     onExportProject={exportCurrentProject}
-                    onImportImage={() => handleUploadRequest()}
-                    onOpenHistory={() => setHistoryModalOpen(true)}
+                    onImportImage={() => { if (canEditRef.current) handleUploadRequest(); }}
+                    onOpenHistory={readOnly ? undefined : () => setHistoryModalOpen(true)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     agentOpen={agentPanelOpen}
                     compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
                     onToggleAgent={toggleAgentPanel}
-                    readOnly={currentProject?.accessRole === "viewer"}
+                    readOnly={readOnly}
                     workspaceName={currentProject?.workspaceName}
                     onShare={currentProject?.accessRole === "owner" ? () => setShareDialogOpen(true) : undefined}
                 />
@@ -3102,7 +3206,7 @@ function InfiniteCanvasPage() {
                     }}
                     onCanvasDeselect={referencePickerNodeId ? undefined : deselectCanvas}
                     onCanvasDoubleClick={(event) => {
-                        if (referencePickerNodeId) return;
+                        if (referencePickerNodeId || !canEditRef.current) return;
                         setContextMenu(null);
                         setNodeCreatePosition(screenToCanvas(event.clientX, event.clientY));
                     }}
@@ -3205,7 +3309,7 @@ function InfiniteCanvasPage() {
                 </InfiniteCanvas>
 
                 <CanvasNodeHoverToolbar
-                    node={isNodeDragging || isNodeResizing || nodeImageSettingsOpen || expandedBatchNodeIds.has(toolbarNode?.id || "") ? null : toolbarNode}
+                    node={readOnly || isNodeDragging || isNodeResizing || nodeImageSettingsOpen || expandedBatchNodeIds.has(toolbarNode?.id || "") ? null : toolbarNode}
                     viewport={viewport}
                     extraTools={toolbarNode ? buildNodeToolbarItems(toolbarNode) : undefined}
                     onKeep={keepNodeToolbar}
@@ -3232,7 +3336,7 @@ function InfiniteCanvasPage() {
                     onUngroup={(node) => ungroupSelection(new Set([node.id]))}
                 />
 
-                {hasMultipleSelectedNodes && !selectionBox ? (
+                {!readOnly && hasMultipleSelectedNodes && !selectionBox ? (
                     <CanvasSelectionToolbar
                         nodes={selectedNodes}
                         viewport={viewport}
@@ -3244,11 +3348,11 @@ function InfiniteCanvasPage() {
                     />
                 ) : null}
 
-                <CanvasToolbar
+                {!readOnly ? <CanvasToolbar
                     selectedCount={selectedNodeIds.size}
                     canvasTool={canvasTool}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
+                    canUndo={canEdit && historyState.canUndo}
+                    canRedo={canEdit && historyState.canRedo}
                     backgroundMode={backgroundMode}
                     showImageInfo={showImageInfo}
                     onAddImage={() => createNode(CanvasNodeType.Image)}
@@ -3264,7 +3368,7 @@ function InfiniteCanvasPage() {
                     onCanvasToolChange={setCanvasTool}
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
-                />
+                /> : <div className="pointer-events-auto absolute bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg px-3 py-2 text-sm" style={{ background: theme.toolbar.panel, color: theme.node.muted }}>{t("workspace.readOnlyBadge")}</div>}
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
@@ -3357,6 +3461,8 @@ function InfiniteCanvasPage() {
                     open={historyModalOpen}
                     onClose={() => setHistoryModalOpen(false)}
                     onRestored={async (restoredRecord) => {
+                        if (!canEditRef.current) return;
+                        const sessionVersion = useUserStore.getState().sessionVersion;
                         const snapshot = (restoredRecord.snapshot && typeof restoredRecord.snapshot === "object" ? restoredRecord.snapshot : {}) as Partial<{
                             nodes: CanvasNodeData[];
                             connections: CanvasConnection[];
@@ -3371,9 +3477,17 @@ function InfiniteCanvasPage() {
                         const rawSessions = snapshot.chatSessions || [];
                         const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(rawNodes, rawConnections));
                         const restoredSessions = await hydrateAssistantImages(rawSessions);
-
-                        setNodes(restoredNodes);
-                        setConnections(rawConnections);
+                        if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
+                        if (historyCommitTimerRef.current) clearTimeout(historyCommitTimerRef.current);
+                        historyCommitTimerRef.current = null;
+                        const entry: CanvasHistoryEntry = { nodes: restoredNodes, connections: rawConnections, chatSessions: restoredSessions, activeChatId: snapshot.activeChatId || null, backgroundMode: snapshot.backgroundMode || "lines", showImageInfo: snapshot.showImageInfo || false };
+                        restoredSnapshotRef.current = entry;
+                        lastHistoryRef.current = entry;
+                        restoredViewportRef.current = snapshot.viewport || null;
+                        if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
+                        viewportSaveTimerRef.current = null;
+                        setRawNodes(restoredNodes);
+                        setRawConnections(rawConnections);
                         setChatSessions(restoredSessions);
                         setActiveChatId(snapshot.activeChatId || null);
                         setBackgroundMode(snapshot.backgroundMode || "lines");

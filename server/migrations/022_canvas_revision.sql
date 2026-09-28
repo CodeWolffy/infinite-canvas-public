@@ -1,0 +1,1 @@
+ALTER TABLE canvas_projects ADD COLUMN revision BIGINT NOT NULL DEFAULT 0;

@@ -30,6 +30,18 @@ func shareView(row Row) Row {
 	return Row{"token": row["token"], "url": "/s/" + str(row["token"]), "createdAt": row["createdAt"]}
 }
 
+// publicCanvasSnapshot 只移除画布助手私有对话，不改动源画布的快照。
+func publicCanvasSnapshot(value any) map[string]any {
+	snapshot := object(value)
+	result := make(map[string]any, len(snapshot))
+	for key, field := range snapshot {
+		if key != "chatSessions" && key != "activeChatId" {
+			result[key] = field
+		}
+	}
+	return result
+}
+
 // activeShare 按 token 查找未撤销的分享；token 即访问凭证，不在接口里额外校验登录态。
 func (a *App) activeShare(ctx context.Context, token string) (Row, error) {
 	if len(token) < 32 || len(token) > 128 {
@@ -125,6 +137,7 @@ func (a *App) publicShareRoutes(r *gin.Engine) {
 			if err != nil {
 				return nil, err
 			}
+			project["snapshot"] = publicCanvasSnapshot(project["snapshot"])
 			return gin.H{"kind": "canvas", "canvas": project}, nil
 		}
 		asset, err := one(ctx, a.DB, `SELECT s.id,s.type,s.title,s.content,s.media_id,s.metadata,s.created_at,

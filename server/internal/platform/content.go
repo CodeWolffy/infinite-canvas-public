@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const canvasSummary = "id,title,created_at,updated_at,coalesce(jsonb_array_length(snapshot->'nodes'),0) AS node_count,coalesce(jsonb_array_length(snapshot->'connections'),0) AS connection_count"
+const canvasSummary = "id,title,revision,created_at,updated_at,coalesce(jsonb_array_length(snapshot->'nodes'),0) AS node_count,coalesce(jsonb_array_length(snapshot->'connections'),0) AS connection_count"
 
 func canvasSnapshot(value any) error {
 	m, ok := value.(map[string]any)
@@ -156,10 +156,11 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 	}))
 	saveProject := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
-			Title       *string        `json:"title"`
-			Snapshot    map[string]any `json:"snapshot"`
-			Viewport    map[string]any `json:"viewport"`
-			WorkspaceID *string        `json:"workspaceId"`
+			Title            *string        `json:"title"`
+			Snapshot         map[string]any `json:"snapshot"`
+			Viewport         map[string]any `json:"viewport"`
+			WorkspaceID      *string        `json:"workspaceId"`
+			ExpectedRevision *int64         `json:"expectedRevision"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -210,12 +211,21 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 				if _, err := tx.Exec(ctx, "INSERT INTO canvas_projects(id,user_id,title,snapshot,workspace_id) VALUES($1,$2,$3,$4,$5)", id, userID, *input.Title, jsonBytes(input.Snapshot), workspace); err != nil {
 					return err
 				}
-				oldProject, err := one(ctx, tx, "SELECT id,user_id FROM canvas_projects WHERE id=$1 FOR UPDATE", id)
+			} else {
+				oldProject, err := one(ctx, tx, "SELECT id,user_id,revision FROM canvas_projects WHERE id=$1 FOR UPDATE", id)
 				if err != nil {
 					return err
 				}
 				if err := projectWriteAccess(ctx, tx, id, userID); err != nil {
 					return err
+				}
+				if input.Title != nil || input.Snapshot != nil || input.Viewport != nil {
+					if input.ExpectedRevision == nil || *input.ExpectedRevision < 0 {
+						return problem(400, "invalid_revision", "保存画布内容必须提供有效的 expectedRevision")
+					}
+				}
+				if input.ExpectedRevision != nil && *input.ExpectedRevision != integer(oldProject["revision"]) {
+					return problem(409, "canvas_revision_conflict", "画布已被其他操作修改，本地编辑已保留；请先核对远端内容并明确处理冲突，普通重试不会覆盖远端修改")
 				}
 				if input.WorkspaceID != nil {
 					if str(oldProject["userId"]) != userID && currentUser(c).Role != "admin" {
@@ -274,6 +284,11 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			}
 			if input.Title != nil {
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET title=$2,updated_at=now() WHERE id=$1", id, strings.TrimSpace(*input.Title)); err != nil {
+					return err
+				}
+			}
+			if !create && (input.Title != nil || input.Snapshot != nil || input.Viewport != nil || input.WorkspaceID != nil) {
+				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET revision=revision+1 WHERE id=$1", id); err != nil {
 					return err
 				}
 			}
@@ -376,7 +391,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			if err = syncMediaRefs(ctx, tx, "canvas", id, u.ID, extractMediaIDs(history["snapshot"])); err != nil {
 				return err
 			}
-			if _, err = tx.Exec(ctx, "UPDATE canvas_projects SET title=$2,snapshot=$3,updated_at=now() WHERE id=$1", id, history["title"], jsonBytes(history["snapshot"])); err != nil {
+			if _, err = tx.Exec(ctx, "UPDATE canvas_projects SET title=$2,snapshot=$3,revision=revision+1,updated_at=now() WHERE id=$1", id, history["title"], jsonBytes(history["snapshot"])); err != nil {
 				return err
 			}
 			if err = trimCanvasHistory(ctx, tx, id); err != nil {

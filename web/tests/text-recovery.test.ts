@@ -68,6 +68,7 @@ const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-reco
         findChannelModel: () => ({ model: { reasoningEfforts } }),
         useUserStore: { getState: () => user },
         assertCurrentSession: (version: number) => { if (user.sessionVersion !== version) throw new DOMException("changed session", "AbortError"); },
+        canEditRef: { current: true }, accessRoleRef: { current: "owner" }, loadedSessionVersionRef: { current: 1 },
         textIds: ["a", "b"].slice(0, count), rootId: "node", nodeId: "source", projectId: "project", sourceNode: nodes[0], generationConfig: { model: "model", reasoningEffort }, generationContext: {}, effectivePrompt: "question", controller: new AbortController(), isConfigNode: true,
         NODE_STATUS_LOADING: "loading", NODE_STATUS_SUCCESS: "success", NODE_STATUS_ERROR: "error", NODE_STATUS_IDLE: "idle", CanvasNodeType: { Text: "text", Config: "config", Image: "image" },
         buildNodeResponseMessages: () => [{ role: "user", content: "question" }], isGenerationCanceled: (error: any) => error?.name === "AbortError", t: (key: string) => key,

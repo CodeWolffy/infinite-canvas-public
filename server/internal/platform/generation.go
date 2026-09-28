@@ -192,8 +192,10 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 					delete(input.Parameters, "durationSeconds")
 				}
 			}
-			if err = projectAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
-				return err
+			if input.CanvasProjectID != "" {
+				if err = projectWriteAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
+					return err
+				}
 			}
 			if _, err = tx.Exec(ctx, "INSERT INTO generation_batches(id,user_id,model_id,canvas_project_id,capability,prompt,requested_count,parameters,request_key,request_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", id, u.ID, input.ModelID, nullable(input.CanvasProjectID), model["capability"], input.Prompt, input.Count, jsonBytes(input.Parameters), input.RequestID, digest); err != nil {
 				return err

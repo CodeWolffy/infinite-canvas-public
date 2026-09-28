@@ -163,8 +163,11 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 			return nil, problem(400, "user_inactive", "该用户已被停用")
 		}
 		member, err := one(ctx, a.DB, `INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,$3)
-			ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=excluded.role
+			ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=excluded.role WHERE workspace_members.role<>'owner'
 			RETURNING user_id,role,created_at`, id, target["id"], input.Role)
+		if errors.Is(err, notFound) {
+			return nil, problem(403, "owner_role_protected", "不能修改工作区所有者的角色")
+		}
 		if err != nil {
 			return nil, err
 		}

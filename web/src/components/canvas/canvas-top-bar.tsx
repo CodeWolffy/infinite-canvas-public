@@ -217,6 +217,13 @@ function CanvasSaveStatus() {
     const saveError = useCanvasStore((state) => state.saveError);
     const retrySave = useCanvasStore((state) => state.retrySave);
     if (!saveError) return null;
+    if (saveError.conflict) return (
+        <Tooltip title={saveError.message}>
+            <span className="flex h-8 cursor-help items-center gap-1.5 text-xs" style={{ color: "#dc2626" }}>
+                <TriangleAlert className="size-3.5" />画布版本冲突
+            </span>
+        </Tooltip>
+    );
     return (
         <Tooltip title={t("canvas.save.retryTip", { message: saveError.message })}>
             <button

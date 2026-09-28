@@ -18,6 +18,7 @@ const CANVAS_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export const isSupportedCanvasImage = (file: File) => CANVAS_IMAGE_TYPES.has(file.type);
 
 type CanvasClipboardParams = {
+    canEdit: () => boolean;
     nodesRef: MutableRefObject<CanvasNodeData[]>;
     connectionsRef: MutableRefObject<CanvasConnection[]>;
     selectedNodeIdsRef: MutableRefObject<Set<string>>;
@@ -34,7 +35,7 @@ type CanvasClipboardParams = {
 /**
  * 画布剪贴板与文件导入：复制/粘贴节点、读取系统剪贴板、把拖入或粘贴的图片落成节点。
  */
-export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRef, getCanvasCenter, screenToCanvas, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId }: CanvasClipboardParams) {
+export function useCanvasClipboard({ canEdit, nodesRef, connectionsRef, selectedNodeIdsRef, getCanvasCenter, screenToCanvas, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId }: CanvasClipboardParams) {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const clipboardRef = useRef<CanvasClipboard | null>(null);
@@ -60,6 +61,7 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
     }, [connectionsRef, nodesRef, selectedNodeIdsRef]);
 
     const pasteCopiedNodes = useCallback(() => {
+        if (!canEdit()) return true;
         const clipboard = clipboardRef.current;
         if (!clipboard?.nodes.length) return false;
 
@@ -118,10 +120,12 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
         setContextMenu(null);
         setDialogNodeId(pastedNodes[0]?.type === CanvasNodeType.Group ? null : pastedNodes[0]?.id || null);
         return true;
-    }, [getCanvasCenter, setConnections, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
+    }, [canEdit, getCanvasCenter, setConnections, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
 
-    const createImageFileNode = useCallback(async (file: File, position: Position) => {
+    const createImageFileNode = useCallback(async (file: File, position: Position, sessionVersion = useUserStore.getState().sessionVersion) => {
+        if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;
         const image = await uploadImage(file);
+        if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;
         const size = fitNodeSize(image.width, image.height);
         const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const newNode: CanvasNodeData = {
@@ -134,14 +138,16 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
             metadata: imageMetadata(image),
         };
 
+        if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;
         setNodes((prev) => [...prev, newNode]);
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
         setDialogNodeId(id);
-    }, [setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
+    }, [canEdit, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
 
     const createTextNodeFromClipboard = useCallback(
         (text: string) => {
+            if (!canEdit()) return false;
             const trimmed = text.trim();
             if (!trimmed) return false;
 
@@ -157,11 +163,11 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
             setDialogNodeId(node.id);
             return true;
         },
-        [getCanvasCenter, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds, t],
+        [canEdit, getCanvasCenter, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds, t],
     );
 
     const pasteSystemClipboard = useCallback(async () => {
-        if (!navigator.clipboard) return;
+        if (!navigator.clipboard || !canEdit()) return;
         const sessionVersion = useUserStore.getState().sessionVersion;
         const items = await navigator.clipboard.read();
         if (useUserStore.getState().sessionVersion !== sessionVersion) return;
@@ -172,20 +178,23 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
             const blob = await imageItem.getType(imageType);
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             const file = new File([blob], "clipboard-image.png", { type: imageType });
-            await createImageFileNode(file, getCanvasCenter());
-            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+            if (!canEdit()) return;
+            await createImageFileNode(file, getCanvasCenter(), sessionVersion);
+            if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.success(t("canvas.projectPage.clipboardImageAdded"));
             return;
         }
 
         const text = await navigator.clipboard.readText();
-        if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+        if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;
         if (createTextNodeFromClipboard(text)) message.success(t("canvas.projectPage.clipboardTextAdded"));
-    }, [createImageFileNode, createTextNodeFromClipboard, getCanvasCenter, message, t]);
+    }, [canEdit, createImageFileNode, createTextNodeFromClipboard, getCanvasCenter, message, t]);
 
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
+            if (!canEdit()) return;
+            const sessionVersion = useUserStore.getState().sessionVersion;
             const files = Array.from(event.dataTransfer.files).filter(isSupportedCanvasImage);
             if (!files.length) return;
 
@@ -194,10 +203,10 @@ export function useCanvasClipboard({ nodesRef, connectionsRef, selectedNodeIdsRe
             for (let i = 0; i < files.length; i++) {
                 const pos = { x: basePos.x + i * STAGGER, y: basePos.y + i * STAGGER };
                 const f = files[i];
-                void createImageFileNode(f, pos);
+                void createImageFileNode(f, pos, sessionVersion);
             }
         },
-        [createImageFileNode, screenToCanvas],
+        [canEdit, createImageFileNode, screenToCanvas],
     );
 
     return { copySelectedNodes, pasteCopiedNodes, pasteSystemClipboard, createImageFileNode, handleDrop };

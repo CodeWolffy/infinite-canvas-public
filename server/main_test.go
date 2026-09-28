@@ -28,7 +28,7 @@ func TestLoadMigrationsMatchesDirectory(t *testing.T) {
 	if !strings.Contains(migrations[0], "CREATE TABLE users") {
 		t.Fatal("第一条迁移应创建基础表")
 	}
-	if !strings.Contains(migrations[len(migrations)-1], "CREATE TABLE workspaces") {
-		t.Fatal("最后一条迁移应为最新的协作表")
+	if !strings.Contains(migrations[len(migrations)-1], "ALTER TABLE canvas_projects ADD COLUMN revision") {
+		t.Fatal("最后一条迁移应为画布修订号")
 	}
 }

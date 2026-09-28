@@ -77,8 +77,10 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			input.Title = "新对话"
 		}
 		ctx := c.Request.Context()
-		if err = projectAccess(ctx, a.DB, input.CanvasProjectID, currentUser(c).ID); err != nil {
-			return nil, err
+		if input.CanvasProjectID != "" {
+			if err = projectWriteAccess(ctx, a.DB, input.CanvasProjectID, currentUser(c).ID); err != nil {
+				return nil, err
+			}
 		}
 		conversation, err := one(ctx, a.DB, "INSERT INTO conversations(user_id,canvas_project_id,title) VALUES($1,$2,$3) RETURNING *", currentUser(c).ID, nullable(input.CanvasProjectID), input.Title)
 		return gin.H{"conversation": conversation}, err
@@ -240,8 +242,10 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			if err = projectAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
-				return err
+			if input.CanvasProjectID != "" {
+				if err = projectWriteAccess(ctx, tx, input.CanvasProjectID, u.ID); err != nil {
+					return err
+				}
 			}
 			if conversationID == "" {
 				conversationID = uuid.NewString()
@@ -253,8 +257,14 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 					return err
 				}
 			} else {
-				if _, err = one(ctx, tx, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", conversationID, u.ID); err != nil {
+				conversation, err := one(ctx, tx, "SELECT canvas_project_id FROM conversations WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", conversationID, u.ID)
+				if err != nil {
 					return err
+				}
+				if canvasID := str(conversation["canvasProjectId"]); canvasID != "" {
+					if err := projectWriteAccess(ctx, tx, canvasID, u.ID); err != nil {
+						return err
+					}
 				}
 			}
 			var active bool

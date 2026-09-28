@@ -31,9 +31,10 @@ export function startHttpServer() {
             session.emitAll(type, value);
             return;
         }
-        if (type === "agent_bootstrap" && value.phase === "preheat") {
-            if (value.type === "mcp.startup") session.updateConversationMcp(String(value.name || ""), startupStatus(value.status), String(value.error || "") || null, String(value.failureReason || "") || null);
-            if (value.type === "mcp.complete") session.completeConversationMcpInventory(mcpInventory(value.services));
+        if (type === "agent_bootstrap" && value.phase === "preheat" && value.threadId) {
+            const conversation = session.conversationStateSnapshot;
+            if (value.threadId === conversation.threadId && conversation.status === "preparing") applyMcpPreheat(value);
+            else if (draftThreadStart && !conversation.threadId && conversation.status === "preparing") draftMcpEvents.push(value);
         }
         const scope = session.codexBusy ? session.codexEventScope : { threadId: "", turnId: "", sourceClientId: "" };
         const threadId = String(value.threadId || value.thread_id || scope.threadId || ensureSiteWorkspace(config).activeThreadId || "");
@@ -48,6 +49,10 @@ export function startHttpServer() {
         session.trackCodexEvent(type, data);
         threadId ? session.emitThread(type, threadId, data) : session.emitAll(type, data);
     };
+    const applyMcpPreheat = (value: Record<string, unknown>) => {
+        if (value.type === "mcp.startup") session.updateConversationMcp(String(value.name || ""), startupStatus(value.status), String(value.error || "") || null, String(value.failureReason || "") || null);
+        if (value.type === "mcp.complete") session.completeConversationMcpInventory(mcpInventory(value.services));
+    };
     /** 保存并广播当前站点工作空间的活跃线程。 */
     const setActiveThread = (activeThreadId: string, payload: Record<string, unknown> = {}, preserveConversation = false) => {
         const workspace = updateSiteWorkspace(config, { activeThreadId: activeThreadId || undefined });
@@ -57,10 +62,12 @@ export function startHttpServer() {
         return workspace;
     };
     let draftThreadStart: ReturnType<typeof startCodexThread> | null = null;
+    let draftMcpEvents: Array<Record<string, unknown>> = [];
     let skillDraftRunning = false;
     const prepareDraftThread = (clientId: string, permission: AgentPermissionMode) => {
         if (draftThreadStart) return draftThreadStart;
         const workspace = ensureSiteWorkspace(config);
+        draftMcpEvents = [];
         let prepared!: ReturnType<typeof startCodexThread>;
         prepared = (async () => {
             emit("agent_bootstrap", { type: "codex.preparing", sourceClientId: clientId });
@@ -69,6 +76,7 @@ export function startHttpServer() {
                 if (draftThreadStart !== prepared) return thread;
                 const threadId = String((thread as Record<string, unknown>).id || "");
                 if (threadId && !ensureSiteWorkspace(config).activeThreadId) {
+                    draftMcpEvents.filter((event) => event.threadId === threadId).forEach(applyMcpPreheat);
                     session.completeConversationPreparation(threadId);
                     setActiveThread(threadId, { emptyThread: true, draftThread: true, sourceClientId: clientId }, true);
                 }
@@ -81,7 +89,10 @@ export function startHttpServer() {
                 }
                 throw error;
             } finally {
-                if (draftThreadStart === prepared) draftThreadStart = null;
+                if (draftThreadStart === prepared) {
+                    draftThreadStart = null;
+                    draftMcpEvents = [];
+                }
             }
         })();
         draftThreadStart = prepared;

@@ -112,10 +112,8 @@ export class CodexAppClient {
             const { thread } = await this.request("thread/start", { ...threadSettings(permissionMode), ...(cwd ? { cwd } : {}), threadSource: "user" });
             if (!thread.id) throw new Error("Codex app-server 没有返回 thread id");
             threadId = thread.id;
-            if (preheat) {
-                this.preheatingThreadIds.add(threadId);
-                await this.completeMcpPreheat(threadId);
-            }
+            if (preheat) this.preheatingThreadIds.add(threadId);
+            if (preheat) await this.completeMcpPreheat(threadId);
             return thread;
         } finally {
             if (preheat) this.pendingPreheatThreadStarts -= 1;
@@ -383,7 +381,7 @@ export class CodexAppClient {
             const threadId = value.threadId || this.currentThreadId;
             this.emit("agent_bootstrap", {
                 type: "mcp.startup",
-                phase: this.pendingPreheatThreadStarts > 0 || this.preheatingThreadIds.has(threadId) ? "preheat" : "runtime",
+                phase: value.threadId ? (this.preheatingThreadIds.has(value.threadId) ? "preheat" : "runtime") : (this.pendingPreheatThreadStarts > 0 || this.preheatingThreadIds.has(threadId) ? "preheat" : "runtime"),
                 threadId,
                 name: value.name,
                 status: value.status,

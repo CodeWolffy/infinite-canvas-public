@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useUserStore } from "@/stores/use-user-store";
 
 type CanvasUiStore = {
     editingProjectId: string | null;
@@ -25,3 +26,8 @@ export const useCanvasUiStore = create<CanvasUiStore>((set) => ({
     setDeleteProjectIds: (deleteProjectIds) => set({ deleteProjectIds }),
     removeSelectedProjectIds: (ids) => set((state) => ({ selectedProjectIds: state.selectedProjectIds.filter((id) => !ids.includes(id)) })),
 }));
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    useCanvasUiStore.setState({ editingProjectId: null, editingProjectTitle: "", selectedProjectIds: [], deleteProjectIds: [] });
+});

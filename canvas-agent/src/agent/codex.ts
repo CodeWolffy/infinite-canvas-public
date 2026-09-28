@@ -488,7 +488,14 @@ function samePath(left: string, right: string) {
 
 /** 将图片附件写入临时文件供 Codex 读取。 */
 async function writeAttachmentFiles(attachments: AgentAttachment[]) {
-    return await Promise.all(attachments.filter((item) => item.dataUrl?.startsWith("data:image/")).map(writeAttachmentFile));
+    const written = await Promise.allSettled(attachments.filter((item) => item.dataUrl?.startsWith("data:image/")).map(writeAttachmentFile));
+    const failure = written.find((result) => result.status === "rejected");
+    const files = written.filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled").map((result) => result.value);
+    if (failure?.status === "rejected") {
+        await Promise.all(files.map((file) => fs.unlink(file).catch(() => undefined)));
+        throw failure.reason;
+    }
+    return files;
 }
 
 /** 将单个 Data URL 图片附件写入临时文件。 */
@@ -496,8 +503,13 @@ async function writeAttachmentFile(item: AgentAttachment) {
     const [, meta = "", data = ""] = item.dataUrl?.match(/^data:([^;]+);base64,(.+)$/) || [];
     if (!data) throw new Error(`图片附件无效：${item.name || "未命名图片"}`);
     const file = path.join(os.tmpdir(), `infinite-canvas-${Date.now()}-${Math.random().toString(16).slice(2)}.${imageExt(meta || item.type)}`);
-    await fs.writeFile(file, Buffer.from(data, "base64"));
-    return file;
+    try {
+        await fs.writeFile(file, Buffer.from(data, "base64"));
+        return file;
+    } catch (error) {
+        await fs.unlink(file).catch(() => undefined);
+        throw error;
+    }
 }
 
 /** 根据图片 MIME 类型返回临时文件扩展名。 */

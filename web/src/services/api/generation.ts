@@ -112,7 +112,7 @@ export async function getGenerationBatch(id: string) {
 
 /**
  * 批次级 SSE：服务端在任务状态变化时推送完整快照，全部任务进入终态后主动关闭连接。
- * 连接中断时退化为短间隔轮询兜底，与文本流的 watchTextRequest 同一模式。
+ * 连接中断时退化为短间隔轮询，接口恢复后重新订阅 SSE。
  */
 export function watchGenerationBatch(id: string, onSnapshot: (detail: GenerationBatchDetail) => void, signal?: AbortSignal, onError?: (error: Error) => void) {
     const session = useUserStore.getState().sessionVersion;
@@ -122,18 +122,20 @@ export function watchGenerationBatch(id: string, onSnapshot: (detail: Generation
     let source: EventSource | null = null;
     let unsubscribe = () => {};
     const cleanup = () => { if (closed) return; closed = true; source?.close(); controller.abort(); unsubscribe(); signal?.removeEventListener("abort", aborted); };
-    const fail = (error: Error) => { cleanup(); onError?.(error); };
+    const fail = (error: Error) => { if (closed) return; cleanup(); onError?.(error); };
     const aborted = () => fail(new DOMException("已停止等待", "AbortError"));
     const receive = (detail: GenerationBatchDetail) => {
-        if (closed) return;
+        if (closed) return false;
         assertCurrentSession(session);
-        if (detail.batch.id.toLowerCase() !== id.toLowerCase()) return;
+        if (detail.batch.id.toLowerCase() !== id.toLowerCase()) return false;
         onSnapshot(detail);
         if (!detail.tasks.some((task) => task.status === "reviewing" || task.status === "queued" || task.status === "running")) cleanup();
+        return !closed;
     };
     const poll = async () => {
         while (!closed) {
-            try { receive(await getGenerationBatch(id)); }
+            let recovered = false;
+            try { recovered = receive(await getGenerationBatch(id)); }
             catch (error) {
                 if (error instanceof DOMException && error.name === "AbortError" || error instanceof ApiError && error.status < 500) { fail(error as Error); return; }
             }
@@ -145,19 +147,27 @@ export function watchGenerationBatch(id: string, onSnapshot: (detail: Generation
                     else controller.signal.addEventListener("abort", abort, { once: true });
                 });
             }
+            if (closed) return;
+            if (recovered) { polling = false; connect(); return; }
         }
+    };
+    const connect = () => {
+        if (closed) return;
+        const stream = new EventSource(`/api/generation-batches/${id}/events`, { withCredentials: true });
+        source = stream;
+        stream.addEventListener("snapshot", (event) => {
+            if (closed || source !== stream) return;
+            try { receive(JSON.parse((event as MessageEvent<string>).data) as GenerationBatchDetail); }
+            catch (error) { fail(error instanceof Error ? error : new Error("批次快照读取失败")); }
+        });
+        stream.addEventListener("expired", () => { if (closed || source !== stream) return; if (useUserStore.getState().sessionVersion === session) window.dispatchEvent(new Event("auth:unauthorized")); aborted(); });
+        stream.addEventListener("unavailable", () => { if (!closed && source === stream) fail(new Error("生成批次暂时不可读取，请刷新重试")); });
+        stream.onerror = () => { if (closed || polling || source !== stream) return; stream.close(); source = null; polling = true; void poll(); };
     };
     unsubscribe = useUserStore.subscribe((state) => { if (state.sessionVersion !== session) aborted(); });
     signal?.addEventListener("abort", aborted, { once: true });
     if (signal?.aborted) { aborted(); return cleanup; }
-    source = new EventSource(`/api/generation-batches/${id}/events`, { withCredentials: true });
-    source.addEventListener("snapshot", (event) => {
-        try { receive(JSON.parse((event as MessageEvent<string>).data) as GenerationBatchDetail); }
-        catch (error) { fail(error instanceof Error ? error : new Error("批次快照读取失败")); }
-    });
-    source.addEventListener("expired", () => { if (!closed && useUserStore.getState().sessionVersion === session) window.dispatchEvent(new Event("auth:unauthorized")); aborted(); });
-    source.addEventListener("unavailable", () => fail(new Error("生成批次暂时不可读取，请刷新重试")));
-    source.onerror = () => { if (closed || polling) return; polling = true; source?.close(); source = null; void poll(); };
+    connect();
     return cleanup;
 }
 

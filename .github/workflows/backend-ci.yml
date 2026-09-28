@@ -20,6 +20,29 @@ jobs:
     defaults:
       run:
         working-directory: server
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: canvas_ci_test
+          POSTGRES_USER: canvas_ci_test
+          POSTGRES_PASSWORD: canvas_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U canvas_ci_test -d canvas_ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,6 +60,9 @@ jobs:
         run: go vet ./...
 
       - name: Run unit tests
+        env:
+          TEST_DATABASE_URL: postgres://canvas_ci_test:canvas_ci_test@localhost:5432/canvas_ci_test?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
         run: go test -v ./...
 
       - name: Build server binary
