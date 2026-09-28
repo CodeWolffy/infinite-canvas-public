@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, watchGenerationBatch, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { fetchPublicModels } from "@/hooks/use-public-models";
 import { getCapabilityBatches } from "@/services/api/tasks";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -36,7 +36,7 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     const watchedBatchesRef = useRef(new Set<string>());
     const agentTasksRef = useRef(new Map<string, string>());
     const defaultTitleRef = useRef(document.title);
-    const pollRef = useRef<() => void>(() => {});
+    const applyDetailRef = useRef<(detail: GenerationBatchDetail) => { log: L; results: R[] }>(() => { throw new Error("uninitialized"); });
     const [previewLog, setPreviewLog] = useState<L | null>(null);
     const [results, setResults] = useState<R[]>([]);
 
@@ -58,10 +58,17 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
         previewLogIdRef.current = previewLog?.id ?? "";
     }, [previewLog]);
 
+    // 活跃批次走 SSE 推送：任务状态变化时服务端立刻下发快照，任务全部结束后服务端关闭连接；
+    // 连接异常时 watchGenerationBatch 内部会退化为轮询兜底。
     useEffect(() => {
-        if (!activeBatchIds.length) return;
-        const timer = window.setInterval(() => pollRef.current(), 1800);
-        return () => window.clearInterval(timer);
+        const cleanups = activeBatchIds.map((batchId) => watchGenerationBatch(batchId, (detail) => {
+            const applied = applyDetailRef.current(detail);
+            if (previewLogIdRef.current === batchId) {
+                setPreviewLog(applied.log);
+                setResults(applied.results);
+            }
+        }));
+        return () => cleanups.forEach((cleanup) => cleanup());
     }, [activeBatchIds]);
 
     const ensureNotifyPermission = () => {
@@ -107,22 +114,7 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
         return applied;
     };
 
-    const pollActiveBatches = async () => {
-        await Promise.all(
-            activeBatchIdsRef.current.map(async (batchId) => {
-                try {
-                    const applied = applyDetail(await getGenerationBatch(batchId));
-                    if (previewLogIdRef.current === batchId) {
-                        setPreviewLog(applied.log);
-                        setResults(applied.results);
-                    }
-                } catch {
-                    return;
-                }
-            }),
-        );
-    };
-    pollRef.current = () => void pollActiveBatches();
+    applyDetailRef.current = applyDetail;
 
     const watchBatch = (batchId: string) => {
         watchedBatchesRef.current.add(batchId);

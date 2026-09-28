@@ -14,6 +14,10 @@ export type AssetRecord = {
     metadata: Record<string, unknown>;
     createdAt: string;
     updatedAt: string;
+    /** 当前用户的有效角色：owner/editor/viewer；工作区素材按成员角色控制写权限。 */
+    accessRole?: "owner" | "editor" | "viewer" | "";
+    workspaceId?: string | null;
+    workspaceName?: string | null;
 };
 
 export type AssetInput = {
@@ -23,6 +27,7 @@ export type AssetInput = {
     content?: string | null;
     mediaId?: string | null;
     metadata?: Record<string, unknown>;
+    workspaceId?: string | null;
 };
 
 export const ASSET_PAGE_SIZE = 100;

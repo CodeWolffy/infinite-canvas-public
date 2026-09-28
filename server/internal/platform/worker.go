@@ -220,6 +220,7 @@ func (a *App) releaseSlot(c channel, task Row) {
 func (a *App) StartWorkers(ctx context.Context) {
 	a.shutdown = ctx.Done()
 	a.startTextEvents(ctx)
+	a.startTaskEvents(ctx)
 	a.startCancelEvents(ctx)
 	a.startMail(ctx)
 	a.startMonitoring(ctx)
@@ -242,6 +243,8 @@ func (a *App) StartWorkers(ctx context.Context) {
 				task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=coalesce(started_at,now()),deadline=coalesce(deadline,now()+interval '480 seconds') WHERE id=(SELECT id FROM generation_tasks WHERE status='queued' AND available_at<=now() ORDER BY available_at,queued_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", uuid.NewString())
 				if err == nil {
 					poll = queuePoll
+					// 状态已落库：批次 SSE 订阅者收到「running」后再开始上游调用。
+					a.publishTaskChange(ctx, task)
 					a.executeGuarded(ctx, task)
 					continue
 				}
@@ -635,13 +638,8 @@ func (a *App) requeue(ctx context.Context, task Row, resuming bool) {
 		slog.Warn("任务重排失败", "task", str(task["id"]), "resuming", resuming, "error", err)
 		return
 	}
-	a.notifyTextRequeued(ctx, task, result.RowsAffected() == 1)
-}
-
-// notifyTextRequeued 在文本任务回到队列后唤醒 SSE 订阅者，让前端能显示「正在切换渠道」。
-func (a *App) notifyTextRequeued(ctx context.Context, task Row, requeued bool) {
-	if requeued && task["capability"] == "text" {
-		a.publishText(ctx, str(task["id"]))
+	if result.RowsAffected() == 1 {
+		a.publishTaskChange(ctx, task)
 	}
 }
 
@@ -664,7 +662,9 @@ func (a *App) retryTask(ctx context.Context, task Row, ch channel, failure *upst
 		return false, err
 	}
 	retried := result.RowsAffected() == 1
-	a.notifyTextRequeued(ctx, task, retried)
+	if retried {
+		a.publishTaskChange(ctx, task)
+	}
 	return retried, nil
 }
 func (a *App) recordAttemptFailure(ctx context.Context, c channel, logID string, failure *upstreamError) error {
@@ -838,8 +838,8 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		_, err = tx.Exec(ctx, "UPDATE request_logs SET status=$2,error_category=$3,error_message=$4,billed_amount=$5,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer,first_token_ms=(SELECT (extract(epoch FROM(first_token_at-request_logs.started_at))*1000)::integer FROM generation_tasks WHERE id=$1),output_tokens=$6 WHERE task_id=$1 AND status='running'", task["id"], status, errorCode, errorMessage, billed, integer(completionTokens))
 		return err
 	})
-	if err == nil && original["capability"] == "text" {
-		a.publishText(ctx, str(original["id"]))
+	if err == nil {
+		a.publishTaskChange(ctx, original)
 	}
 	if err == nil && failure == nil {
 		upstreamAttemptsTotal.WithLabelValues(str(original["channelId"]), "success").Inc()

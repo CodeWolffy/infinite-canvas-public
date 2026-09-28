@@ -1,17 +1,21 @@
-import { Check, Download, Pencil, Trash2, X } from "lucide-react";
+import { Check, Download, Pencil, Share2, Trash2, Users, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Input } from "antd";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { hasAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
+import { ShareDialog } from "@/components/share-dialog";
+import { WorkspaceMoveButton } from "@/components/workspace-move-button";
 
 export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const { i18n, t } = useTranslation();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
+    const [shareOpen, setShareOpen] = useState(false);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const loadProjects = useCanvasStore((state) => state.loadProjects);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
@@ -34,6 +38,8 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     };
     // 列表只有元数据，导出前先把完整快照拉回来。
     const exportProject = async () => exportCanvasProjects(await loadProjects([project.id]), project.title || t("canvas.title"));
+    const writable = project.accessRole !== "viewer";
+    const isOwner = project.accessRole === "owner";
 
     return (
         <article className="group flex min-h-44 cursor-pointer flex-col justify-between rounded-2xl bg-[#f1eee8] p-5 transition hover:bg-[#ebe6dc] dark:bg-white/5 dark:hover:bg-white/10" onClick={() => !editing && open()}>
@@ -61,6 +67,13 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                         <p className="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
                             {t("canvas.project.stats", { nodes: project.nodeCount, connections: project.connectionCount })}
                         </p>
+                        {project.workspaceName ? (
+                            <p className="mt-1 inline-flex items-center gap-1 text-xs text-stone-500">
+                                <Users className="size-3" />
+                                {project.workspaceName}
+                                {!writable ? ` · ${t("workspace.roles.viewer")}` : ""}
+                            </p>
+                        ) : null}
                     </button>
                 )}
             </div>
@@ -75,12 +88,22 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                     ) : (
                         <>
                             <Button type="text" size="small" shape="circle" icon={<Download className="size-4" />} onClick={() => void exportProject()} aria-label={t("canvas.project.export")} />
-                            <Button type="text" size="small" shape="circle" icon={<Pencil className="size-4" />} onClick={() => startEditing(project.id, project.title)} aria-label={t("canvas.project.rename")} />
-                            <Button type="text" size="small" shape="circle" icon={<Trash2 className="size-4" />} onClick={() => setDeleteIds([project.id])} aria-label={t("canvas.project.delete")} />
+                            {isOwner ? <Button type="text" size="small" shape="circle" icon={<Share2 className="size-4" />} onClick={() => setShareOpen(true)} aria-label={t("share.title")} /> : null}
+                            {isOwner ? (
+                                <WorkspaceMoveButton
+                                    target={{ kind: "canvas", id: project.id, workspaceId: project.workspaceId }}
+                                    onMoved={(workspaceId, workspaceName) =>
+                                        useCanvasStore.setState((state) => ({ projects: state.projects.map((item) => (item.id === project.id ? { ...item, workspaceId, workspaceName } : item)) }))
+                                    }
+                                />
+                            ) : null}
+                            {writable ? <Button type="text" size="small" shape="circle" icon={<Pencil className="size-4" />} onClick={() => startEditing(project.id, project.title)} aria-label={t("canvas.project.rename")} /> : null}
+                            {project.canDelete ? <Button type="text" size="small" shape="circle" icon={<Trash2 className="size-4" />} onClick={() => setDeleteIds([project.id])} aria-label={t("canvas.project.delete")} /> : null}
                         </>
                     )}
                 </div>
             </div>
+            {shareOpen ? <ShareDialog kind="canvas" targetId={project.id} open={shareOpen} onClose={() => setShareOpen(false)} /> : null}
         </article>
     );
 }

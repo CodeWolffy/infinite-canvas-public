@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { Download, FileUp, LayoutTemplate, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { readZip } from "@/lib/zip";
@@ -10,6 +10,7 @@ import { uploadImage } from "@/services/image-storage";
 import { mediaUrl } from "@/services/api/media";
 import { CanvasDeleteProjectsDialog } from "@/components/canvas/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
+import { TemplatePickerModal } from "@/pages/canvas/template-picker-modal";
 import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
@@ -24,11 +25,13 @@ export default function CanvasPage() {
     const [searchParams] = useSearchParams();
     const inputRef = useRef<HTMLInputElement>(null);
     const autoOpenRef = useRef(false);
+    const [templatesOpen, setTemplatesOpen] = useState(false);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const projectTotal = useCanvasStore((state) => state.projectTotal);
     const loadMoreProjects = useCanvasStore((state) => state.loadMoreProjects);
     const createProject = useCanvasStore((state) => state.createProject);
+    const adoptProject = useCanvasStore((state) => state.adoptProject);
     const importProject = useCanvasStore((state) => state.importProject);
     const loadProjects = useCanvasStore((state) => state.loadProjects);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
@@ -125,6 +128,9 @@ export default function CanvasPage() {
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             {t("canvas.import")}
                         </Button>
+                        <Button disabled={!hydrated} icon={<LayoutTemplate className="size-4" />} onClick={() => setTemplatesOpen(true)}>
+                            {t("templates.createFromTemplate")}
+                        </Button>
                         <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={() => void createAndEnter()}>
                             {t("canvas.create")}
                         </Button>
@@ -159,6 +165,15 @@ export default function CanvasPage() {
 
             <input ref={inputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importCanvas(event.target.files?.[0])} />
             <CanvasDeleteProjectsDialog />
+            <TemplatePickerModal
+                open={templatesOpen}
+                onClose={() => setTemplatesOpen(false)}
+                onCreated={(project) => {
+                    setTemplatesOpen(false);
+                    // 模板生成的画布已由服务端创建，直接落入本地列表后跳转。
+                    navigate(`/canvas/${adoptProject(project)}`);
+                }}
+            />
         </main>
     );
 }

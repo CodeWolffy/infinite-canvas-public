@@ -1,4 +1,4 @@
-import { Copy, Download, PencilLine, Search, Trash2, Upload } from "lucide-react";
+import { Copy, Download, PencilLine, Search, Share2, Trash2, Upload, Users } from "lucide-react";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import { assetCoverUrl, normalizeAsset, useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
+import { ShareDialog } from "@/components/share-dialog";
+import { WorkspaceMoveButton } from "@/components/workspace-move-button";
 
 type AssetFormValues = {
     kind: AssetKind;
@@ -310,7 +312,7 @@ export default function AssetsPage() {
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {visibleAssets.map((asset) => (
-                            <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
+                            <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} onMoved={refreshAssets} />
                         ))}
                     </div>
 
@@ -452,9 +454,12 @@ export default function AssetsPage() {
     );
 }
 
-function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
+function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMoved }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void; onMoved: () => void }) {
     const { t } = useTranslation();
+    const [shareOpen, setShareOpen] = useState(false);
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
+    const currentUserId = useUserStore((state) => state.user?.id);
+    const mine = Boolean(asset.ownerId && asset.ownerId === currentUserId);
     const cover = assetCoverUrl(asset);
     const summary = assetSummary(asset);
     return (
@@ -481,7 +486,14 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                                 {asset.source || t("assets.unknownSource")}
                             </Typography.Text>
                         </div>
-                        <Tag className="m-0 shrink-0 text-[11px]">{t(`assets.kinds.${asset.kind}`)}</Tag>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                            <Tag className="m-0 text-[11px]">{t(`assets.kinds.${asset.kind}`)}</Tag>
+                            {asset.workspaceName ? (
+                                <Tag className="m-0 text-[11px]" icon={<Users className="size-3" />}>
+                                    {asset.workspaceName}
+                                </Tag>
+                            ) : null}
+                        </div>
                     </div>
                     <Typography.Paragraph type="secondary" ellipsis={{ rows: 3 }} className="!mb-0 !mt-2 !text-xs !leading-5">
                         {summary}
@@ -515,8 +527,17 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                         {t("common.download")}
                     </Button>
                 ) : null}
-                {asset.editable !== false ? <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>{t("common.delete")}</Button> : null}
+                {mine ? (
+                    <>
+                        <Button size="small" icon={<Share2 className="size-3.5" />} onClick={() => setShareOpen(true)}>
+                            {t("share.action")}
+                        </Button>
+                        <WorkspaceMoveButton target={{ kind: "asset", id: asset.id, workspaceId: asset.workspaceId }} onMoved={() => onMoved()} />
+                    </>
+                ) : null}
+                {asset.deletable !== false ? <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>{t("common.delete")}</Button> : null}
             </div>
+            {shareOpen ? <ShareDialog kind="asset" targetId={asset.id} open={shareOpen} onClose={() => setShareOpen(false)} /> : null}
         </Card>
     );
 }

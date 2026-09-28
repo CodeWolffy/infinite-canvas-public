@@ -127,24 +127,8 @@ func (a *App) textEvents(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	changed := make(chan struct{}, 1)
-	a.streamMu.Lock()
-	if a.streamSinks == nil {
-		a.streamSinks = map[string]map[chan struct{}]struct{}{}
-	}
-	if a.streamSinks[id] == nil {
-		a.streamSinks[id] = map[chan struct{}]struct{}{}
-	}
-	a.streamSinks[id][changed] = struct{}{}
-	a.streamMu.Unlock()
-	defer func() {
-		a.streamMu.Lock()
-		delete(a.streamSinks[id], changed)
-		if len(a.streamSinks[id]) == 0 {
-			delete(a.streamSinks, id)
-		}
-		a.streamMu.Unlock()
-	}()
+	changed := a.addSink(id)
+	defer a.removeSink(id, changed)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")

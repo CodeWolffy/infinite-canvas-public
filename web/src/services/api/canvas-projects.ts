@@ -8,6 +8,12 @@ export type CanvasProjectSummary = {
     updatedAt: string;
     nodeCount: number;
     connectionCount: number;
+    /** 当前用户的有效角色：owner/editor/viewer；viewer 只能读不能写。 */
+    accessRole?: "owner" | "editor" | "viewer" | "";
+    workspaceId?: string | null;
+    workspaceName?: string | null;
+    /** 只有画布所有者或工作区所有者能删除。 */
+    canDelete?: boolean;
 };
 
 export type CanvasProjectDetail = CanvasProjectSummary & { snapshot: unknown };
@@ -20,11 +26,11 @@ export async function getCanvasProject(id: string) {
     return (await apiRequest<{ project: CanvasProjectDetail }>(`/api/canvas-projects/${id}`)).project;
 }
 
-export async function createCanvasProject(input: { title: string; snapshot: unknown }) {
+export async function createCanvasProject(input: { title: string; snapshot: unknown; workspaceId?: string }) {
     return (await apiRequest<{ project: CanvasProjectDetail }>("/api/canvas-projects", { method: "POST", body: input })).project;
 }
 
-export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown }) {
+export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown; workspaceId?: string | null }) {
     return (await apiRequest<{ project: CanvasProjectSummary }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
 }
 

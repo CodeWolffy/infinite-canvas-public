@@ -80,6 +80,7 @@ import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
 import { CanvasHistoryModal } from "@/components/canvas/canvas-history-modal";
+import { ShareDialog } from "@/components/share-dialog";
 import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import {
     CanvasNodeType,
@@ -261,6 +262,7 @@ function InfiniteCanvasPage() {
     const [titleDraft, setTitleDraft] = useState("");
     const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
     const [historyModalOpen, setHistoryModalOpen] = useState(false);
+    const [shareDialogOpen, setShareDialogOpen] = useState(false);
     const [expandedBatchNodeIds, setExpandedBatchNodeIds] = useState<Set<string>>(new Set());
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [isNodeResizing, setIsNodeResizing] = useState(false);
@@ -3081,6 +3083,9 @@ function InfiniteCanvasPage() {
                     agentOpen={agentPanelOpen}
                     compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
                     onToggleAgent={toggleAgentPanel}
+                    readOnly={currentProject?.accessRole === "viewer"}
+                    workspaceName={currentProject?.workspaceName}
+                    onShare={currentProject?.accessRole === "owner" ? () => setShareDialogOpen(true) : undefined}
                 />
 
                 <InfiniteCanvas
@@ -3382,6 +3387,8 @@ function InfiniteCanvasPage() {
                         applyRestoredProject(restoredRecord);
                     }}
                 />
+
+                {shareDialogOpen ? <ShareDialog kind="canvas" targetId={projectId} open={shareDialogOpen} onClose={() => setShareDialogOpen(false)} /> : null}
             </section>
         </main>
     );

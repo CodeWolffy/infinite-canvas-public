@@ -47,6 +47,9 @@ const AdminSensitivePage = lazy(() => import("@/pages/admin/sensitive"));
 const AdminStatusPage = lazy(() => import("@/pages/admin/status"));
 const StatusPage = lazy(() => import("@/pages/status"));
 const TextPage = lazy(() => import("@/pages/text"));
+const SharedPage = lazy(() => import("@/pages/shared"));
+const UserWorkspacesPage = lazy(() => import("@/pages/user/workspaces"));
+const AdminTemplatesPage = lazy(() => import("@/pages/admin/templates"));
 
 // 各层路由都挂同一个错误兜底：lazy chunk 加载失败或渲染异常时不再整页白屏。
 const errorElement = <AppErrorFallback />;
@@ -58,6 +61,16 @@ export const router = createBrowserRouter([
     { path: "/forgot-password", element: <AccountRecoveryPage /> },
     { path: "/reset-password", element: <AccountRecoveryPage /> },
     { path: "/verify-email", element: <AccountRecoveryPage /> },
+    // 公开只读分享：无登录态，token 即权限。
+    {
+        path: "/s/:token",
+        errorElement,
+        element: (
+            <Suspense fallback={<div className="flex h-dvh items-center justify-center"><Spin /></div>}>
+                <SharedPage />
+            </Suspense>
+        ),
+    },
     {
         errorElement,
         element: (
@@ -103,6 +116,7 @@ export const router = createBrowserRouter([
                     { path: "logs", element: <UserLogsPage /> },
                     { path: "account", element: <UserAccountPage /> },
                     { path: "wallet", element: <WalletPage /> },
+                    { path: "workspaces", element: <UserWorkspacesPage /> },
                 ],
             },
             {
@@ -126,6 +140,7 @@ export const router = createBrowserRouter([
                     { path: "groups", element: <AdminGroupsPage /> },
                     { path: "redeem", element: <AdminRedeemPage /> },
                     { path: "sensitive", element: <AdminSensitivePage /> },
+                    { path: "templates", element: <AdminTemplatesPage /> },
                 ],
             },
             { path: "*", element: <NotFound /> },

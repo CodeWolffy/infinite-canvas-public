@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, TriangleAlert, Undo2, Upload } from "lucide-react";
+import { BookOpen, Bot, Download, Eye, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Share2, Trash2, TriangleAlert, Undo2, Upload, Users } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -32,6 +32,9 @@ export function CanvasTopBar({
     agentOpen,
     compactAgentStatus,
     onToggleAgent,
+    readOnly,
+    workspaceName,
+    onShare,
 }: {
     title: string;
     titleDraft: string;
@@ -54,6 +57,10 @@ export function CanvasTopBar({
     agentOpen: boolean;
     compactAgentStatus: { connected: boolean; enabled: boolean; activity: string };
     onToggleAgent: () => void;
+    /** 工作区 viewer 只读：禁用改名入口并展示提示徽标。 */
+    readOnly?: boolean;
+    workspaceName?: string | null;
+    onShare?: () => void;
 }) {
     const colorTheme = useThemeStore((state) => state.theme);
     const { t } = useTranslation();
@@ -130,18 +137,35 @@ export function CanvasTopBar({
                             <button
                                 type="button"
                                 className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
-                                onDoubleClick={onStartTitleEditing}
-                                title={t("canvas.renameHint")}
+                                onDoubleClick={readOnly ? undefined : onStartTitleEditing}
+                                title={readOnly ? undefined : t("canvas.renameHint")}
                             >
                                 {title}
                             </button>
                         )}
+                        {workspaceName ? (
+                            <span className="hidden max-w-[140px] items-center gap-1 truncate text-xs sm:flex" style={{ color: theme.node.muted }} title={workspaceName}>
+                                <Users className="size-3.5 shrink-0" />
+                                <span className="truncate">{workspaceName}</span>
+                            </span>
+                        ) : null}
+                        {readOnly ? (
+                            <span className="flex items-center gap-1 text-xs" style={{ color: theme.node.muted }}>
+                                <Eye className="size-3.5" />
+                                {t("workspace.readOnlyBadge")}
+                            </span>
+                        ) : null}
                     </div>
                     <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
                     <CanvasSaveStatus />
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1.5">
+                    {onShare ? (
+                        <Tooltip title={t("share.title")}>
+                            <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
+                        </Tooltip>
+                    ) : null}
                     <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} />
                     <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
                     <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ background: agentOpen ? theme.toolbar.activeBg : "transparent", color: theme.node.text }} icon={<Bot className="size-4" />} onClick={onToggleAgent}>Agent</Button>

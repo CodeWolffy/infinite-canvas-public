@@ -9,6 +9,20 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+### 协作分享、工作区、模板与生成推送待验收
+
+- 数据库版本 21 迁移（`021_collaboration.sql`）：新增 `workspaces`、`workspace_members`、`share_links`、`canvas_templates` 四张表，`canvas_projects` 与 `assets` 增加 `workspace_id` 列；需在已有数据的环境验证升级正常。
+- 只读分享：画布卡片与画布顶栏「分享」、素材卡片「分享」可创建只读链接并复制 `/s/:token` 地址；未登录打开链接可查看画布快照（只读、无编辑与生成入口）或素材详情；撤销后链接立即失效；公开媒体接口仅放行被分享对象引用的文件，元信息与媒体均按 IP 限流。
+- 工作区：个人中心「工作区」可创建/重命名/删除工作区，按用户名添加成员并分配 owner/editor/viewer，可移除成员或退出（owner 不可被降级或移除）；画布卡片与素材卡片「移入工作区」仅资源所有者可见，移入后列表显示工作区徽标；editor 成员可直接编辑共享画布与素材，viewer 打开画布显示只读徽标且不触发自动保存、素材不可编辑/删除；删除工作区后资源自动脱离、回到仅所有者可访问。
+- 模板库：管理后台「画布模板」可从自己的画布创建模板、编辑名称与描述、删除；画布列表页「从模板创建」弹出模板选择，创建后进入含模板节点与连线的新画布，模板引用的媒体在新画布中可正常加载。
+- 生成推送：生图/视频/音频批次进行中通过 `/api/generation-batches/:id/events` SSE 实时更新，不再每约 2 秒轮询；连接断开或接口异常自动回退轮询，批次进入终态后停止订阅；取消、删除、审核拒绝同样即时反映，与文本 SSE 共用同一套订阅发布机制。
+- 验收点：
+  1. 创建画布分享链接后，在无登录的隐私窗口打开 `/s/:token` 能看到完整画布且不可编辑；画布中的图片/视频/音频节点媒体可正常加载，未分享资源的媒体 ID 直接拼接到公开媒体接口返回 404；
+  2. 撤销分享链接后刷新公开页返回失效提示；素材分享链接同样可访问素材内容与文件；
+  3. 两个账号加入同一工作区：owner 移入画布与素材后，editor 可打开并修改、viewer 打开为只读且列表/顶栏有工作区标识；owner 退出或被移除应被拒绝；
+  4. 管理员在画布模板页创建模板后，普通用户从模板创建画布得到相同节点布局；删除模板后不再出现在选择列表；
+  5. 发起生图批次后 Network 中可见 EventSource 连接且状态即时更新，断网/重启 API 后自动回退或重连，无持续轮询请求。
+
 ### Deployment, CI & Ops improvements pending verification
 
 - Frontend & Agent CI: workflows triggered on push/PR with `web/**` or `canvas-agent/**`, running typecheck, unit tests (vitest / tsx), and build.

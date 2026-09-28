@@ -189,7 +189,13 @@ func publicMedia(row Row) Row {
 	return Row{"id": row["id"], "url": "/api/media/" + str(row["id"]), "mimeType": row["mimeType"], "byteSize": row["byteSize"], "bytes": row["byteSize"], "width": row["width"], "height": row["height"], "originalName": row["originalName"], "createdAt": row["createdAt"]}
 }
 
-const mediaVisibility = "(m.owner_id=$2::uuid OR $3::boolean OR EXISTS(SELECT 1 FROM assets a WHERE a.media_id=m.id AND (a.scope='public' OR a.owner_id=$2::uuid)) OR EXISTS(SELECT 1 FROM media_references mr WHERE mr.media_id=m.id AND mr.user_id=$2::uuid))"
+// mediaVisibility 统一约束媒体可见性：本人文件、公开素材、本组素材，以及本人可访问画布（含工作区共享）与平台模板引用的文件。
+const mediaVisibility = `(m.owner_id=$2::uuid OR $3::boolean
+	OR EXISTS(SELECT 1 FROM assets a WHERE a.media_id=m.id AND (a.scope='public' OR a.owner_id=$2::uuid
+		OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=a.workspace_id AND wm.user_id=$2::uuid)))
+	OR EXISTS(SELECT 1 FROM media_references mr WHERE mr.media_id=m.id AND (mr.user_id=$2::uuid
+		OR (mr.owner_kind='canvas' AND EXISTS(SELECT 1 FROM canvas_projects p JOIN workspace_members wm ON wm.workspace_id=p.workspace_id AND wm.user_id=$2::uuid WHERE p.id=mr.owner_id))
+		OR (mr.owner_kind='template' AND EXISTS(SELECT 1 FROM canvas_templates ct WHERE ct.id=mr.owner_id)))))`
 
 func readableMedia(ctx context.Context, q querier, id, userID string, admin bool) (Row, error) {
 	return one(ctx, q, "SELECT m.* FROM media_objects m WHERE m.id=$1 AND m.status='ready' AND "+mediaVisibility, id, userID, admin)
@@ -319,6 +325,31 @@ func syncMediaRefs(ctx context.Context, tx pgx.Tx, kind, ownerID, userID string,
 	return err
 }
 
+// serveMedia 统一媒体输出：ETag 协商缓存 + Range 支持，供登录媒体接口与公开分享接口共用。
+func (a *App) serveMedia(c *gin.Context, row Row) {
+	etag := `"` + str(row["sha256"]) + `"`
+	c.Header("ETag", etag)
+	c.Header("Cache-Control", "private, no-cache")
+	c.Header("Vary", "Origin, Cookie")
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(304)
+		return
+	}
+	object, err := a.S3.GetObject(c.Request.Context(), a.Config.Bucket, str(row["objectKey"]), minio.GetObjectOptions{})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	defer object.Close()
+	if _, err = object.Stat(); err != nil {
+		fail(c, err)
+		return
+	}
+	c.Header("Content-Type", str(row["mimeType"]))
+	c.Header("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": str(row["originalName"])}))
+	http.ServeContent(c.Writer, c.Request, str(row["originalName"]), row["createdAt"].(time.Time), object)
+}
+
 func (a *App) mediaRoutes(api *gin.RouterGroup) {
 	api.GET("/media/stats", respond(func(c *gin.Context) (any, error) {
 		ctx, u := c.Request.Context(), currentUser(c)
@@ -363,33 +394,12 @@ func (a *App) mediaRoutes(api *gin.RouterGroup) {
 			return
 		}
 		u := currentUser(c)
-		ctx := c.Request.Context()
-		row, err := readableMedia(ctx, a.DB, id, u.ID, u.Role == "admin")
+		row, err := readableMedia(c.Request.Context(), a.DB, id, u.ID, u.Role == "admin")
 		if err != nil {
 			fail(c, err)
 			return
 		}
-		etag := `"` + str(row["sha256"]) + `"`
-		c.Header("ETag", etag)
-		c.Header("Cache-Control", "private, no-cache")
-		c.Header("Vary", "Origin, Cookie")
-		if c.GetHeader("If-None-Match") == etag {
-			c.Status(304)
-			return
-		}
-		object, err := a.S3.GetObject(ctx, a.Config.Bucket, str(row["objectKey"]), minio.GetObjectOptions{})
-		if err != nil {
-			fail(c, err)
-			return
-		}
-		defer object.Close()
-		if _, err = object.Stat(); err != nil {
-			fail(c, err)
-			return
-		}
-		c.Header("Content-Type", str(row["mimeType"]))
-		c.Header("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": str(row["originalName"])}))
-		http.ServeContent(c.Writer, c.Request, str(row["originalName"]), row["createdAt"].(time.Time), object)
+		a.serveMedia(c, row)
 	})
 	api.DELETE("/media/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

@@ -34,15 +34,37 @@ func canvasViewport(value map[string]any) error {
 	}
 	return nil
 }
+// projectRole 返回用户对画布的有效角色：项目所有者 > 工作区成员角色，无权限返回空串。
+func projectRole(ctx context.Context, q querier, id, userID string) (string, error) {
+	var role string
+	err := q.QueryRow(ctx, `SELECT coalesce(CASE WHEN p.user_id=$2 THEN 'owner' END,wm.role,'')
+		FROM canvas_projects p LEFT JOIN workspace_members wm ON wm.workspace_id=p.workspace_id AND wm.user_id=$2
+		WHERE p.id=$1`, id, userID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return role, err
+}
 func projectAccess(ctx context.Context, q querier, id, userID string) error {
 	if id == "" {
 		return nil
 	}
-	var exists bool
-	if err := q.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM canvas_projects WHERE id=$1 AND user_id=$2)", id, userID).Scan(&exists); err != nil {
+	role, err := projectRole(ctx, q, id, userID)
+	if err != nil {
 		return err
 	}
-	if !exists {
+	if role == "" {
+		return notFound
+	}
+	return nil
+}
+// projectWriteAccess 只允许所有者与工作区编辑者写画布；viewer 角色只读。
+func projectWriteAccess(ctx context.Context, q querier, id, userID string) error {
+	role, err := projectRole(ctx, q, id, userID)
+	if err != nil {
+		return err
+	}
+	if role != "owner" && role != "editor" {
 		return notFound
 	}
 	return nil
@@ -109,14 +131,19 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		}
 		return gin.H{"announcement": json.RawMessage(raw)}, err
 	}))
+	// accessColumns 追加当前用户对每行的有效角色与删除权限，前端据此控制只读/删除入口。
+	accessColumns := `,workspace_id,(SELECT name FROM workspaces WHERE id=canvas_projects.workspace_id) AS workspace_name,
+		CASE WHEN user_id=$1 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=canvas_projects.workspace_id AND wm.user_id=$1),'') END AS access_role,
+		(user_id=$1 OR EXISTS(SELECT 1 FROM workspaces w WHERE w.id=canvas_projects.workspace_id AND w.owner_id=$1)) AS can_delete`
+	visible := "user_id=$1 OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=canvas_projects.workspace_id AND wm.user_id=$1)"
 	api.GET("/canvas-projects", respond(func(c *gin.Context) (any, error) {
 		limit, offset := paginationWith(c, 200, 500)
 		ctx, userID := c.Request.Context(), currentUser(c).ID
-		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM canvas_projects WHERE user_id=$1", userID)
+		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM canvas_projects WHERE "+visible, userID)
 		if err != nil {
 			return nil, err
 		}
-		projects, err := rows(ctx, a.DB, "SELECT "+canvasSummary+" FROM canvas_projects WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3", userID, limit, offset)
+		projects, err := rows(ctx, a.DB, "SELECT "+canvasSummary+accessColumns+" FROM canvas_projects WHERE "+visible+" ORDER BY updated_at DESC LIMIT $2 OFFSET $3", userID, limit, offset)
 		return gin.H{"projects": projects, "total": integer(total["total"])}, err
 	}))
 	api.GET("/canvas-projects/:id", respond(func(c *gin.Context) (any, error) {
@@ -124,14 +151,15 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		project, err := one(c.Request.Context(), a.DB, "SELECT "+canvasSummary+",snapshot FROM canvas_projects WHERE id=$1 AND user_id=$2", id, currentUser(c).ID)
+		project, err := one(c.Request.Context(), a.DB, "SELECT "+canvasSummary+",snapshot"+accessColumns+" FROM canvas_projects WHERE id=$2 AND ("+visible+")", currentUser(c).ID, id)
 		return gin.H{"project": project}, err
 	}))
 	saveProject := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
-			Title    *string        `json:"title"`
-			Snapshot map[string]any `json:"snapshot"`
-			Viewport map[string]any `json:"viewport"`
+			Title       *string        `json:"title"`
+			Snapshot    map[string]any `json:"snapshot"`
+			Viewport    map[string]any `json:"viewport"`
+			WorkspaceID *string        `json:"workspaceId"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -164,12 +192,53 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if create {
-				if _, err := tx.Exec(ctx, "INSERT INTO canvas_projects(id,user_id,title,snapshot) VALUES($1,$2,$3,$4)", id, userID, *input.Title, jsonBytes(input.Snapshot)); err != nil {
+				var workspace any
+				if input.WorkspaceID != nil && strings.TrimSpace(*input.WorkspaceID) != "" {
+					target := strings.TrimSpace(*input.WorkspaceID)
+					if !validID(target) {
+						return problem(400, "invalid_workspace", "工作区编号不正确")
+					}
+					role, err := workspaceRole(ctx, tx, target, userID)
+					if err != nil {
+						return err
+					}
+					if role != "owner" && role != "editor" {
+						return problem(403, "forbidden", "需要工作区编辑权限才能在其中创建画布")
+					}
+					workspace = target
+				}
+				if _, err := tx.Exec(ctx, "INSERT INTO canvas_projects(id,user_id,title,snapshot,workspace_id) VALUES($1,$2,$3,$4,$5)", id, userID, *input.Title, jsonBytes(input.Snapshot), workspace); err != nil {
 					return err
 				}
-			} else {
-				if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 AND user_id=$2 FOR UPDATE", id, userID); err != nil {
+				oldProject, err := one(ctx, tx, "SELECT id,user_id FROM canvas_projects WHERE id=$1 FOR UPDATE", id)
+				if err != nil {
 					return err
+				}
+				if err := projectWriteAccess(ctx, tx, id, userID); err != nil {
+					return err
+				}
+				if input.WorkspaceID != nil {
+					if str(oldProject["userId"]) != userID && currentUser(c).Role != "admin" {
+						return problem(403, "forbidden", "仅画布所有者可以调整所属工作区")
+					}
+					target := strings.TrimSpace(*input.WorkspaceID)
+					var workspace any
+					if target != "" {
+						if !validID(target) {
+							return problem(400, "invalid_workspace", "工作区编号不正确")
+						}
+						role, err := workspaceRole(ctx, tx, target, userID)
+						if err != nil {
+							return err
+						}
+						if role != "owner" && role != "editor" {
+							return problem(403, "forbidden", "需要工作区编辑权限才能移入画布")
+						}
+						workspace = target
+					}
+					if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET workspace_id=$2,updated_at=now() WHERE id=$1", id, workspace); err != nil {
+						return err
+					}
 				}
 				if input.Snapshot != nil {
 					// 先用走索引的时间窗口判断，避免每次保存都整份比较 JSONB。
@@ -215,7 +284,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			}
 			var err error
 			// 只有创建时客户端需要快照本身；更新只回传统计信息，避免每次保存都读回整份快照。
-			columns := canvasSummary
+			columns := canvasSummary + ",workspace_id,(SELECT name FROM workspaces WHERE id=canvas_projects.workspace_id) AS workspace_name"
 			if create {
 				columns += ",snapshot"
 			}
@@ -238,7 +307,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		if err = projectAccess(c.Request.Context(), a.DB, id, currentUser(c).ID); err != nil {
 			return nil, err
 		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT id,title,note,created_at,coalesce(jsonb_array_length(snapshot->'nodes'),0) AS node_count,coalesce(jsonb_array_length(snapshot->'connections'),0) AS connection_count FROM canvas_project_history WHERE project_id=$1 AND user_id=$2 ORDER BY created_at DESC,id DESC", id, currentUser(c).ID)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT id,title,note,created_at,coalesce(jsonb_array_length(snapshot->'nodes'),0) AS node_count,coalesce(jsonb_array_length(snapshot->'connections'),0) AS connection_count FROM canvas_project_history WHERE project_id=$1 ORDER BY created_at DESC,id DESC", id)
 		return gin.H{"history": items}, err
 	}))
 	api.POST("/canvas-projects/:id/history", respond(func(c *gin.Context) (any, error) {
@@ -256,11 +325,14 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		userID := currentUser(c).ID
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 AND user_id=$2 FOR UPDATE", id, userID); err != nil {
+			if err := projectWriteAccess(ctx, tx, id, userID); err != nil {
+				return err
+			}
+			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 FOR UPDATE", id); err != nil {
 				return err
 			}
 			var err error
-			saved, err = one(ctx, tx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot,note) SELECT id,user_id,title,snapshot,$3 FROM canvas_projects WHERE id=$1 AND user_id=$2 RETURNING id,title,note,created_at,jsonb_array_length(snapshot->'nodes') AS node_count,jsonb_array_length(snapshot->'connections') AS connection_count", id, userID, input.Note)
+			saved, err = one(ctx, tx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot,note) SELECT id,user_id,title,snapshot,$2 FROM canvas_projects WHERE id=$1 RETURNING id,title,note,created_at,jsonb_array_length(snapshot->'nodes') AS node_count,jsonb_array_length(snapshot->'connections') AS connection_count", id, input.Note)
 			if err != nil {
 				return err
 			}
@@ -284,10 +356,13 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		u := currentUser(c)
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 AND user_id=$2 FOR UPDATE", id, u.ID); err != nil {
+			if err := projectWriteAccess(ctx, tx, id, u.ID); err != nil {
 				return err
 			}
-			history, err := one(ctx, tx, "SELECT * FROM canvas_project_history WHERE id=$1 AND project_id=$2 AND user_id=$3", historyID, id, u.ID)
+			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 FOR UPDATE", id); err != nil {
+				return err
+			}
+			history, err := one(ctx, tx, "SELECT * FROM canvas_project_history WHERE id=$1 AND project_id=$2", historyID, id)
 			if err != nil {
 				return err
 			}
@@ -319,7 +394,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 AND user_id=$2 FOR UPDATE", id, currentUser(c).ID); err != nil {
+			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 AND (user_id=$2 OR EXISTS(SELECT 1 FROM workspaces w WHERE w.id=canvas_projects.workspace_id AND w.owner_id=$2)) FOR UPDATE", id, currentUser(c).ID); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, "DELETE FROM media_references WHERE (owner_kind='canvas' AND owner_id=$1) OR (owner_kind='history' AND owner_id IN(SELECT id FROM canvas_project_history WHERE project_id=$1))", id); err != nil {
@@ -349,12 +424,13 @@ func trimCanvasHistory(ctx context.Context, tx pgx.Tx, id string) error {
 }
 
 type assetInput struct {
-	Scope    string         `json:"scope" binding:"omitempty,oneof=private public"`
-	Type     string         `json:"type" binding:"omitempty,oneof=image text video audio"`
-	Title    string         `json:"title" binding:"omitempty,max=200"`
-	Content  *string        `json:"content"`
-	MediaID  *string        `json:"mediaId"`
-	Metadata map[string]any `json:"metadata"`
+	Scope       string         `json:"scope" binding:"omitempty,oneof=private public"`
+	Type        string         `json:"type" binding:"omitempty,oneof=image text video audio"`
+	Title       string         `json:"title" binding:"omitempty,max=200"`
+	Content     *string        `json:"content"`
+	MediaID     *string        `json:"mediaId"`
+	Metadata    map[string]any `json:"metadata"`
+	WorkspaceID *string        `json:"workspaceId"`
 }
 
 func (a *App) assetRoutes(api *gin.RouterGroup) {
@@ -363,7 +439,8 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		scope := c.DefaultQuery("scope", "all")
 		u := currentUser(c)
 		// 素材页改为服务端分页后，关键词与类型筛选也必须在服务端执行。
-		where, args := "((scope='public' AND $2<>'private') OR (owner_id=$1 AND scope='private' AND $2<>'public'))", []any{u.ID, scope}
+		// 工作区共享素材只对成员可见，统一并入 all 视图，不混入 private/public 筛选。
+		where, args := "((scope='public' AND $2<>'private') OR (owner_id=$1 AND scope='private' AND $2<>'public') OR ($2='all' AND owner_id<>$1 AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$1)))", []any{u.ID, scope}
 		if kind := c.Query("kind"); kind != "" {
 			args = append(args, kind)
 			where += " AND type=$" + str(len(args))
@@ -378,7 +455,8 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		query := "SELECT * FROM assets WHERE " + where + " ORDER BY updated_at DESC,id DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
+		query := `SELECT *,CASE WHEN owner_id=$1 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$1),'') END AS access_role,
+			(SELECT name FROM workspaces WHERE id=assets.workspace_id) AS workspace_name FROM assets WHERE ` + where + " ORDER BY updated_at DESC,id DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
 		items, err := rows(ctx, a.DB, query, append(args, limit, offset)...)
 		return gin.H{"assets": items, "total": integer(total["total"])}, err
 	}))
@@ -387,7 +465,9 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		row, err := one(c.Request.Context(), a.DB, "SELECT * FROM assets WHERE id=$1 AND (owner_id=$2 OR scope='public')", id, currentUser(c).ID)
+		row, err := one(c.Request.Context(), a.DB, `SELECT *,CASE WHEN owner_id=$2 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$2),'') END AS access_role,
+			(SELECT name FROM workspaces WHERE id=assets.workspace_id) AS workspace_name
+			FROM assets WHERE id=$1 AND (owner_id=$2 OR scope='public' OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$2))`, id, currentUser(c).ID)
 		return gin.H{"asset": row}, err
 	}))
 	save := respond(func(c *gin.Context) (any, error) {
@@ -407,12 +487,14 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			owner := u.ID
+			var workspaceID any
 			if !create {
-				old, err := one(ctx, tx, "SELECT * FROM assets WHERE id=$1 AND (owner_id=$2 OR ($3 AND scope='public')) FOR UPDATE", id, u.ID, u.Role == "admin")
+				old, err := one(ctx, tx, "SELECT * FROM assets WHERE id=$1 AND (owner_id=$2 OR ($3 AND scope='public') OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$2 AND wm.role IN('owner','editor'))) FOR UPDATE", id, u.ID, u.Role == "admin")
 				if err != nil {
 					return err
 				}
 				owner = str(old["ownerId"])
+				workspaceID = old["workspaceId"]
 				if input.Scope == "" {
 					input.Scope = str(old["scope"])
 				}
@@ -432,6 +514,27 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 				}
 				if input.Metadata == nil {
 					input.Metadata, _ = old["metadata"].(map[string]any)
+				}
+			}
+			// 调整素材所属工作区只允许素材所有者/管理员执行；目标工作区要求编辑者及以上角色。
+			if input.WorkspaceID != nil {
+				if owner != u.ID && u.Role != "admin" {
+					return problem(403, "forbidden", "仅素材所有者可以调整所属工作区")
+				}
+				target := strings.TrimSpace(*input.WorkspaceID)
+				workspaceID = nil
+				if target != "" {
+					if !validID(target) {
+						return problem(400, "invalid_workspace", "工作区编号不正确")
+					}
+					role, err := workspaceRole(ctx, tx, target, u.ID)
+					if err != nil {
+						return err
+					}
+					if role != "owner" && role != "editor" {
+						return problem(403, "forbidden", "需要工作区编辑权限才能移入素材")
+					}
+					workspaceID = target
 				}
 			}
 			if input.Scope == "" {
@@ -462,7 +565,7 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 			} else {
 				input.MediaID = nil
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO assets(id,owner_id,scope,type,title,content,media_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,type=excluded.type,title=excluded.title,content=excluded.content,media_id=excluded.media_id,metadata=excluded.metadata,updated_at=now()", id, owner, input.Scope, input.Type, input.Title, input.Content, input.MediaID, jsonBytes(input.Metadata)); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO assets(id,owner_id,scope,type,title,content,media_id,metadata,workspace_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,type=excluded.type,title=excluded.title,content=excluded.content,media_id=excluded.media_id,metadata=excluded.metadata,workspace_id=excluded.workspace_id,updated_at=now()", id, owner, input.Scope, input.Type, input.Title, input.Content, input.MediaID, jsonBytes(input.Metadata), workspaceID); err != nil {
 				return err
 			}
 			if err := syncMediaRefs(ctx, tx, "asset", id, owner, ids); err != nil {
@@ -484,7 +587,7 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		u := currentUser(c)
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			result, err := tx.Exec(ctx, "DELETE FROM assets WHERE id=$1 AND (owner_id=$2 OR ($3 AND scope='public'))", id, u.ID, u.Role == "admin")
+			result, err := tx.Exec(ctx, "DELETE FROM assets WHERE id=$1 AND (owner_id=$2 OR ($3 AND scope='public') OR EXISTS(SELECT 1 FROM workspaces w WHERE w.id=assets.workspace_id AND w.owner_id=$2))", id, u.ID, u.Role == "admin")
 			if err != nil {
 				return err
 			}

@@ -248,6 +248,8 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 		}
 		return a.batchDetail(c.Request.Context(), id, currentUser(c).ID)
 	}))
+	// 批次级 SSE：非文本任务的状态变化由 worker/管理操作统一 publishTaskChange 唤醒。
+	api.GET("/generation-batches/:id/events", a.batchEvents)
 	api.DELETE("/generation-batches/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
@@ -278,6 +280,10 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			_, err := tx.Exec(ctx, "UPDATE generation_batches SET deleted_at=now() WHERE id=$1", id)
 			return err
 		})
+		if err == nil {
+			// 唤醒仍挂在 SSE 上的订阅者，让前端立刻收到 unavailable 并关闭流。
+			a.publishBatchEvent(ctx, id)
+		}
 		return nil, err
 	}))
 	api.GET("/generation-tasks/:id", respond(func(c *gin.Context) (any, error) {
@@ -381,7 +387,7 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		return err
 	}
 	canceled := false
-	isText := false
+	var canceledTask Row
 	err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 		owner := str(row["userId"])
 		if err := lockWallet(ctx, tx, owner); err != nil {
@@ -394,7 +400,7 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if task["status"] != "reviewing" && task["status"] != "queued" && task["status"] != "running" {
 			return nil
 		}
-		isText = task["capability"] == "text"
+		canceledTask = task
 		price := integer(task["priceMicros"])
 		if _, err = changeWallet(ctx, tx, owner, "release", taskReference(task), price, -price, "任务取消退回冻结余额"); err != nil {
 			return err
@@ -422,10 +428,8 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 	// 事务提交后再广播：取消状态已落库，执行中的上游请求可以安全中断。
 	if canceled {
 		a.publishCancel(ctx, id)
-		// 文本 SSE 只在收到信号时查库，取消是 worker 之外的状态变化，需要单独通知订阅者。
-		if isText {
-			a.publishText(ctx, id)
-		}
+		// SSE 只在收到信号时查库，取消是 worker 之外的状态变化，需要单独通知订阅者。
+		a.publishTaskChange(ctx, canceledTask)
 	}
 	return nil
 }

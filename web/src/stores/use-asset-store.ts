@@ -18,6 +18,10 @@ type AssetBase<T extends AssetKind> = {
     ownerId?: string;
     scope?: AssetScope;
     editable?: boolean;
+    deletable?: boolean;
+    accessRole?: "owner" | "editor" | "viewer" | "";
+    workspaceId?: string | null;
+    workspaceName?: string | null;
     kind: T;
     title: string;
     coverUrl: string;
@@ -63,11 +67,17 @@ export function assetCoverUrl(asset: Asset) {
 export function normalizeAsset(record: assetApi.AssetRecord): Asset {
     const metadata = record.metadata || {};
     const user = useUserStore.getState().user;
+    const mine = Boolean(record.ownerId && record.ownerId === user?.id);
     const common = {
         id: record.id,
         ownerId: record.ownerId,
         scope: record.scope,
-        editable: Boolean(record.ownerId && record.ownerId === user?.id),
+        // 工作区素材按成员角色控制编辑；删除只放行所有者（后端对工作区所有者单独放行）。
+        editable: mine || record.accessRole === "owner" || record.accessRole === "editor",
+        deletable: mine || (record.accessRole === "owner" && Boolean(record.workspaceId)),
+        accessRole: record.accessRole || "owner",
+        workspaceId: record.workspaceId || null,
+        workspaceName: record.workspaceName || null,
         title: record.title,
         coverUrl: stringMetadata(metadata, "coverUrl"),
         tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : [],

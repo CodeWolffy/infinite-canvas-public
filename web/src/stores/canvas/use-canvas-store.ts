@@ -14,6 +14,11 @@ export type CanvasProject = {
     /** 列表接口只下发规模统计；快照要等 loadProject 拉取详情后才可用。 */
     nodeCount: number;
     connectionCount: number;
+    /** 当前用户对画布的有效角色；viewer 只读，不会向服务端写回。 */
+    accessRole: "owner" | "editor" | "viewer" | "";
+    workspaceId: string | null;
+    workspaceName: string | null;
+    canDelete: boolean;
     snapshotLoaded: boolean;
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
@@ -40,8 +45,9 @@ type CanvasStore = {
     saveError: CanvasSaveError | null;
     hydrateProjects: (userId: string) => Promise<void>;
     loadMoreProjects: () => Promise<void>;
-    createProject: (title?: string) => Promise<string>;
+    createProject: (title?: string, workspaceId?: string) => Promise<string>;
     importProject: (project: Partial<CanvasProject>) => Promise<string>;
+    adoptProject: (record: canvasApi.CanvasProjectDetail) => string;
     loadProject: (id: string) => Promise<CanvasProject | null>;
     loadProjects: (ids: string[]) => Promise<CanvasProject[]>;
     renameProject: (id: string, title: string) => Promise<void>;
@@ -83,6 +89,15 @@ function projectSnapshot(project: CanvasProject): CanvasSnapshot {
     return { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport };
 }
 
+function accessFields(record: canvasApi.CanvasProjectSummary) {
+    return {
+        accessRole: record.accessRole || "owner",
+        workspaceId: record.workspaceId || null,
+        workspaceName: record.workspaceName || null,
+        canDelete: record.canDelete !== false,
+    };
+}
+
 function listProject(record: canvasApi.CanvasProjectSummary): CanvasProject {
     return {
         id: record.id,
@@ -91,6 +106,7 @@ function listProject(record: canvasApi.CanvasProjectSummary): CanvasProject {
         updatedAt: record.updatedAt,
         nodeCount: record.nodeCount,
         connectionCount: record.connectionCount,
+        ...accessFields(record),
         snapshotLoaded: false,
         ...emptySnapshot(),
     };
@@ -106,6 +122,7 @@ function detailProject(record: canvasApi.CanvasProjectDetail): CanvasProject {
         updatedAt: record.updatedAt,
         nodeCount: merged.nodes.length,
         connectionCount: merged.connections.length,
+        ...accessFields(record),
         snapshotLoaded: true,
         ...merged,
     };
@@ -126,7 +143,10 @@ function mergeProject(project: CanvasProject) {
 type ProjectUpdatePatch = { title?: string; snapshot?: CanvasSnapshot; viewport?: ViewportTransform };
 
 function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
-    if (!useCanvasStore.getState().hydrated) return;
+    const state = useCanvasStore.getState();
+    if (!state.hydrated) return;
+    // 工作区 viewer 角色只读：本地编辑不落库，也不会打到服务端 403。
+    if (state.projects.find((project) => project.id === id)?.accessRole === "viewer") return;
     const merged: ProjectUpdatePatch = { ...pendingUpdates.get(id), ...patch };
     // 待写入的完整快照已经带上当时的视口，单独的小视口写入没有意义。
     if (merged.snapshot) delete merged.viewport;
@@ -251,9 +271,9 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 assertCurrentSession(sessionVersion);
                 set((state) => ({ projects: [...state.projects, ...records.projects.map(listProject).filter((item) => !state.projects.some((existing) => existing.id === item.id))], projectTotal: records.total }));
             },
-            createProject: async (title = i18n.t("canvas.project.untitled")) => {
+            createProject: async (title = i18n.t("canvas.project.untitled"), workspaceId) => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
-                const project = detailProject(await canvasApi.createCanvasProject({ title, snapshot: emptySnapshot() }));
+                const project = detailProject(await canvasApi.createCanvasProject({ title, snapshot: emptySnapshot(), workspaceId: workspaceId || undefined }));
                 assertCurrentSession(sessionVersion);
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
@@ -274,6 +294,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
             },
+            // 服务端已创建的项目（如从模板生成）直接纳入本地列表，避免再拉一次详情。
+            adoptProject: (record) => mergeProject(detailProject(record)).id,
             loadProject: async (id) => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
                 const cached = get().projects.find((item) => item.id === id);

@@ -86,8 +86,8 @@ func (a *App) moderationRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		userID := str(review["userId"])
-		// 事务提交后通知文本 SSE 订阅者：审核结果改变任务状态，但不会经过 worker 的 publishText。
-		textTasks := []string{}
+		// 事务提交后通知 SSE 订阅者：审核结果改变任务状态，但不会经过 worker 的发布路径。
+		changedTasks := []Row{}
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if err := lockWallet(ctx, tx, userID); err != nil {
 				return err
@@ -107,9 +107,7 @@ func (a *App) moderationRoutes(admin *gin.RouterGroup) {
 				return err
 			}
 			for _, task := range tasks {
-				if task["capability"] == "text" {
-					textTasks = append(textTasks, str(task["id"]))
-				}
+				changedTasks = append(changedTasks, task)
 				if input.Decision == "approved" {
 					if err = a.modelAccess(ctx, tx, userID, str(task["modelId"])); err != nil {
 						return err
@@ -148,8 +146,8 @@ func (a *App) moderationRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		for _, taskID := range textTasks {
-			a.publishText(ctx, taskID)
+		for _, task := range changedTasks {
+			a.publishTaskChange(ctx, task)
 		}
 		return nil, nil
 	}))

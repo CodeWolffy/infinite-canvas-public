@@ -100,9 +100,11 @@ func userIDOf(c *gin.Context) string {
 const requestTimeout = 60 * time.Second
 
 var slowRoutes = map[string]bool{
-	"/api/text/requests/:id/events": true,
-	"/api/media":                    true,
-	"/api/media/:id":                true,
+	"/api/text/requests/:id/events":       true,
+	"/api/generation-batches/:id/events":  true,
+	"/api/shared/:token/media/:mediaId":   true,
+	"/api/media":                          true,
+	"/api/media/:id":                      true,
 	"/api/admin/playground/test":    true,
 	"/api/admin/channels/:id/check": true,
 	"/api/admin/channels/check-all": true,
@@ -138,7 +140,11 @@ func requestID() gin.HandlerFunc {
 
 // sseEventsPath 是长连接路由，既不计时也不记访问日志，避免污染指标与刷屏。
 func sseEventsPath(c *gin.Context) bool {
-	return c.FullPath() == "/api/text/requests/:id/events"
+	switch c.FullPath() {
+	case "/api/text/requests/:id/events", "/api/generation-batches/:id/events":
+		return true
+	}
+	return false
 }
 
 func silentPath(c *gin.Context) bool {
