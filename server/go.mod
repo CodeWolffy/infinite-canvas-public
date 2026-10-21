@@ -3,7 +3,7 @@ module infinite-canvas-public/server
 go 1.26.0
 
 require (
-	github.com/Calcium-Ion/go-epay v0.0.4
+	github.com/Calcium-Ion/go-epay v0.0.5
 	github.com/alexedwards/argon2id v1.0.0
 	github.com/gabriel-vasile/mimetype v1.4.8
 	github.com/gin-gonic/gin v1.11.0
