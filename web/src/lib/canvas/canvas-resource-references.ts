@@ -4,6 +4,7 @@ import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageToDataUrl } from "@/services/image-storage";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
+import { buildCanvasGraph, type CanvasGraph } from "@/lib/canvas/canvas-graph";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text";
 
@@ -18,8 +19,8 @@ export type CanvasResourceReference = {
     active: boolean;
 };
 
-export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    return labelResourceNodes(getMentionResourceNodes(node.id, nodes, connections), true);
+export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNodeData[], connections: CanvasConnection[], graph?: CanvasGraph) {
+    return labelResourceNodes(getMentionResourceNodes(node.id, nodes, connections, graph), true);
 }
 
 export function buildCanvasResourceReferences(nodes: CanvasNodeData[]) {
@@ -50,56 +51,73 @@ export async function resolveCanvasReferenceImages(references: CanvasResourceRef
     }));
 }
 
-export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const configInputs = expandGroupResourceNodes(getConnectedConfigInputNodes(nodeId, nodes, connections), nodes);
+export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], graph = buildCanvasGraph(nodes, connections)) {
+    const configInputs = expandGroupResourceNodes(getConnectedConfigInputNodes(nodeId, graph), graph);
     if (configInputs.length) return configInputs;
-    const ownInputs = expandGroupResourceNodes(getContextInputNodes(nodeId, nodes, connections), nodes);
+    const ownInputs = expandGroupResourceNodes(getContextInputNodes(nodeId, graph), graph);
     if (ownInputs.length) return ownInputs;
-    const node = nodes.find((item) => item.id === nodeId);
+    const node = graph.nodeById.get(nodeId);
     return node && isResourceNode(node) ? [node] : [];
 }
 
-export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const configInputs = getConnectedConfigInputNodes(nodeId, nodes, connections);
+export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], graph = buildCanvasGraph(nodes, connections)) {
+    const configInputs = getConnectedConfigInputNodes(nodeId, graph);
     if (configInputs.length) return configInputs;
-    const ownInputs = getContextInputNodes(nodeId, nodes, connections);
+    const ownInputs = getContextInputNodes(nodeId, graph);
     if (ownInputs.length) return ownInputs;
     return [];
 }
 
-function getContextInputNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    return connections
-        .filter((connection) => connection.toNodeId === nodeId)
-        .map((connection) => nodes.find((node) => node.id === connection.fromNodeId))
-        .filter((node): node is CanvasNodeData => Boolean(node && isCanvasReferenceNode(node, nodes)))
+const contextInputCache = new WeakMap<CanvasGraph, Map<string, CanvasNodeData[]>>();
+
+function getContextInputNodes(nodeId: string, graph: CanvasGraph) {
+    let inputs = contextInputCache.get(graph);
+    if (!inputs) contextInputCache.set(graph, inputs = new Map());
+    const cached = inputs.get(nodeId);
+    if (cached) return cached;
+    const nodes = (graph.incoming.get(nodeId) || [])
+        .map((connection) => graph.nodeById.get(connection.fromNodeId))
+        .filter((node): node is CanvasNodeData => Boolean(node && (isResourceNode(node) || node.type === CanvasNodeType.Group && groupResources(node.id, graph).length)))
         .sort((a, b) => {
             const diffY = a.position.y - b.position.y;
             if (Math.abs(diffY) > 8) return diffY;
             return a.position.x - b.position.x;
         });
+    inputs.set(nodeId, nodes);
+    return nodes;
 }
 
-function getConnectedConfigInputNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const configConnection = connections.find((connection) => connection.fromNodeId === nodeId && nodes.find((node) => node.id === connection.toNodeId)?.type === CanvasNodeType.Config);
+function getConnectedConfigInputNodes(nodeId: string, graph: CanvasGraph) {
+    const configConnection = graph.outgoing.get(nodeId)?.find((connection) => graph.nodeById.get(connection.toNodeId)?.type === CanvasNodeType.Config);
     if (!configConnection) return [];
-    return getContextInputNodes(configConnection.toNodeId, nodes, connections).filter((node) => node.id !== nodeId);
+    return getContextInputNodes(configConnection.toNodeId, graph).filter((node) => node.id !== nodeId);
 }
 
-function hasGroupResources(node: CanvasNodeData, nodes: CanvasNodeData[]) {
-    return node.type === CanvasNodeType.Group && getGroupResourceNodes(node.id, nodes).length > 0;
+function hasGroupResources(node: CanvasNodeData, nodes: CanvasNodeData[], graph?: CanvasGraph) {
+    return node.type === CanvasNodeType.Group && getGroupResourceNodes(node.id, nodes, graph).length > 0;
 }
 
-export function isCanvasReferenceNode(node: CanvasNodeData, nodes: CanvasNodeData[]) {
-    return isResourceNode(node) || hasGroupResources(node, nodes);
+export function isCanvasReferenceNode(node: CanvasNodeData, nodes: CanvasNodeData[], graph?: CanvasGraph) {
+    return isResourceNode(node) || hasGroupResources(node, nodes, graph);
 }
 
-function expandGroupResourceNodes(inputNodes: CanvasNodeData[], nodes: CanvasNodeData[]) {
-    const resources = inputNodes.flatMap((node) => (node.type === CanvasNodeType.Group ? getGroupResourceNodes(node.id, nodes) : [node]));
+function expandGroupResourceNodes(inputNodes: CanvasNodeData[], graph: CanvasGraph) {
+    const resources = inputNodes.flatMap((node) => (node.type === CanvasNodeType.Group ? groupResources(node.id, graph) : [node]));
     return [...new Map(resources.map((node) => [node.id, node])).values()];
 }
 
-export function getGroupResourceNodes(groupId: string, nodes: CanvasNodeData[]) {
-    return nodes.filter((node) => node.metadata?.groupId === groupId && isResourceNode(node));
+const groupResourceCache = new WeakMap<CanvasGraph, Map<string, CanvasNodeData[]>>();
+
+function groupResources(groupId: string, graph: CanvasGraph) {
+    let groups = groupResourceCache.get(graph);
+    if (!groups) groupResourceCache.set(graph, groups = new Map());
+    let resources = groups.get(groupId);
+    if (!resources) groups.set(groupId, resources = (graph.members.get(groupId) || []).filter(isResourceNode));
+    return resources;
+}
+
+export function getGroupResourceNodes(groupId: string, nodes: CanvasNodeData[], graph?: CanvasGraph) {
+    return graph ? groupResources(groupId, graph) : nodes.filter((node) => node.metadata?.groupId === groupId && isResourceNode(node));
 }
 
 function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {

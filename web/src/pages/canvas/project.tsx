@@ -53,7 +53,9 @@ import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { isSupportedCanvasImage, useCanvasClipboard, type CanvasClipboard } from "@/pages/canvas/hooks/use-canvas-clipboard";
 import { useCanvasGenerationRecovery, type CanvasGenerationRequest } from "@/pages/canvas/hooks/use-canvas-generation-recovery";
 import { useCanvasShortcuts } from "@/pages/canvas/hooks/use-canvas-shortcuts";
+import { useCanvasPersistence } from "@/pages/canvas/hooks/use-canvas-persistence";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { buildCanvasGraph } from "@/lib/canvas/canvas-graph";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import { applyGroupSelection, applyUngroupSelection, canGroupSelectedNodes, canUngroupSelectedNodes, collectGroupMemberNodes, findContainingGroupId, findGroupDropTarget, focusViewportForNode, getConnectionTargetAnchor, getGroupWrapRect, normalizeConnection, snapNodesIntoGroup } from "@/lib/canvas/canvas-node-geometry";
@@ -211,11 +213,11 @@ function InfiniteCanvasPage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
+    const reloadVersion = useCanvasStore((state) => state.reloadVersion);
     const createProject = useCanvasStore((state) => state.createProject);
     const loadProject = useCanvasStore((state) => state.loadProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const applyRestoredProject = useCanvasStore((state) => state.applyRestoredProject);
-    const flushProject = useCanvasStore((state) => state.flushProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
@@ -224,20 +226,6 @@ function InfiniteCanvasPage() {
     accessRoleRef.current = currentProject?.accessRole;
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
-    useEffect(() => {
-        const handleBeforeUnload = () => {
-            if (projectId && !readOnly) {
-                void flushProject(projectId);
-            }
-        };
-        window.addEventListener("beforeunload", handleBeforeUnload);
-        return () => {
-            window.removeEventListener("beforeunload", handleBeforeUnload);
-            if (projectId && !readOnly) {
-                void flushProject(projectId);
-            }
-        };
-    }, [projectId, flushProject, readOnly]);
     const [nodes, setRawNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setRawConnections] = useState<CanvasConnection[]>([]);
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
@@ -264,8 +252,10 @@ function InfiniteCanvasPage() {
     const [projectLoaded, setProjectLoaded] = useState(false);
     const loadedProjectIdRef = useRef<string | null>(null);
     const loadedSessionVersionRef = useRef<number | null>(null);
-    const projectReady = hydrated && projectLoaded && loadedProjectIdRef.current === projectId && loadedSessionVersionRef.current === sessionVersion;
+    const loadedReloadVersionRef = useRef(reloadVersion);
+    const projectReady = hydrated && projectLoaded && loadedProjectIdRef.current === projectId && loadedSessionVersionRef.current === sessionVersion && loadedReloadVersionRef.current === reloadVersion;
     const canEdit = projectReady && !readOnly;
+    useCanvasPersistence(projectId, canEdit, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport });
     const canEditRef = useRef(false);
     canEditRef.current = canEdit;
     const setNodes: Dispatch<SetStateAction<CanvasNodeData[]>> = useCallback((value) => {
@@ -511,13 +501,14 @@ function InfiniteCanvasPage() {
             setHistoryState({ canUndo: false, canRedo: false });
             loadedProjectIdRef.current = project.id;
             loadedSessionVersionRef.current = sessionVersion;
+            loadedReloadVersionRef.current = reloadVersion;
             setProjectLoaded(true);
         };
         void restore();
         return () => {
             cancelled = true;
         };
-    }, [hydrated, navigate, loadProject, projectId, sessionVersion]);
+    }, [hydrated, navigate, loadProject, projectId, sessionVersion, reloadVersion]);
 
     useEffect(() => {
         setSelectedNodeIds(new Set());
@@ -803,7 +794,10 @@ function InfiniteCanvasPage() {
         [nodes, viewBounds],
     );
 
-    const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const graph = useMemo(() => buildCanvasGraph(nodes, connections), [nodes, connections]);
+    const graphRef = useRef(graph);
+    graphRef.current = graph;
+    const nodeById = graph.nodeById;
 
     // Connections are culled like nodes; a cubic curve stays inside its control-point hull, so endpoint bounds widened by the curvature is a safe test.
     const visibleConnections = useMemo(
@@ -842,14 +836,7 @@ function InfiniteCanvasPage() {
     const canGroupSelection = canGroupSelectedNodes(selectedNodeIds, nodes);
     const canUngroupSelection = canUngroupSelectedNodes(selectedNodeIds, nodes);
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
-    const groupChildCountById = useMemo(() => {
-        const map = new Map<string, number>();
-        nodes.forEach((node) => {
-            const groupId = node.metadata?.groupId;
-            if (groupId) map.set(groupId, (map.get(groupId) || 0) + 1);
-        });
-        return map;
-    }, [nodes]);
+    const groupChildCountById = useMemo(() => new Map(Array.from(graph.members, ([id, members]) => [id, members.length] as const)), [graph]);
     const relatedHighlight = useMemo(() => {
         const nodeIds = new Set<string>();
         const connectionIds = new Set<string>();
@@ -857,33 +844,34 @@ function InfiniteCanvasPage() {
         if (!activeNodeId) return { nodeIds, connectionIds };
 
         const addNode = (nodeId: string) => {
+            if (nodeIds.has(nodeId)) return;
             nodeIds.add(nodeId);
-            if (nodeById.get(nodeId)?.type === CanvasNodeType.Group) nodes.forEach((node) => node.metadata?.groupId === nodeId && nodeIds.add(node.id));
+            if (nodeById.get(nodeId)?.type === CanvasNodeType.Group) graph.members.get(nodeId)?.forEach((node) => nodeIds.add(node.id));
         };
         addNode(activeNodeId);
-        connections.forEach((connection) => {
-            if (connection.fromNodeId !== activeNodeId && connection.toNodeId !== activeNodeId) return;
+        [...(graph.incoming.get(activeNodeId) || []), ...(graph.outgoing.get(activeNodeId) || [])].forEach((connection) => {
             connectionIds.add(connection.id);
             addNode(connection.fromNodeId);
             addNode(connection.toNodeId);
         });
 
         return { nodeIds, connectionIds };
-    }, [activeNodeId, connections, nodeById, nodes]);
+    }, [activeNodeId, graph, nodeById]);
 
-    const configInputsById = useMemo(() => {
+    const getConfigInputs = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();
-        nodes.forEach((node) => {
-            if (node.type !== CanvasNodeType.Config) return;
-            map.set(node.id, buildNodeGenerationInputs(node.id, nodes, connections));
-        });
-        return map;
-    }, [connections, nodes]);
-    const mentionReferencesByNodeId = useMemo(() => {
+        return (nodeId: string) => {
+            if (!map.has(nodeId)) map.set(nodeId, buildNodeGenerationInputs(nodeId, nodes, connections, graph));
+            return map.get(nodeId)!;
+        };
+    }, [connections, nodes, graph]);
+    const getMentionReferences = useMemo(() => {
         const map = new Map<string, ReturnType<typeof buildNodeMentionReferences>>();
-        nodes.forEach((node) => map.set(node.id, buildNodeMentionReferences(node, nodes, connections)));
-        return map;
-    }, [connections, nodes]);
+        return (node: CanvasNodeData) => {
+            if (!map.has(node.id)) map.set(node.id, buildNodeMentionReferences(node, nodes, connections, graph));
+            return map.get(node.id)!;
+        };
+    }, [connections, nodes, graph]);
     const connectedNodesByNodeId = useMemo(() => {
         const map = new Map<string, CanvasNodeData[]>();
         connections.forEach((connection) => {
@@ -895,7 +883,7 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [connections, nodeById]);
-    const referenceConnectedNodeIds = useMemo(() => new Set([referencePickerNodeId, ...(referencePickerNodeId ? connectedNodesByNodeId.get(referencePickerNodeId)?.flatMap((node) => node.type === CanvasNodeType.Group ? [node.id, ...getGroupResourceNodes(node.id, nodes).map((child) => child.id)] : [node.id]) || [] : [])].filter((id): id is string => Boolean(id))), [connectedNodesByNodeId, nodes, referencePickerNodeId]);
+    const referenceConnectedNodeIds = useMemo(() => new Set([referencePickerNodeId, ...(referencePickerNodeId ? connectedNodesByNodeId.get(referencePickerNodeId)?.flatMap((node) => node.type === CanvasNodeType.Group ? [node.id, ...getGroupResourceNodes(node.id, nodes, graph).map((child) => child.id)] : [node.id]) || [] : [])].filter((id): id is string => Boolean(id))), [connectedNodesByNodeId, graph, nodes, referencePickerNodeId]);
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
@@ -1051,8 +1039,8 @@ function InfiniteCanvasPage() {
 
     const selectNodeReference = useCallback((fromNodeId: string) => {
         if (!referencePickerNodeId || referenceConnectedNodeIds.has(fromNodeId)) return;
-        const source = nodesRef.current.find((node) => node.id === fromNodeId);
-        if (!source || !isCanvasReferenceNode(source, nodesRef.current)) return;
+        const source = graphRef.current.nodeById.get(fromNodeId);
+        if (!source || !isCanvasReferenceNode(source, nodesRef.current, graphRef.current)) return;
         setConnections((prev) => [...prev, { id: nanoid(), fromNodeId, toNodeId: referencePickerNodeId }]);
     }, [referenceConnectedNodeIds, referencePickerNodeId]);
 
@@ -3136,7 +3124,7 @@ function InfiniteCanvasPage() {
                     nodeId={panelNode.id}
                     nodes={nodes}
                     value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
-                    inputs={configInputsById.get(panelNode.id) || []}
+                    inputs={getConfigInputs(panelNode.id)}
                     connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
                     onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
                     onClose={() => setDialogNodeId(null)}
@@ -3148,7 +3136,7 @@ function InfiniteCanvasPage() {
                     node={panelNode}
                     nodes={nodes}
                     isRunning={runningNodeId === panelNode.id}
-                    mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
+                    mentionReferences={getMentionReferences(panelNode)}
                     connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
@@ -3163,7 +3151,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
+        [getConfigInputs, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, getMentionReferences, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
     );
 
     const renderNodeContentPanel = useCallback(
@@ -3171,7 +3159,7 @@ function InfiniteCanvasPage() {
             <CanvasConfigNodePanel
                 node={contentNode}
                 isRunning={runningNodeId === contentNode.id}
-                inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                inputSummary={getInputSummary(getConfigInputs(contentNode.id))}
                 onConfigChange={handleConfigNodeChange}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                 onStop={confirmStopGeneration}
@@ -3181,7 +3169,7 @@ function InfiniteCanvasPage() {
                 }}
             />
         ),
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
+        [getConfigInputs, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
     );
 
     const hoverPreviewNode = hoverPreviewNodeId ? nodeById.get(hoverPreviewNodeId) || null : null;
@@ -3291,13 +3279,13 @@ function InfiniteCanvasPage() {
                             isFocusRelated={activeNodeId === node.id}
                             isConnectionTarget={connectionTargetNodeId === node.id}
                             isConnecting={Boolean(connectingParams)}
-                            referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
+                            referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes, graph) ? "disabled" : "available"}
                             showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
                             groupChildCount={groupChildCountById.get(node.id) || 0}
                             isGroupDropTarget={dropTargetGroupId === node.id}
                             batchExpanded={expandedBatchNodeIds.has(node.id)}
                             showImageInfo={showImageInfo}
-                            mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES}
+                            mentionReferences={node.type === CanvasNodeType.Text ? getMentionReferences(node) : EMPTY_REFERENCES}
                             pluginHost={pluginHost}
                             registryVersion={nodeRegistryVersion}
                             renderPanel={renderNodePanel}

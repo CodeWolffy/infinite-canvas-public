@@ -9,6 +9,7 @@ import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
+import { CanvasSaveConflictModal } from "@/components/canvas/canvas-save-conflict-modal";
 
 export function CanvasTopBar({
     title,
@@ -214,15 +215,16 @@ function CompactAgentStatus({ status, onClick }: { status: { connected: boolean;
 
 function CanvasSaveStatus() {
     const { t } = useTranslation();
+    const [conflictOpen, setConflictOpen] = useState(false);
     const saveError = useCanvasStore((state) => state.saveError);
     const retrySave = useCanvasStore((state) => state.retrySave);
     if (!saveError) return null;
     if (saveError.conflict) return (
-        <Tooltip title={saveError.message}>
-            <span className="flex h-8 cursor-help items-center gap-1.5 text-xs" style={{ color: "#dc2626" }}>
-                <TriangleAlert className="size-3.5" />画布版本冲突
-            </span>
-        </Tooltip>
+        <><Tooltip title={saveError.message}>
+            <button type="button" onClick={() => setConflictOpen(true)} className="flex h-8 items-center gap-1.5 rounded px-1 text-xs hover:bg-black/5 dark:hover:bg-white/10" style={{ color: "#dc2626" }}>
+                <TriangleAlert className="size-3.5" />处理画布冲突
+            </button>
+        </Tooltip><CanvasSaveConflictModal projectId={saveError.projectId} open={conflictOpen} onClose={() => setConflictOpen(false)} /></>
     );
     return (
         <Tooltip title={t("canvas.save.retryTip", { message: saveError.message })}>

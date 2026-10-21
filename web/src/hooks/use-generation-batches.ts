@@ -35,6 +35,7 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     const activeBatchIdsRef = useRef<string[]>([]);
     const previewLogIdRef = useRef("");
     const watchedBatchesRef = useRef(new Set<string>());
+    const subscriptionsRef = useRef(new Map<string, () => void>());
     const agentTasksRef = useRef(new Map<string, string>());
     const defaultTitleRef = useRef(document.title);
     const applyDetailRef = useRef<(detail: GenerationBatchDetail) => { log: L; results: R[] }>(() => { throw new Error("uninitialized"); });
@@ -62,15 +63,27 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     // 活跃批次走 SSE 推送：任务状态变化时服务端立刻下发快照，任务全部结束后服务端关闭连接；
     // 连接异常时 watchGenerationBatch 内部会退化为轮询兜底。
     useEffect(() => {
-        const cleanups = activeBatchIds.map((batchId) => watchGenerationBatch(batchId, (detail) => {
-            const applied = applyDetailRef.current(detail);
-            if (previewLogIdRef.current === batchId) {
-                setPreviewLog(applied.log);
-                setResults(applied.results);
-            }
-        }));
-        return () => cleanups.forEach((cleanup) => cleanup());
+        const subscriptions = subscriptionsRef.current;
+        const active = new Set(activeBatchIds);
+        subscriptions.forEach((cleanup, id) => {
+            if (!active.has(id)) { cleanup(); subscriptions.delete(id); }
+        });
+        active.forEach((batchId) => {
+            if (subscriptions.has(batchId)) return;
+            subscriptions.set(batchId, watchGenerationBatch(batchId, (detail) => {
+                const applied = applyDetailRef.current(detail);
+                if (previewLogIdRef.current === batchId) {
+                    setPreviewLog(applied.log);
+                    setResults(applied.results);
+                }
+            }));
+        });
     }, [activeBatchIds]);
+
+    useEffect(() => {
+        const subscriptions = subscriptionsRef.current;
+        return () => { subscriptions.forEach((cleanup) => cleanup()); subscriptions.clear(); };
+    }, []);
 
     const ensureNotifyPermission = () => {
         if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
@@ -104,8 +117,8 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
         setLogs((current) => [applied.log, ...current.filter((item) => item.id !== applied.log.id)].sort((a, b) => b.createdAt - a.createdAt));
         const active = applied.log.status === "pending";
         setActiveBatchIds((current) => {
-            const rest = current.filter((id) => id !== applied.log.id);
-            return active ? [...rest, applied.log.id] : rest;
+            if (current.includes(applied.log.id) === active) return current;
+            return active ? [...current, applied.log.id] : current.filter((id) => id !== applied.log.id);
         });
         if (active) watchedBatchesRef.current.add(applied.log.id);
         else if (watchedBatchesRef.current.delete(applied.log.id)) {

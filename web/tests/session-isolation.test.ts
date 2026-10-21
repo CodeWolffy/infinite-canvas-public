@@ -11,7 +11,7 @@ function deferred() {
 }
 
 const tick = () => new Promise(setImmediate);
-const record = (id: string, title = id) => ({ id, title, nodeCount: 0, connectionCount: 0, snapshot: {}, createdAt: "2026-01-01", updatedAt: "2026-01-01" });
+const record = (id: string, title = id) => ({ id, title, revision: 0, nodeCount: 0, connectionCount: 0, snapshot: {}, createdAt: "2026-01-01", updatedAt: "2026-01-01" });
 
 function setup(t: { onTestFinished: (fn: () => void) => void }) {
     const channels: any[] = [];
@@ -61,6 +61,91 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
     t.onTestFinished(() => user.getState().clearSession());
     return { auth, profile, canvasApi, assetApi, user, canvas, assets, login, prime, channels, imports, load, browserStorage };
 }
+
+test("冲突后另存本地完整副本，不覆盖远端，并在重新进入原画布时读取远端", async (t) => {
+    const { canvas, canvasApi, imports, login, prime } = setup(t);
+    await login("A");
+    await prime();
+    const localNodes = [{ id: "local", type: "text", metadata: { content: "保留本地" } }];
+    const remote = { ...record("project", "远端"), revision: 2, snapshot: { nodes: [{ id: "remote" }], connections: [] } };
+    let writes = 0;
+    canvasApi.updateCanvasProject = async () => { writes++; throw Object.assign(new imports["@/services/api/request"].ApiError("冲突"), { status: 409 }); };
+    let created: any;
+    canvasApi.createCanvasProject = async (input: any) => { created = input; return { ...record("copy", input.title), snapshot: input.snapshot }; };
+    canvasApi.getCanvasProject = async () => remote;
+    canvas.getState().updateProject("project", { nodes: localNodes });
+    await canvas.getState().flushProject("project");
+    await canvas.getState().retrySave("project");
+    expect(writes).toBe(1);
+    expect(canvas.getState().saveError.conflict).toBe(true);
+    const viewport = { x: 48, y: 19, k: 2 };
+    const release = canvas.getState().registerSnapshotCapture("project", () => {
+        if (canvas.getState().projects.find((project: any) => project.id === "project").viewport !== viewport) canvas.getState().updateProject("project", { viewport });
+    });
+    expect(await canvas.getState().resolveConflict("project", "copy")).toBe("copy");
+    release();
+    expect(created.snapshot.nodes).toEqual(localNodes);
+    expect(created.snapshot.viewport).toEqual(viewport);
+    expect(created.workspaceId).toBeUndefined();
+    expect(canvas.getState().hasPendingChanges("project")).toBe(false);
+    expect((await canvas.getState().loadProject("project")).nodes[0].id).toBe("remote");
+    expect(remote.revision).toBe(2);
+});
+
+test("加载远端前若本地再次编辑则拒绝替换，确认加载后可以用新版本继续保存", async (t) => {
+    const { canvas, canvasApi, login, prime } = setup(t);
+    await login("A"); await prime();
+    const response = deferred();
+    canvasApi.getCanvasProject = () => response.promise;
+    const loading = expect(canvas.getState().resolveConflict("project", "reload")).rejects.toThrow(/本地编辑已变化/);
+    await Promise.resolve();
+    canvas.getState().updateProject("project", { nodes: [{ id: "new-edit" }] });
+    response.resolve({ ...record("project"), revision: 3 });
+    await loading;
+    expect(canvas.getState().projects[0].nodes[0].id).toBe("new-edit");
+    canvasApi.getCanvasProject = async () => ({ ...record("project"), revision: 3 });
+    await canvas.getState().resolveConflict("project", "reload");
+    let expectedRevision = -1;
+    canvasApi.updateCanvasProject = async (_id: string, input: any) => { expectedRevision = input.expectedRevision; return { ...record("project"), revision: 4 }; };
+    canvas.getState().updateProject("project", { nodes: [{ id: "after-reload" }] });
+    await canvas.getState().flushProject("project");
+    expect(expectedRevision).toBe(3);
+    expect(canvas.getState().hasPendingChanges("project")).toBe(false);
+});
+
+test("内容保存排队期间的新视口会合并进快照，干净画布再次打开会刷新内容与权限", async (t) => {
+    const { canvas, canvasApi, login, prime } = setup(t);
+    await login("A"); await prime();
+    let sent: any;
+    canvasApi.updateCanvasProject = async (_id: string, input: any) => { sent = input; return { ...record("project"), revision: 1 }; };
+    canvas.getState().updateProject("project", { nodes: [{ id: "node" }] });
+    canvas.getState().updateProject("project", { viewport: { x: 42, y: 13, k: 2 } });
+    await canvas.getState().flushProject("project");
+    expect(sent.snapshot.viewport).toEqual({ x: 42, y: 13, k: 2 });
+    canvasApi.getCanvasProject = async () => ({ ...record("project"), revision: 2, accessRole: "viewer", snapshot: { nodes: [{ id: "other-editor" }], connections: [] } });
+    const refreshed = await canvas.getState().loadProject("project");
+    expect(refreshed.nodes[0].id).toBe("other-editor");
+    expect(refreshed.accessRole).toBe("viewer");
+});
+
+test("请求远端版本期间尚未入队的视口变化也阻止替换", async (t) => {
+    const { canvas, canvasApi, login, prime } = setup(t);
+    await login("A"); await prime();
+    const response = deferred();
+    canvasApi.getCanvasProject = () => response.promise;
+    let viewport = canvas.getState().projects[0].viewport;
+    const release = canvas.getState().registerSnapshotCapture("project", () => {
+        if (canvas.getState().projects[0].viewport !== viewport) canvas.getState().updateProject("project", { viewport });
+    });
+    const loading = expect(canvas.getState().resolveConflict("project", "reload")).rejects.toThrow(/本地编辑已变化/);
+    await Promise.resolve();
+    viewport = { x: 71, y: 14, k: 2 };
+    response.resolve({ ...record("project"), revision: 9 });
+    await loading;
+    release();
+    expect(canvas.getState().projects[0].viewport).toEqual(viewport);
+    expect(canvas.getState().projects[0].revision).toBe(0);
+});
 
 test("private canvas details and failed asset deletion cannot cross accounts", async (t) => {
     const { canvasApi, assetApi, canvas, assets, login } = setup(t);
