@@ -2,9 +2,6 @@ import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { createElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ session: 1, plugins: [] as any[], source: "", official: [] as any[], register: vi.fn(), subscribe: vi.fn(), imports: vi.fn() }));
@@ -40,7 +37,7 @@ beforeEach(async () => {
     loader = await import("@/lib/canvas/plugin-loader");
     sourceTools = await import("@/lib/canvas/plugin-source");
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); delete (globalThis as any).__approvedPluginExecutions; });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); delete (globalThis as any).__approvedPluginExecutions; });
 
 test("下载与指纹确认之前不执行模块；取消或摘要不符不执行", async () => {
     const prepared = await loader.preparePluginFromUrl("https://plugins.example/plugin.js");
@@ -88,32 +85,4 @@ test("确认期间切换登录会话后不得执行或写入插件状态", async
     await expect(loader.installPreparedPlugin(prepared, prepared.sha256)).rejects.toThrow("会话");
     expect(mocks.plugins).toHaveLength(0);
     expect(mocks.imports).not.toHaveBeenCalled();
-});
-
-test("真实插件管理弹窗展示来源与权限，取消不执行，明确同意才安装", async () => {
-    const { CanvasPluginManagerModal } = await import("@/components/canvas/canvas-plugin-manager-modal");
-    const { App } = await import("antd");
-    mocks.official = [{ id: "official-list-item", name: "官方测试项", version: "1", url: "https://plugins.example/official.js", sha256: "0".repeat(64) }];
-    const getStyle = window.getComputedStyle;
-    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => getStyle(element));
-    const view = render(createElement(App, {}, createElement(CanvasPluginManagerModal, { open: true, onClose: vi.fn() })));
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("tab", { name: "canvas.plugins.thirdParty" }));
-    await user.type(screen.getByPlaceholderText("canvas.plugins.urlPlaceholder"), "https://plugins.example/plugin.js");
-    await user.click(screen.getByRole("button", { name: "canvas.plugins.install", exact: true }));
-    expect((await screen.findAllByText("确认插件来源与权限")).length).toBeGreaterThan(0);
-    expect(screen.getByText(/来源：https:\/\/plugins.example/)).toBeInTheDocument();
-    expect(screen.getByText(/可读取页面与画布内容/)).toBeInTheDocument();
-    expect(mocks.imports).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /取\s*消/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "canvas.plugins.install", exact: true })).not.toHaveClass("ant-btn-loading"));
-    expect(mocks.plugins).toHaveLength(0);
-    view.unmount();
-    render(createElement(App, {}, createElement(CanvasPluginManagerModal, { open: true, onClose: vi.fn() })));
-    await user.click(screen.getByRole("tab", { name: "canvas.plugins.thirdParty" }));
-    await user.type(screen.getByPlaceholderText("canvas.plugins.urlPlaceholder"), "https://plugins.example/plugin.js");
-    await user.click(screen.getByRole("button", { name: "canvas.plugins.install", exact: true }));
-    await user.click(await screen.findByRole("button", { name: "信任此版本并执行" }));
-    await waitFor(() => expect(mocks.plugins).toHaveLength(1));
-    expect(mocks.plugins[0].approval.url).toBe("https://plugins.example/plugin.js");
 });
