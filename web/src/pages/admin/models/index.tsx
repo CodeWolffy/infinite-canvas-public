@@ -10,6 +10,7 @@ import ChannelCosts from "./components/channel-costs";
 import { capabilityLabel, modelCapabilities } from "@/lib/model-capabilities";
 import type { ModelReasoningEffort } from "@/lib/model-reasoning";
 import { clearPublicModelsCache } from "@/services/api/generation";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import ModelSettingsFields, { modelSettingsPayload, type ModelSettingsValues } from "../components/model-settings-fields";
 
 type ModelValues = ModelInput & ModelSettingsValues;
@@ -18,6 +19,7 @@ const modelExamples = { image: ["GPT Image 2", "gpt-image-2"], text: ["GPT 文�
 
 export default function AdminModelsPage() {
     const { message, modal } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const queryClient = useQueryClient();
     const [searchParams, setSearchParams] = useSearchParams();
     const category = modelCapabilities.find((item) => item.value === searchParams.get("type")) || modelCapabilities[0];
@@ -36,13 +38,14 @@ export default function AdminModelsPage() {
         return Promise.all([queryClient.invalidateQueries({ queryKey: ["admin", "models"] }), queryClient.invalidateQueries({ queryKey: ["public-models"] })]);
     };
     const refreshBindings = () => queryClient.invalidateQueries({ queryKey: ["admin", "model-bindings", bindingModel?.id] });
-    const saveModel = useMutation({ mutationFn: (values: ModelValues) => {
+    const saveModel = useMutation({ mutationFn: async (values: ModelValues) => {
         const input: ModelInput = { name: values.name, displayName: values.displayName, capability: values.capability, status: values.status, sortOrder: values.sortOrder, description: values.description || null, ...modelSettingsPayload(values, editing?.config) };
-        return editing ? updateAdminModel(editing.id, input) : createAdminModel(input);
+        const proof = await requestProof();
+        return editing ? updateAdminModel(editing.id, input, proof) : createAdminModel(input, proof);
     }, onSuccess: () => { void refreshModels(); setEditing(undefined); modelForm.resetFields(); message.success(editing ? "模型已更新" : "模型已创建"); }, onError: notifyError(message.error) });
-    const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: AdminModel["status"] }) => updateAdminModelStatus(id, status), onSuccess: () => void refreshModels(), onError: notifyError(message.error) });
+    const statusMutation = useMutation({ mutationFn: async ({ id, status }: { id: string; status: AdminModel["status"] }) => updateAdminModelStatus(id, status, status === "published" ? await requestProof() : undefined), onSuccess: () => void refreshModels(), onError: notifyError(message.error) });
     const deleteMutation = useMutation({ mutationFn: deleteAdminModel, onSuccess: () => { void refreshModels(); message.success("模型已删除"); }, onError: notifyError(message.error) });
-    const bindingMutation = useMutation({ mutationFn: ({ channelId, ...values }: BindingValues) => saveModelChannelBinding(bindingModel!.id, channelId, values), onSuccess: () => { void refreshBindings(); setBindingOpen(false); bindingForm.resetFields(); message.success("渠道绑定已保存"); }, onError: notifyError(message.error) });
+    const bindingMutation = useMutation({ mutationFn: async ({ channelId, ...values }: BindingValues) => saveModelChannelBinding(bindingModel!.id, channelId, values, await requestProof()), onSuccess: () => { void refreshBindings(); setBindingOpen(false); bindingForm.resetFields(); message.success("渠道绑定已保存"); }, onError: notifyError(message.error) });
     const unbindMutation = useMutation({ mutationFn: (bindingId: string) => deleteModelBinding(bindingModel!.id, bindingId), onSuccess: () => { void refreshBindings(); message.success("渠道绑定已移除"); }, onError: notifyError(message.error) });
 
     useEffect(() => {

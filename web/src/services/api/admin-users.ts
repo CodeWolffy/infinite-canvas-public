@@ -16,8 +16,8 @@ export async function getAdminUsersPage(input: { page: number; size?: number; ro
     return await apiRequest<{ users: AuthUser[]; total: number }>(`/api/admin/users?${query}`);
 }
 
-export async function createAdminUser(input: { username: string; displayName: string; temporaryPassword: string; role: UserRole }) {
-    return (await apiRequest<UserResponse>("/api/admin/users", { method: "POST", body: input })).user;
+export async function createAdminUser(input: { username: string; displayName: string; temporaryPassword: string; role: UserRole }, securityProof?: SecurityProof) {
+    return (await apiRequest<UserResponse>("/api/admin/users", { method: "POST", body: { ...input, securityProof } })).user;
 }
 
 export async function updateAdminUserStatus(id: string, status: UserStatus) {

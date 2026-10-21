@@ -49,8 +49,9 @@ export default function TextPage() {
     const previousSession = useRef(session);
     const restoredConversation = useRef("");
     const models = usePublicModels();
-    const available = (models.data || []).filter((model) => model.capability === "text");
-    const model = available.find((item) => item.id === modelId) || available[0];
+    const available = useMemo(() => (models.data || []).filter((model) => model.capability === "text"), [models.data]);
+    const model = available.find((item) => item.id === modelId);
+    const unavailableModel = Boolean(modelId && !models.isPending && !models.isError && !model);
     const effort = resolveReasoningEffort(model, reasoningEffort);
     const wallet = useQuery({ queryKey: ["wallet", session], queryFn: getWallet });
     const conversations = useInfiniteQuery({ queryKey: ["text-conversations", session], queryFn: ({ pageParam }) => listTextConversations(pageParam), initialPageParam: 0, getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined });
@@ -61,6 +62,10 @@ export default function TextPage() {
     }, [conversationItems, historyKeyword]);
     const groups = useMemo(() => groupConversations(visibleItems), [visibleItems]);
     const conversation = useQuery({ queryKey: ["text-conversation", session, conversationId], queryFn: () => getTextConversation(conversationId), enabled: Boolean(conversationId) });
+    useEffect(() => {
+        if (modelId || !available.length || conversationId) return;
+        setModelId(available[0].id);
+    }, [modelId, available, conversationId]);
     const latest = conversation.data?.latestRequest;
     const active = Boolean(latest && activeStates.includes(latest.status));
     const quotedPrompt = useDeferredValue(prompt);
@@ -159,7 +164,7 @@ export default function TextPage() {
         }
     };
     const cancel = async () => {
-        if (!latest || canceling) return;
+        if (!latest?.canCancel || canceling) return;
         const version = useUserStore.getState().sessionVersion;
         setCanceling(true);
         try {
@@ -172,7 +177,7 @@ export default function TextPage() {
             if (useUserStore.getState().sessionVersion === version) setCanceling(false);
         }
     };
-    const selectConversation = (id: string) => { setSearch(id ? { conversation: id } : {}); setStreamError(""); setPrompt(""); setHistoryOpen(false); if (!id) { setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
+    const selectConversation = (id: string) => { setSearch(id ? { conversation: id } : {}); setStreamError(""); setPrompt(""); setHistoryOpen(false); if (!id) { setModelId(available[0]?.id || ""); setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
     const changeModel = (id: string) => {
         const next = available.find((item) => item.id === id);
         if (files.length && next && !next.imageInput) { clearFiles(); message.info("该模型不支持图片输入，已移除图片附件"); }
@@ -181,7 +186,7 @@ export default function TextPage() {
     const removeConversation = (item: ConversationItem) => {
         modal.confirm({
             title: "删除这条对话？",
-            content: `「${item.title}」将从对话列表中移除，且不可恢复。`,
+            content: `「${item.title}」将从对话列表中移除，且不可恢复。已提交上游的生成需结束后才能删除。`,
             okText: "删除",
             okButtonProps: { danger: true },
             cancelText: "取消",
@@ -251,6 +256,7 @@ export default function TextPage() {
             <div ref={scroll} className="thin-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
                 <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
                     {models.error || conversation.error ? <Alert type="error" title={models.error?.message || conversation.error?.message} /> : null}
+                    {unavailableModel ? <Alert type="warning" showIcon title="已选模型已下线或暂无可用渠道，请明确选择其它模型后继续发送" /> : null}
                     {conversationId && conversation.isPending ? <Spin className="!block py-10" /> : null}
                     {!conversationId ? <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
                         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">有什么可以帮忙的？</h2>
@@ -276,7 +282,7 @@ export default function TextPage() {
                         </div>
                     ))}
                     {latest?.partialText && !latest.responseMessageId ? <div><Streamdown className="agent-streamdown" isAnimating={active}>{latest.partialText}</Streamdown></div> : null}
-                    {active ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Spin size="small" />{latest?.status === "reviewing" ? "等待内容审核，可取消并退回冻结金额" : latest?.status === "queued" ? (latest.attemptCount ? "正在切换渠道" : "正在等待可用渠道") : "正在生成回复"}</p> : latest?.status === "failed" || latest?.status === "canceled" ? <Alert type="warning" showIcon title={latest.errorMessage || "本次生成已结束，冻结余额已退回"} /> : latest?.status === "succeeded" ? <p className="text-xs text-muted-foreground">本次实付 ¥{latest.billed}</p> : null}
+                    {active ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Spin size="small" />{latest?.status === "reviewing" ? "等待内容审核，可取消并退回冻结金额" : latest?.canCancel ? "正在等待提交，可取消并全退" : "已提交上游，继续生成并正常结算"}</div> : latest?.status === "failed" || latest?.status === "canceled" ? <Alert type="warning" showIcon title={latest.errorMessage || "本次生成已结束，冻结余额已退回"} /> : latest?.status === "succeeded" ? <p className="text-xs text-muted-foreground">本次实付 ¥{latest.billed}</p> : null}
                     {streamError ? <Alert type="warning" title={streamError} action={<Button size="small" onClick={() => void conversation.refetch()}>刷新对话</Button>} /> : null}
                 </div>
             </div>
@@ -298,13 +304,13 @@ export default function TextPage() {
                                 </Tooltip>
                             </div>
                             <div className="flex min-w-0 items-center justify-end gap-1 sm:gap-2">
-                                <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={model?.id} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch optionFilterProp="label" placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">{option.data.price}</div></div>} />
+                                <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch optionFilterProp="label" placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">{option.data.price}</div></div>} />
                                 <Select<ReasoningEffort> aria-label="思考强度" title="思考强度" variant="borderless" className="!w-24 shrink-0" prefix={<Brain className="size-4" />} suffixIcon={<ChevronDown className="size-3" />} value={effort} onChange={setReasoningEffort} disabled={!model?.reasoningEfforts?.length || sending || active} placement="topRight" options={modelReasoningOptions(model)} />
-                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title="取消生成" icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" title="发送消息" icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
+                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" title="发送消息" icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
                             </div>
                         </div>
                     </div>
-                    <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">{quote.data && prompt.trim() ? `预计冻结 ¥${quote.data.quote.estimatedHold}，完成后按实际用量结算。` : "内容由 AI 生成，请核实重要信息。"} Enter 发送 · Shift + Enter 换行</p>
+                    <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">{quote.data && prompt.trim() ? `预计冻结 ¥${quote.data.quote.estimatedHold}${files.length ? "（提交时另计新附图片预算）" : ""}，实际费用多退少补，欠费后需结清再生成。` : "内容由 AI 生成，请核实重要信息。"} Enter 发送 · Shift + Enter 换行</p>
                     {quote.error ? <p className="mt-1 text-center text-xs text-destructive">{quote.error.message}</p> : null}
                 </div>
             </footer>

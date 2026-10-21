@@ -21,7 +21,7 @@ export type ModelSettingsValues = {
 
 export function modelSettingsPayload(values: ModelSettingsValues, config: Record<string, unknown> = {}): Pick<ModelInput, "pricePerImage" | "inputPricePerMillion" | "cachedPricePerMillion" | "outputPricePerMillion" | "pricePerSecond" | "config"> {
     const tokenPricing = values.capability === "text" && values.tokenPricing;
-    const secondPricing = (values.capability === "video" || values.capability === "audio") && values.perSecondPricing;
+    const secondPricing = values.capability === "video" && values.perSecondPricing;
     const next: Record<string, unknown> = { ...config };
     if (values.maxAttempts == null) delete next.maxAttempts;
     else next.maxAttempts = values.maxAttempts;
@@ -47,12 +47,13 @@ export default function ModelSettingsFields({ capability }: { capability: ModelC
             <Form.Item name="maxOutputTokens" label="最大输出 token" extra="统一用于报价与生成，用户端不展示或修改；按模型实际能力填写。" rules={[{ required: true, message: "请配置该模型的最大输出 token 数" }]}><InputNumber min={1} precision={0} className="!w-full" /></Form.Item>
             <Form.Item name="reasoningEfforts" label="开放的思考强度" extra="只勾选模型与渠道实际支持的档位，留空时使用模型默认。"><Select mode="multiple" allowClear placeholder="仅使用模型默认" options={modelReasoningEfforts.map((value) => ({ value, label: `${reasoningEffortLabel(value)}（${value}）` }))} /></Form.Item>
             <Form.Item name="imageInput" label="图片输入" valuePropName="checked" extra="开启后用户可在对话中附带图片，请确认上游模型确实支持多模态。"><Switch checkedChildren="支持" unCheckedChildren="关闭" /></Form.Item>
-            <Form.Item name="tokenPricing" label="计费模式" valuePropName="checked" extra="按 token 计费时，完成后按实际用量结算，多退少补。"><Switch checkedChildren="按 token" unCheckedChildren="按次" /></Form.Item>
+            <Form.Item name="tokenPricing" label="计费模式" valuePropName="checked" extra="按 token 计费时按服务端预算冻结，完成后按实际用量结算；不足部分记欠费，结清后可继续生成。"><Switch checkedChildren="按 token" unCheckedChildren="按次" /></Form.Item>
         </> : null}
-        {capability === "video" || capability === "audio" ? <Form.Item name="perSecondPricing" label="计费模式" valuePropName="checked" extra={capability === "audio" ? "按音频实际时长结算，先按 5 秒预估冻结。" : "按请求的视频秒数结算。"}><Switch checkedChildren="按秒" unCheckedChildren="按次" /></Form.Item> : null}
+        {capability === "video" ? <Form.Item name="perSecondPricing" label="计费模式" valuePropName="checked" extra="按请求的视频秒数结算。"><Switch checkedChildren="按秒" unCheckedChildren="按次" /></Form.Item> : null}
+        {capability === "audio" ? <p className="mb-4 text-xs text-muted-foreground">音频仅支持固定单次价；旧按秒模型暂停新任务，保存后改为按次计费。</p> : null}
         <Form.Item noStyle shouldUpdate={(previous, current) => previous.tokenPricing !== current.tokenPricing || previous.perSecondPricing !== current.perSecondPricing}>{({ getFieldValue }) => {
             const tokenPricing = capability === "text" && getFieldValue("tokenPricing");
-            const secondPricing = (capability === "video" || capability === "audio") && getFieldValue("perSecondPricing");
+            const secondPricing = capability === "video" && getFieldValue("perSecondPricing");
             return <>
                 {tokenPricing ? <div className="grid gap-x-4 sm:grid-cols-2">
                     <Form.Item name="inputPrice" label="输入单价（元 / 百万 token）" rules={[{ required: true, message: "请输入输入单价" }]}><InputNumber<string> stringMode min="0" precision={6} className="!w-full" /></Form.Item>

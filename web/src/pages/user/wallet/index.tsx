@@ -70,6 +70,7 @@ export default function WalletPage() {
                 </div>
             </div>
         {overview.error ? <Alert className="mt-6" type="error" title={overview.error.message} action={<Button onClick={() => void overview.refetch()}>重试</Button>} /> : null}
+        {Number(wallet?.balance) < 0 ? <Alert type="warning" showIcon title="账户有待结清的生成费用" description="实际费用已完整入账，新的生成已暂停；充值、兑换等到账金额会先抵扣欠费。" /> : null}
         <div className="rounded-xl border border-border">
             <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-4">
                 <div>

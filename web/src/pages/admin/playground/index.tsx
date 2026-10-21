@@ -4,6 +4,7 @@ import { Alert, App, Button, Collapse, Form, Image, Input, InputNumber, Radio, S
 import { CheckCircle2, Clock, Copy, Play, Sparkles, TerminalSquare, Trash2, XCircle, Zap } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import { getAdminChannels, testChannelPlayground, type PlaygroundTestParams, type PlaygroundTestResult } from "@/services/api/admin-platform";
 
 export default function AdminPlaygroundPage() {
@@ -13,6 +14,7 @@ export default function AdminPlaygroundPage() {
     const [rawOpen, setRawOpen] = useState(false);
     const request = useRef<AbortController | null>(null);
     const copyText = useCopyText();
+    const { requestProof } = useSecurityProof();
 
     useEffect(() => () => request.current?.abort(), []);
 
@@ -25,9 +27,12 @@ export default function AdminPlaygroundPage() {
     const activeChannels = (channelsQuery.data || []).filter((ch) => ch.status !== "disabled" && ch.capability === capability);
 
     const testMutation = useMutation({
-        mutationFn: (body: PlaygroundTestParams) => {
-            request.current = new AbortController();
-            return testChannelPlayground(body, request.current.signal);
+        mutationFn: async (body: PlaygroundTestParams) => {
+            const controller = new AbortController();
+            request.current = controller;
+            const proof = await requestProof();
+            controller.signal.throwIfAborted();
+            return testChannelPlayground(body, proof, controller.signal);
         },
         onSuccess: (data) => {
             setResult(data);
@@ -82,7 +87,7 @@ export default function AdminPlaygroundPage() {
                     </div>
                     <h1 className="text-xl font-bold tracking-tight text-stone-950 sm:text-2xl dark:text-stone-100">渠道在线调试台</h1>
                     <p className="mt-0.5 text-xs text-stone-500">
-                        沿用渠道超时、并发和冷却配置，测试文本与图片输出。真实上游费用计入成本账，不扣用户余额。
+                        沿用渠道超时、并发和冷却配置，测试文本与图片输出。真实上游费用计入成本账，不扣用户余额，每次执行需安全验证。
                     </p>
                 </div>
                 {result ? (

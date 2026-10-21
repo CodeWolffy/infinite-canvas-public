@@ -40,6 +40,7 @@ export type GenerationTask = {
     id: string;
     batchId: string;
     status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled";
+    canCancel?: boolean;
     attemptCount?: number;
     maxAttempts?: number;
     sequence: number;

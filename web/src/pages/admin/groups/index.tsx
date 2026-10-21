@@ -9,9 +9,11 @@ import { formatBytes } from "@/lib/image-utils";
 import { createUserGroup, deleteUserGroup, getUserGroups, updateUserGroup, type UserGroup } from "@/services/api/billing";
 import { getAdminModels } from "@/services/api/admin-platform";
 import { saveGroupPolicy, type GroupPolicy } from "@/services/api/platform-operations";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 
 export default function AdminGroupsPage() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const [editing, setEditing] = useState<UserGroup | null | undefined>(undefined);
     const [form] = Form.useForm<{ name: string; discount: number }>();
@@ -20,11 +22,11 @@ export default function AdminGroupsPage() {
     const restricted = Form.useWatch("restricted", policyForm);
     const models = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels, enabled: Boolean(policyGroup) });
     const policy = useMutation({
-        mutationFn: (values: GroupPolicy & { restricted: boolean; storageQuotaMb: number }) =>
+        mutationFn: async (values: GroupPolicy & { restricted: boolean; storageQuotaMb: number }) =>
             saveGroupPolicy(policyGroup!.id, {
                 modelIds: values.restricted ? values.modelIds || [] : null,
                 storageQuotaBytes: Math.round(Number(values.storageQuotaMb || 0) * 1024 * 1024),
-            }),
+            }, await requestProof()),
         onSuccess: () => {
             void refresh();
             setPolicyGroup(null);
@@ -35,10 +37,10 @@ export default function AdminGroupsPage() {
     const query = useQuery({ queryKey: ["admin", "user-groups"], queryFn: getUserGroups });
     const refresh = () => client.invalidateQueries({ queryKey: ["admin", "user-groups"] });
     const save = useMutation({
-        mutationFn: (values: { name: string; discount: number }) =>
+        mutationFn: async (values: { name: string; discount: number }) =>
             editing
-                ? updateUserGroup(editing.id, { name: values.name, discount: String(values.discount) })
-                : createUserGroup({ name: values.name, discount: String(values.discount) }),
+                ? updateUserGroup(editing.id, { name: values.name, discount: String(values.discount) }, await requestProof())
+                : createUserGroup({ name: values.name, discount: String(values.discount) }, await requestProof()),
         onSuccess: () => {
             void refresh();
             setEditing(undefined);

@@ -26,7 +26,7 @@ export const readNotification = (id: string) => apiRequest<void>(`/api/user/noti
 export const readAllNotifications = () => apiRequest<void>("/api/user/notifications/read-all", { method: "POST" });
 
 export type GroupPolicy = { modelIds: string[] | null; storageQuotaBytes: number };
-export const saveGroupPolicy = (id: string, body: GroupPolicy) => apiRequest<void>(`/api/admin/user-groups/${id}/policy`, { method: "PUT", body });
+export const saveGroupPolicy = (id: string, body: GroupPolicy, securityProof: SecurityProof) => apiRequest<void>(`/api/admin/user-groups/${id}/policy`, { method: "PUT", body: { ...body, securityProof } });
 export const getSensitiveEvents = (params: { offset?: number; action?: string; search?: string } = {}) => apiRequest<{ events: Array<{ id: string; username: string; detail: { pattern: string; action: "block" | "review" | "log" }; createdAt: string }> }>(`/api/admin/sensitive-events?${serializeApiParams(params)}`);
 export type ModerationReview = { id: string; username: string; status: "pending" | "approved" | "rejected" | "canceled"; matches: Array<{ id: string; pattern: string; action: string }>; prompt: string; parameters: Record<string, unknown>; capability: string; modelDisplayName: string; taskCount: number; frozen: string; note: string; createdAt: string; reviewedAt: string | null; reviewerName: string | null };
 export const getModerationReviews = (status = "pending", offset = 0) => apiRequest<{ reviews: ModerationReview[] }>(`/api/admin/moderation?${serializeApiParams({ status, offset })}`);
@@ -55,4 +55,4 @@ export const getAdminStatus = () => apiRequest<{ startedAt: string; workerConcur
 export const reconcileCost = (id: string, body: { amount: string; note: string }) => apiRequest<void>(`/api/admin/costs/${id}`, { method: "PUT", body });
 
 export type GenerationQuote = { pricingKind: "fixed" | "token"; estimatedHold: string; unitHold: string; seconds: string | null; groupDiscount: string; variable: boolean };
-export const quoteGeneration = (body: { modelId: string; count: number; content: string; conversationId?: string; systemPrompt?: string; parameters?: Record<string, unknown> }, signal?: AbortSignal) => apiRequest<{ quote: GenerationQuote }>("/api/generation-quote", { method: "POST", body, signal });
+export const quoteGeneration = (body: { modelId: string; count: number; content: string; conversationId?: string; systemPrompt?: string; attachmentMediaIds?: string[]; parameters?: Record<string, unknown> }, signal?: AbortSignal) => apiRequest<{ quote: GenerationQuote }>("/api/generation-quote", { method: "POST", body, signal });

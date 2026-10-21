@@ -96,16 +96,16 @@ export async function getAdminModels() {
     return (await apiRequest<{ models: AdminModel[] }>("/api/admin/models")).models;
 }
 
-export async function createAdminModel(input: ModelInput) {
-    return (await apiRequest<{ model: AdminModel }>("/api/admin/models", { method: "POST", body: input })).model;
+export async function createAdminModel(input: ModelInput, securityProof: SecurityProof) {
+    return (await apiRequest<{ model: AdminModel }>("/api/admin/models", { method: "POST", body: { ...input, securityProof } })).model;
 }
 
-export async function updateAdminModel(id: string, input: Partial<ModelInput>) {
-    return (await apiRequest<{ model: AdminModel }>(`/api/admin/models/${id}`, { method: "PUT", body: input })).model;
+export async function updateAdminModel(id: string, input: Partial<ModelInput>, securityProof: SecurityProof) {
+    return (await apiRequest<{ model: AdminModel }>(`/api/admin/models/${id}`, { method: "PUT", body: { ...input, securityProof } })).model;
 }
 
-export async function updateAdminModelStatus(id: string, status: AdminModel["status"]) {
-    return (await apiRequest<{ model: AdminModel }>(`/api/admin/models/${id}/status`, { method: "PATCH", body: { status } })).model;
+export async function updateAdminModelStatus(id: string, status: AdminModel["status"], securityProof?: SecurityProof) {
+    return (await apiRequest<{ model: AdminModel }>(`/api/admin/models/${id}/status`, { method: "PATCH", body: { status, securityProof } })).model;
 }
 
 export async function deleteAdminModel(id: string) {
@@ -116,12 +116,12 @@ export async function getModelChannelBindings(modelId: string) {
     return (await apiRequest<{ bindings: ModelChannelBinding[] }>(`/api/admin/models/${modelId}/channels`)).bindings;
 }
 
-export async function saveModelChannelBinding(modelId: string, channelId: string, input: BindingInput) {
-    await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}`, { method: "PUT", body: input });
+export async function saveModelChannelBinding(modelId: string, channelId: string, input: BindingInput, securityProof: SecurityProof) {
+    await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}`, { method: "PUT", body: { ...input, securityProof } });
 }
 
-export async function batchSaveModelChannelBindings(modelId: string, channelId: string, input: { upstreamModels: string[]; priority: number; weight: number; enabled: boolean }) {
-    await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}/batch`, { method: "POST", body: input });
+export async function batchSaveModelChannelBindings(modelId: string, channelId: string, input: { upstreamModels: string[]; priority: number; weight: number; enabled: boolean }, securityProof: SecurityProof) {
+    await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}/batch`, { method: "POST", body: { ...input, securityProof } });
 }
 
 export async function deleteModelBinding(modelId: string, bindingId: string) {
@@ -140,8 +140,8 @@ export async function createAdminChannel(input: ChannelInput) {
     return (await apiRequest<{ channel: AdminChannel }>("/api/admin/channels", { method: "POST", body: input })).channel;
 }
 
-export async function updateAdminChannel(id: string, input: Partial<ChannelInput>) {
-    return (await apiRequest<{ channel: AdminChannel }>(`/api/admin/channels/${id}`, { method: "PUT", body: input })).channel;
+export async function updateAdminChannel(id: string, input: Partial<ChannelInput>, securityProof?: SecurityProof) {
+    return (await apiRequest<{ channel: AdminChannel }>(`/api/admin/channels/${id}`, { method: "PUT", body: { ...input, securityProof } })).channel;
 }
 
 export async function deleteAdminChannel(id: string) {
@@ -227,6 +227,6 @@ export type PlaygroundTestResult = {
     category?: string;
 };
 
-export async function testChannelPlayground(body: PlaygroundTestParams, signal?: AbortSignal) {
-    return await apiRequest<PlaygroundTestResult>("/api/admin/playground/test", { method: "POST", body, signal });
+export async function testChannelPlayground(body: PlaygroundTestParams, securityProof: SecurityProof, signal?: AbortSignal) {
+    return await apiRequest<PlaygroundTestResult>("/api/admin/playground/test", { method: "POST", body: { ...body, securityProof }, signal });
 }

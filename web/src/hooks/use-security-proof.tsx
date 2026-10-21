@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Form, Input, Modal } from "antd";
 
 import { getAccountSecurity, type SecurityProof } from "@/services/api/platform-operations";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type { SecurityProof };
 
@@ -12,12 +13,15 @@ let settle: { resolve: (proof: SecurityProof) => void; reject: (error: Error) =>
  * 高危管理操作前收集管理员密码（已启用两步验证时还要验证码）。
  * 弹窗由 SecurityProofProvider 渲染，所以调用方只要 await 即可。
  */
-export function requestSecurityProof(): Promise<SecurityProof> {
-    if (!openProof) return Promise.reject(new Error("安全验证弹窗尚未就绪，请刷新页面重试"));
-    return new Promise((resolve, reject) => {
+export async function requestSecurityProof(): Promise<SecurityProof> {
+    const version = useUserStore.getState().sessionVersion;
+    if (!openProof) throw new Error("安全验证弹窗尚未就绪，请刷新页面重试");
+    const proof = await new Promise<SecurityProof>((resolve, reject) => {
         settle = { resolve, reject };
         openProof?.();
     });
+    assertCurrentSession(version);
+    return proof;
 }
 
 export function useSecurityProof() {

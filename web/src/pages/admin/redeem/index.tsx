@@ -7,6 +7,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { saveAs } from "file-saver";
 
 import { createRedeemCode, getRedeemCodes, setRedeemCodeDisabled, type RedeemCode } from "@/services/api/billing";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 
 type BatchResult = {
     secrets: string[];
@@ -18,6 +19,7 @@ type BatchResult = {
 
 export default function AdminRedeemPage() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const [open, setOpen] = useState(false);
     const [batchResult, setBatchResult] = useState<BatchResult | null>(null);
@@ -27,7 +29,7 @@ export default function AdminRedeemPage() {
     const refresh = () => client.invalidateQueries({ queryKey: ["admin", "redeem-codes"] });
 
     const create = useMutation({
-        mutationFn: createRedeemCode,
+        mutationFn: async (values: Parameters<typeof createRedeemCode>[0]) => createRedeemCode(values, await requestProof()),
         onSuccess: (data, variables) => {
             const secrets = data.secrets && data.secrets.length > 0 ? data.secrets : (data.secret ? [data.secret] : []);
             setBatchResult({

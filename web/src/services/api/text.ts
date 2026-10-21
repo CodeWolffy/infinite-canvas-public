@@ -4,7 +4,7 @@ import type { MediaRecord } from "./media";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type TextMessage = { id: string; role: "system" | "user" | "assistant"; content: string; createdAt: string; attachments?: MediaRecord[] };
-export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled"; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string; attemptCount?: number; maxAttempts?: number };
+export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled"; canCancel?: boolean; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string; attemptCount?: number; maxAttempts?: number };
 export type TextRequestDetail = { request: TextRequestState; message: TextMessage | null };
 
 export function watchTextRequest(id: string, onChange: (detail: TextRequestDetail) => void, signal?: AbortSignal, onError?: (error: Error) => void) {

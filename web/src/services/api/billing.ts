@@ -38,12 +38,12 @@ export type RedeemCode = { id: string; codeHint: string; note: string; amount: s
 export type SensitiveWord = { id: string; pattern: string; action: "block" | "review" | "log"; createdAt: string };
 
 export const getUserGroups = () => apiRequest<{ groups: UserGroup[] }>("/api/admin/user-groups");
-export const createUserGroup = (body: { name: string; discount: string }) => apiRequest<{ group: UserGroup }>("/api/admin/user-groups", { method: "POST", body });
-export const updateUserGroup = (id: string, body: { name: string; discount: string }) => apiRequest<{ group: UserGroup }>(`/api/admin/user-groups/${id}`, { method: "PUT", body });
+export const createUserGroup = (body: { name: string; discount: string }, securityProof: SecurityProof) => apiRequest<{ group: UserGroup }>("/api/admin/user-groups", { method: "POST", body: { ...body, securityProof } });
+export const updateUserGroup = (id: string, body: { name: string; discount: string }, securityProof: SecurityProof) => apiRequest<{ group: UserGroup }>(`/api/admin/user-groups/${id}`, { method: "PUT", body: { ...body, securityProof } });
 export const deleteUserGroup = (id: string) => apiRequest<void>(`/api/admin/user-groups/${id}`, { method: "DELETE" });
-export const setUserGroup = (id: string, groupId: string | null) => apiRequest<void>(`/api/admin/users/${id}/group`, { method: "PATCH", body: { groupId } });
+export const setUserGroup = (id: string, groupId: string | null, securityProof: SecurityProof) => apiRequest<void>(`/api/admin/users/${id}/group`, { method: "PATCH", body: { groupId, securityProof } });
 export const getRedeemCodes = (offset = 0) => apiRequest<{ codes: RedeemCode[] }>(`/api/admin/redeem-codes?limit=50&offset=${offset}`);
-export const createRedeemCode = (body: { note: string; amount: string; maxUses: number; count?: number; expiresAt?: string }) => apiRequest<{ code: RedeemCode; secret: string; codes?: RedeemCode[]; secrets?: string[] }>("/api/admin/redeem-codes", { method: "POST", body });
+export const createRedeemCode = (body: { note: string; amount: string; maxUses: number; count?: number; expiresAt?: string }, securityProof: SecurityProof) => apiRequest<{ code: RedeemCode; secret: string; codes?: RedeemCode[]; secrets?: string[] }>("/api/admin/redeem-codes", { method: "POST", body: { ...body, securityProof } });
 export const setRedeemCodeDisabled = (id: string, disabled: boolean) => apiRequest<void>(`/api/admin/redeem-codes/${id}`, { method: "PATCH", body: { disabled } });
 export const getSensitiveWords = () => apiRequest<{ words: SensitiveWord[] }>("/api/admin/sensitive-words");
 export const saveSensitiveWord = (body: { pattern: string; action: SensitiveWord["action"] }) => apiRequest<{ word: SensitiveWord }>("/api/admin/sensitive-words", { method: "POST", body });
