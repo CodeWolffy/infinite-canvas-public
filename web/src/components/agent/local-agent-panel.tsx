@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { AGENT_REASONING_EFFORTS, createId, createMessageAttachmentMetadata, MAX_ATTACHMENTS, MAX_ATTACHMENT_PAYLOAD_BYTES, readDataUrl, rt, type AgentModelsResponse, type AgentTurnResponse } from "@/lib/agent/agent-panel-utils";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { isLocalAgentEndpoint } from "@/lib/agent/agent-endpoint";
 import { resolveCanvasReferenceImages } from "@/lib/canvas/canvas-resource-references";
 import { readImageMeta } from "@/lib/image-utils";
 import { AgentApiError, fetchAgentJson, interruptCodexTurn } from "@/services/api/canvas-agent";
@@ -39,7 +40,7 @@ import { useAgentConnection } from "./hooks/use-agent-connection";
 import { useAgentEvents } from "./hooks/use-agent-events";
 import { useAgentHistory } from "./hooks/use-agent-history";
 
-export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?: boolean; headless?: boolean; autoConnect?: boolean }) {
+export function LocalAgentPanel({ embedded, headless }: { embedded?: boolean; headless?: boolean }) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { message, modal } = App.useApp();
@@ -98,12 +99,10 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const messageCount = useAgentStore((state) => state.messages.length);
     const canvasContextRef = useRef<AgentCanvasContext | null>(useAgentStore.getState().canvasContext);
     const pendingToolRef = useRef<AgentPendingToolCall | null>(null);
-    const autoConnectRef = useRef(false);
     const connectedRef = useRef(false);
     const attachmentUrlsRef = useRef(new Set<string>());
     const clientIdRef = useRef("");
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
-    const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
 
     const addMessage = (item: Omit<AgentChatItem, "id"> & { id?: string }) => {
         const text = normalizeText(item.text);
@@ -142,7 +141,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     });
 
     useLayoutEffect(() => {
-        autoConnectRef.current = false;
         loadThreadsSequenceRef.current += 1;
         threadMessagesRef.current.clear();
         authoritativeHistoryTurnsRef.current.clear();
@@ -215,8 +213,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         enabled,
         connected,
         headless,
-        autoConnect,
-        urlAgentAutoConnect,
         hash,
         navigate,
         searchParams,
@@ -224,7 +220,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         canvasContextRef,
         connectedRef,
         pendingToolRef,
-        autoConnectRef,
         liveTurnKeysRef,
         authoritativeHistoryTurnsRef,
         loadThreadsSequenceRef,
@@ -238,6 +233,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         addEventLog,
         clearAgentSession,
         message,
+        modal,
         permissionMode,
     });
 
@@ -275,10 +271,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             setAgentState({ models, model: current.model, reasoningEffort: nextEffort });
         }).catch((error) => addEventLog(rt("modelListFailed"), error));
     }, [connected, endpoint, setAgentState, token, sessionVersion]);
-
-    useEffect(() => {
-        if (urlAgentAutoConnect && confirmTools) setAgentState({ confirmTools: false });
-    }, [confirmTools, setAgentState, urlAgentAutoConnect]);
 
     const sendPrompt = async () => {
         if (useUserStore.getState().sessionVersion !== sessionVersion) return;
@@ -526,8 +518,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                     connected={connected}
                     activity={activity}
                     connectError={connectError}
-                    onUrlChange={(url) => setAgentState({ url, connectError: "" })}
-                    onTokenChange={(token) => setAgentState({ token, connectError: "" })}
+                    onUrlChange={(url) => clearAgentSession({ url, enabled: false, connected: false, authorizedConnection: "", connectError: "" })}
+                    onTokenChange={(token) => clearAgentSession({ token, enabled: false, connected: false, authorizedConnection: "", connectError: "" })}
                     onToggleEnabled={toggleAgentConnection}
                 />
             ) : activeTab === "skills" ? (
@@ -576,8 +568,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         onStop={stopTurn}
                         onAddFiles={addAttachments}
                         onRemoveAttachment={removeAttachment}
-                        confirmTools={confirmTools}
-                        onConfirmToolsChange={(confirmTools) => setAgentState({ confirmTools })}
+                        confirmTools={!isLocalAgentEndpoint(endpoint) || confirmTools}
+                        onConfirmToolsChange={(confirmTools) => setAgentState({ confirmTools: !isLocalAgentEndpoint(endpoint) || confirmTools })}
                         permissionMode={permissionMode}
                         onPermissionModeChange={changePermissionMode}
                         models={models}

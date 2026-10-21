@@ -317,14 +317,19 @@ function assertRevision(expected: string, current: string) {
 }
 
 function serializeSkill(frontmatter: Record<string, unknown>, instructions: string) {
-    return matter.stringify(`${instructions.trim()}\n`, frontmatter);
+    // 正文可能本身以 frontmatter 开头，不能交给 matter.stringify 再次解析。
+    return `---\n${stringifyYaml(frontmatter)}---\n\n${instructions.trim()}\n`;
+}
+
+function unsupportedFrontmatter(): never {
+    throw new Error("Skill frontmatter 仅支持 YAML");
 }
 
 async function readSkill(filePath: string, expectedName: string): Promise<SkillDocument> {
     const raw = await fs.readFile(filePath, "utf8");
     let parsed: matter.GrayMatterFile<string>;
     try {
-        parsed = matter(raw);
+        parsed = matter(raw, { engines: { yaml: (source: string) => parseYaml(source), javascript: unsupportedFrontmatter, js: unsupportedFrontmatter, json: unsupportedFrontmatter } });
     } catch {
         throw new SkillStoreError("SKILL.md frontmatter 格式无效", 409);
     }

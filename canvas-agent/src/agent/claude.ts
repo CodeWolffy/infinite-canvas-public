@@ -9,8 +9,12 @@ import type { AgentEmit } from "./types.js";
 export function runClaudeTurn(prompt: string, emit: AgentEmit) {
     const fullPrompt = withAgentPrompt(prompt);
     if (!fullPrompt) return;
-    const child = spawnAgent("claude", ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "mcp__infinite-canvas__*", fullPrompt], emit);
-    if (child) pipeJsonLines(child, emit, "claude");
+    const child = spawnAgent("claude", ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "mcp__infinite-canvas__*"], emit);
+    if (child) {
+        pipeJsonLines(child, emit, "claude");
+        child.stdin?.on("error", (error) => emit("agent_error", { message: error.message }));
+        child.stdin?.end(fullPrompt);
+    }
 }
 
 /** 为 Claude CLI 请求拼接 Canvas Agent 指令。 */
@@ -48,7 +52,8 @@ function pipeJsonLines(child: ReturnType<typeof spawn>, emit: AgentEmit, agent: 
 /** 启动外部 Agent CLI，并将同步启动异常转换为事件。 */
 function spawnAgent(name: string, args: string[], emit: AgentEmit) {
     try {
-        return spawn(name, args, { stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32", windowsHide: true });
+        // Windows 的 npm CLI 包装器需要 shell；这里只传固定参数，提示词始终走 stdin。
+        return spawn(name, args, { stdio: ["pipe", "pipe", "pipe"], shell: process.platform === "win32", windowsHide: true });
     } catch (error) {
         emit("agent_error", { message: errorMessage(error) });
         return null;

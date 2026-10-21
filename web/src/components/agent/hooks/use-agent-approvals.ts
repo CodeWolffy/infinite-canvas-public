@@ -3,6 +3,7 @@ import type { App } from "antd";
 import type { useNavigate } from "react-router-dom";
 
 import { isSiteTool, runSiteTool } from "@/lib/agent/agent-site-tools";
+import { isLocalAgentEndpoint } from "@/lib/agent/agent-endpoint";
 import { approvalActivity, attachmentNodeOps, rt, type AgentStatePatch } from "@/lib/agent/agent-panel-utils";
 import { postCodexApproval, postState, postToolResult } from "@/services/api/canvas-agent";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
@@ -37,19 +38,25 @@ export function useAgentApprovals({ setAgentState, sessionVersion, endpoint, tok
         pendingToolRef.current = pendingTool;
     }, [pendingTool, pendingToolRef]);
 
+    const connectionIsCurrent = () => {
+        const current = useAgentStore.getState();
+        return useUserStore.getState().sessionVersion === sessionVersion && current.connected && current.enabled && current.authorizedConnection === `${endpoint}\0${token}`;
+    };
+
     const runToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
-        if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+        if (!connectionIsCurrent()) return;
         const toolSessionVersion = sessionVersion;
         if (isSiteTool(payload.name)) {
             try {
                 addEventLog(toolName(payload.name), payload, payload);
                 const result = await runSiteTool(payload.name, payload.input || {}, navigate, { canvasSnapshot: canvasContextRef.current?.snapshot || null });
+                if (!connectionIsCurrent()) return;
                 assertCurrentSession(toolSessionVersion);
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
                 assertCurrentSession(toolSessionVersion);
                 addEventLog(rt("toolCompleted", { tool: toolName(payload.name) }), result, result);
             } catch (error) {
-                if (useUserStore.getState().sessionVersion !== toolSessionVersion) return;
+                if (!connectionIsCurrent()) return;
                 const message = error instanceof Error ? error.message : rt("toolExecutionFailed");
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: message });
             }
@@ -62,6 +69,7 @@ export function useAgentApprovals({ setAgentState, sessionVersion, endpoint, tok
             let appliedOps = input.ops || [];
             if (payload.name === "site_navigate") {
                 const path = input.path || "/";
+                if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) throw new Error("Agent 只允许跳转站内路径");
                 if (/^\/(video|audio)(\/|\?|#|$)/.test(path)) throw new Error("企业平台仅支持图片和文本生成");
                 navigate(path);
                 result = { ok: true, path };
@@ -74,28 +82,31 @@ export function useAgentApprovals({ setAgentState, sessionVersion, endpoint, tok
                 const context = canvasContextRef.current;
                 if (!context) throw new Error(rt("openCanvasFirst"));
                 appliedOps = await attachmentNodeOps(endpoint, token, clientIdRef.current, payload.input?.nodes);
+                if (!connectionIsCurrent()) return;
                 assertCurrentSession(toolSessionVersion);
                 result = context.applyOps(appliedOps);
                 await postState(endpoint, token, clientIdRef.current, result as CanvasAgentSnapshot);
-            } else {
+            } else if (["canvas_get_state", "canvas_get_selection", "canvas_export_snapshot"].includes(payload.name)) {
                 const snapshot = canvasContextRef.current?.snapshot;
                 if (!snapshot) throw new Error(rt("openCanvasFirst"));
                 result = snapshot;
+            } else {
+                throw new Error("不支持的 Agent 工具");
             }
             assertCurrentSession(toolSessionVersion);
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
             assertCurrentSession(toolSessionVersion);
             addEventLog(rt("toolCompleted", { tool: toolName(payload.name) }), result, result);
         } catch (error) {
-            if (useUserStore.getState().sessionVersion !== toolSessionVersion) return;
+            if (!connectionIsCurrent()) return;
             const message = error instanceof Error ? error.message : rt("canvasOperationFailed");
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: message });
         }
     };
 
     const handleToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
-        if (useUserStore.getState().sessionVersion !== sessionVersion) return;
-        if (confirmToolsRef.current && isCanvasWriteTool(payload.name)) {
+        if (!connectionIsCurrent()) return;
+        if (!isLocalAgentEndpoint(endpoint) || (confirmToolsRef.current && (isCanvasWriteTool(payload.name) || isSiteTool(payload.name) || payload.name === "site_navigate"))) {
             if (pendingToolRef.current) {
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: rt("pendingCanvasTool") });
                 return;

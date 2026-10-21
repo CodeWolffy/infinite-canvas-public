@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { App } from "antd";
 
 import { readAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
+import { normalizeAgentEndpoint } from "@/lib/agent/agent-endpoint";
 import { acquireAgentClientId, agentErrorState, approvalActivity, DEFAULT_AGENT_URL, AGENT_PROTOCOL_VERSION, rt, type AgentStatePatch, type AgentBootstrapEvent, type AgentChatEvent, type AgentCodexState, type AgentHelloEvent, type AgentWorkspaceEvent, type AgentWorkspaceResponse } from "@/lib/agent/agent-panel-utils";
 import { activateAgentClient, discoverAgentConfig, fetchAgentJson, postState } from "@/services/api/canvas-agent";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
@@ -20,8 +21,6 @@ type UseAgentConnectionOptions = {
     enabled: boolean;
     connected: boolean;
     headless?: boolean;
-    autoConnect?: boolean;
-    urlAgentAutoConnect: boolean;
     hash: string;
     navigate: (to: string, options?: { replace?: boolean }) => void;
     searchParams: URLSearchParams;
@@ -29,7 +28,6 @@ type UseAgentConnectionOptions = {
     canvasContextRef: { current: AgentCanvasContext | null };
     connectedRef: { current: boolean };
     pendingToolRef: { current: AgentPendingToolCall | null };
-    autoConnectRef: { current: boolean };
     liveTurnKeysRef: { current: Set<string> };
     authoritativeHistoryTurnsRef: { current: Set<string> };
     loadThreadsSequenceRef: { current: number };
@@ -43,10 +41,11 @@ type UseAgentConnectionOptions = {
     addEventLog: (title: string, text: unknown, raw?: unknown) => void;
     clearAgentSession: (patch?: AgentStatePatch) => void;
     message: AppContext["message"];
+    modal: AppContext["modal"];
     permissionMode: AgentPermissionMode;
 };
 
-export function useAgentConnection({ setAgentState, sessionVersion, userId, endpoint, token, enabled, connected, headless, autoConnect, urlAgentAutoConnect, hash, navigate, searchParams, clientIdRef, canvasContextRef, connectedRef, pendingToolRef, autoConnectRef, liveTurnKeysRef, authoritativeHistoryTurnsRef, loadThreadsSequenceRef, applyConversationState, applyWorkspaceChange, loadThreads, loadSkills, handleToolCall, handleAgentEvent, showAgentError, addEventLog, clearAgentSession, message, permissionMode }: UseAgentConnectionOptions) {
+export function useAgentConnection({ setAgentState, sessionVersion, userId, endpoint, token, enabled, connected, headless, hash, navigate, searchParams, clientIdRef, canvasContextRef, connectedRef, pendingToolRef, liveTurnKeysRef, authoritativeHistoryTurnsRef, loadThreadsSequenceRef, applyConversationState, applyWorkspaceChange, loadThreads, loadSkills, handleToolCall, handleAgentEvent, showAgentError, addEventLog, clearAgentSession, message, modal, permissionMode }: UseAgentConnectionOptions) {
     const errorLoggedRef = useRef(false);
     const [clientReady, setClientReady] = useState(false);
 
@@ -63,25 +62,30 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
     }, [clientIdRef, userId, sessionVersion]);
 
     useLayoutEffect(() => {
-        const bootstrap = readAgentUrlBootstrap(hash);
+        const fragment = readAgentUrlBootstrap(hash);
+        const bootstrap = fragment || readAgentUrlBootstrap(searchParams.toString());
         if (!bootstrap) return;
-        navigate(`${window.location.pathname}${window.location.search}${bootstrap.remainingHash}`, { replace: true });
+        const query = new URLSearchParams(searchParams);
+        query.delete("agentUrl");
+        query.delete("agentToken");
+        navigate(`${window.location.pathname}${query.size ? `?${query}` : ""}${fragment?.remainingHash ?? hash}`, { replace: true });
+        clearAgentSession({ enabled: false, connected: false, authorizedConnection: "", confirmTools: true, activeTab: "setup" });
+        useAgentStore.getState().openPanel();
         if (!bootstrap.url || !bootstrap.token) {
             setAgentState({ fragmentBootstrap: false, activeTab: "setup", connectError: rt(!bootstrap.url ? "addressRequired" : "agentNotFound") });
             useAgentStore.getState().openPanel();
             return;
         }
         try {
-            const parsed = new URL(bootstrap.url);
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("invalid protocol");
+            normalizeAgentEndpoint(bootstrap.url);
         } catch {
             setAgentState({ fragmentBootstrap: false, activeTab: "setup", connectError: rt("invalidAddress") });
             useAgentStore.getState().openPanel();
             return;
         }
         errorLoggedRef.current = false;
-        setAgentState({ url: bootstrap.url.replace(/\/$/, ""), token: bootstrap.token, enabled: true, connected: false, silentConnect: true, fragmentBootstrap: true, confirmTools: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
-    }, [hash, navigate, setAgentState]);
+        setAgentState({ url: normalizeAgentEndpoint(bootstrap.url), token: bootstrap.token, silentConnect: false, fragmentBootstrap: false, activity: "待确认连接", connectError: "" });
+    }, [hash, navigate, searchParams, setAgentState, clearAgentSession]);
 
     // Imperatively subscribe to canvasContext to keep the ref current and debounce snapshot reports without rerendering the panel.
     useEffect(() => {
@@ -92,7 +96,8 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
             if (!useAgentStore.getState().connected) return;
             if (timer) clearTimeout(timer);
             timer = setTimeout(() => {
-                if (useUserStore.getState().sessionVersion === sessionVersion && useAgentStore.getState().connected) void postState(endpoint, token, clientIdRef.current, canvasContextRef.current?.snapshot || null);
+                const current = useAgentStore.getState();
+                if (useUserStore.getState().sessionVersion === sessionVersion && current.connected && current.enabled && current.authorizedConnection === `${endpoint}\0${token}`) void postState(endpoint, token, clientIdRef.current, canvasContextRef.current?.snapshot || null);
             }, 300);
         });
         return () => {
@@ -102,14 +107,15 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
     }, [canvasContextRef, clientIdRef, endpoint, sessionVersion, token]);
 
     useEffect(() => {
-        if (!clientReady || !enabled || !token.trim() || useUserStore.getState().sessionVersion !== sessionVersion) return;
+        const connectionKey = `${endpoint}\0${token}`;
+        if (!clientReady || !enabled || !token.trim() || useAgentStore.getState().authorizedConnection !== connectionKey || useUserStore.getState().sessionVersion !== sessionVersion) return;
         localStorage.setItem(agentSettingKey("canvas-agent-url"), endpoint);
         localStorage.setItem(agentSettingKey("canvas-agent-token"), token);
         const clientId = clientIdRef.current;
         let disposed = false;
         let protocolRejected = false;
         let eventQueue = Promise.resolve();
-        const isCurrentConnection = () => !disposed && clientIdRef.current === clientId && useUserStore.getState().sessionVersion === sessionVersion;
+        const isCurrentConnection = () => !disposed && useAgentStore.getState().enabled && useAgentStore.getState().authorizedConnection === connectionKey && clientIdRef.current === clientId && useUserStore.getState().sessionVersion === sessionVersion;
         const enqueueEvent = (task: () => void | Promise<void>) => {
             eventQueue = eventQueue.then(async () => {
                 if (isCurrentConnection()) await task();
@@ -348,7 +354,8 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
     useEffect(() => {
         if (!connected) return;
         const activate = () => {
-            if (useUserStore.getState().sessionVersion === sessionVersion) void activateAgentClient(endpoint, token, clientIdRef.current);
+            const current = useAgentStore.getState();
+            if (useUserStore.getState().sessionVersion === sessionVersion && current.connected && current.authorizedConnection === `${endpoint}\0${token}`) void activateAgentClient(endpoint, token, clientIdRef.current);
         };
         const activateVisible = () => {
             if (document.visibilityState === "visible") activate();
@@ -361,24 +368,30 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
         };
     }, [clientIdRef, connected, endpoint, sessionVersion, token]);
 
-    useEffect(() => {
-        if ((!autoConnect && !urlAgentAutoConnect) || autoConnectRef.current || enabled || connected) return;
-        autoConnectRef.current = true;
-        void toggleAgentConnection({ silent: true });
-    }, [autoConnect, connected, enabled, urlAgentAutoConnect, sessionVersion]);
-
     const toggleAgentConnection = async ({ silent = false }: { silent?: boolean } = {}) => {
         const connectionSessionVersion = useUserStore.getState().sessionVersion;
         if (enabled) {
-            clearAgentSession({ enabled: false, connected: false, activity: rt("offline"), connectError: "" });
+            clearAgentSession({ enabled: false, connected: false, authorizedConnection: "", activity: rt("offline"), connectError: "" });
             return;
         }
-        const urlToken = searchParams.get("agentToken") || "";
-        const urlEndpoint = searchParams.get("agentUrl") || "";
-        const discovered = urlToken ? null : await discoverAgentConfig(endpoint || DEFAULT_AGENT_URL);
-        if (useUserStore.getState().sessionVersion !== connectionSessionVersion) return;
-        const nextEndpoint = (urlEndpoint || discovered?.url || endpoint || DEFAULT_AGENT_URL).trim().replace(/\/$/, "");
-        const nextToken = (urlToken || token.trim() || discovered?.token || "").trim();
+        let nextEndpoint: string;
+        try {
+            nextEndpoint = normalizeAgentEndpoint(endpoint || DEFAULT_AGENT_URL);
+        } catch (error) {
+            message.warning(error instanceof Error ? error.message : rt("invalidAddress"));
+            return;
+        }
+        const accepted = await modal.confirm({
+            title: "确认连接 Agent",
+            content: `目标：${nextEndpoint}。连接后，该服务可读取当前画布并接收你发送的内容。请确认这是你信任的 Agent；远程 Agent 的工具请求需要逐次确认。`,
+            okText: "信任并连接",
+            cancelText: "取消",
+            focusable: { autoFocusButton: "cancel" },
+        });
+        if (!accepted || useUserStore.getState().sessionVersion !== connectionSessionVersion || useAgentStore.getState().url.trim().replace(/\/$/, "") !== endpoint || useAgentStore.getState().token !== token) return;
+        const discovered = token.trim() ? null : await discoverAgentConfig(nextEndpoint);
+        if (useUserStore.getState().sessionVersion !== connectionSessionVersion || useAgentStore.getState().url.trim().replace(/\/$/, "") !== endpoint || useAgentStore.getState().token !== token) return;
+        const nextToken = (token.trim() || discovered?.token || "").trim();
         if (!nextEndpoint) {
             const text = rt("addressRequired");
             if (!silent) {
@@ -395,19 +408,8 @@ export function useAgentConnection({ setAgentState, sessionVersion, userId, endp
             }
             return;
         }
-        try {
-            const parsed = new URL(nextEndpoint);
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("invalid protocol");
-        } catch {
-            const text = rt("invalidAddress");
-            if (!silent) {
-                setAgentState({ connectError: text });
-                if (!headless) message.warning(text);
-            }
-            return;
-        }
         errorLoggedRef.current = false;
-        setAgentState({ url: nextEndpoint, token: nextToken, enabled: true, connected: false, silentConnect: silent, fragmentBootstrap: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
+        setAgentState({ url: nextEndpoint, token: nextToken, authorizedConnection: `${nextEndpoint}\0${nextToken}`, enabled: true, connected: false, confirmTools: true, silentConnect: false, fragmentBootstrap: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
     };
 
     return { toggleAgentConnection };

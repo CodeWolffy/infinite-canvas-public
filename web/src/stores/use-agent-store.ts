@@ -66,6 +66,7 @@ type AgentStore = {
     canvasContext: AgentCanvasContext | null;
     url: string;
     token: string;
+    authorizedConnection: string;
     connected: boolean;
     enabled: boolean;
     silentConnect: boolean;
@@ -117,6 +118,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     panelClosing: false,
     canvasContext: null,
     ...savedAgentSettings(),
+    authorizedConnection: "",
     connected: false,
     enabled: false,
     silentConnect: false,
@@ -135,7 +137,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     workspacePath: "",
     loadingThreads: false,
     activeTab: "setup",
-    confirmTools: false,
+    confirmTools: true,
     models: [],
     activity: i18n.t("agent.state.ready"),
     conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} },
@@ -168,7 +170,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }
         localStorage.setItem(agentSettingKey("canvas-agent-url"), endpoint);
         localStorage.setItem(agentSettingKey("canvas-agent-token"), token);
-        // Only set enabled here; LocalAgentPanel's effect owns SSE initialization.
+        // 只有连接面板确认过的当前地址与 Token 才可重连。
+        if (get().authorizedConnection !== `${endpoint}\0${token}`) return get().openPanel();
         set({ url: endpoint, token, enabled: true, silentConnect: silent, fragmentBootstrap: false, activity: i18n.t("agent.status.connecting"), connectError: "" });
     },
     disconnectAgent: (patch = {}) => {
@@ -176,7 +179,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         agentSource = null;
         if (connectTimer) clearTimeout(connectTimer);
         connectTimer = null;
-        set({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false, activity: i18n.t("agent.state.offline"), conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} }, bootstrapStatus: null, mcpStartupStatuses: {}, ...patch });
+        set({ enabled: false, connected: false, authorizedConnection: "", silentConnect: false, fragmentBootstrap: false, activity: i18n.t("agent.state.offline"), conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} }, bootstrapStatus: null, mcpStartupStatuses: {}, ...patch });
     },
     addMessage: (item) => set((state) => ({ messages: [...state.messages, item] })),
     addEventLog: (item) => set((state) => ({ eventLogs: [...state.eventLogs.slice(-160), item] })),

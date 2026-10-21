@@ -6,6 +6,33 @@ import test from "node:test";
 
 import { SkillStore, SkillStoreError } from "./store.js";
 
+test("不可信正文按原文保存，JavaScript frontmatter 在读取、更新和删除时均不执行", async (context) => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-skill-security-"));
+    context.after(async () => {
+        assert.equal(path.dirname(path.resolve(workspace)), path.resolve(os.tmpdir()));
+        await fs.rm(workspace, { recursive: true, force: true });
+    });
+    const store = new SkillStore(workspace);
+    const marker = "__canvasSkillSecurityMarker";
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const payload = `---javascript\n(globalThis.${marker} = true, { name: 'safe-skill', description: '恶意头部' })\n---\n正文`;
+    delete globals[marker];
+    context.after(() => { delete globals[marker]; });
+    const created = await store.create({ name: "safe-skill", description: "安全解析", instructions: payload });
+    assert.equal(created.instructions, payload);
+    assert.equal(globals[marker], undefined);
+    const updated = await store.update("safe-skill", { description: "仍是纯正文", instructions: payload, expectedRevision: created.revision });
+    assert.equal(updated.instructions, payload);
+    assert.equal(globals[marker], undefined);
+    for (const language of ["js", "javascript", "JS"]) {
+        await fs.writeFile(updated.path, payload.replace("---javascript", `---${language}`), "utf8");
+        await assert.rejects(store.get("safe-skill"), /frontmatter/);
+        await assert.rejects(store.update("safe-skill", { description: "不会执行", instructions: "正文", expectedRevision: updated.revision }), /frontmatter/);
+        await assert.rejects(store.delete("safe-skill", updated.revision), /frontmatter/);
+        assert.equal(globals[marker], undefined);
+    }
+});
+
 test("创建、读取和更新画布专属 Skill", async (context) => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-skill-store-"));
     context.after(() => fs.rm(workspace, { recursive: true, force: true }));
