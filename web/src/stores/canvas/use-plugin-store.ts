@@ -11,7 +11,8 @@ export type InstalledPlugin = {
     url: string; // Installation source used for updates.
     source: string; // Cached plugin source for offline use and pinned versions.
     enabled: boolean;
-    local?: boolean; // Local plugin discovered in web/public/plugins; disabled by default and refetched from its URL when enabled.
+    approval?: { url: string; sha256: string; userId: string };
+    local?: boolean; // 本地发现只列出停用项，启用缓存版本或下载更新均需确认来源与内容。
     official?: boolean; // Installed from the official registry and grouped accordingly in the manager.
     installedAt: string;
 };

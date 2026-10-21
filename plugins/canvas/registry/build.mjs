@@ -3,6 +3,7 @@
 // CI(publish-plugins.yml)把 dist/ 强推到 plugins-dist 分支,前端经 jsDelivr 远程拉取。
 // 本地自测:`npm install && npm run build`,再把 VITE_PLUGIN_REGISTRY_URL 指向本地 dist。
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +63,7 @@ const manifest = {
             description: plugin.description,
             icon: plugin.icon,
             entry: `${plugin.id}.js`,
+            sha256: createHash("sha256").update(await readFile(join(outDir, `${plugin.id}.js`))).digest("hex"),
         })),
     ),
 };

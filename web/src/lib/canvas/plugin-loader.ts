@@ -3,6 +3,9 @@ import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
 import type { CanvasPlugin } from "@/types/canvas-plugin";
 import i18n from "@/i18n";
+import { fetchOfficialPlugins } from "@/lib/canvas/plugin-registry";
+import { fetchPluginSource, normalizePluginUrl, pluginSourceHash } from "@/lib/canvas/plugin-source";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 const cleanups = new Map<string, () => void>();
 
@@ -45,43 +48,57 @@ export function deactivatePlugin(pluginId: string) {
     unregisterPluginNodes(pluginId);
 }
 
-async function fetchPluginSource(url: string) {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(i18n.t("canvas.pluginErrors.downloadFailed", { status: response.status }));
-    return response.text();
+type PluginSourceOptions = { official?: boolean; local?: boolean; expectedId?: string; replaceId?: string };
+export type PreparedPlugin = Readonly<PluginSourceOptions & { url: string; source: string; sha256: string; sessionVersion: number; expectedVersion?: string }>;
+
+async function prepareSource(url: string, source: string, sessionVersion: number, options: PluginSourceOptions): Promise<PreparedPlugin> {
+    url = normalizePluginUrl(url);
+    const sha256 = await pluginSourceHash(source);
+    const official = options.official ? (await fetchOfficialPlugins()).find((entry) => entry.url === url && (!options.expectedId || entry.id === options.expectedId)) : undefined;
+    assertCurrentSession(sessionVersion);
+    if (options.official && (!official || official.sha256 !== sha256)) throw new Error("官方插件不在已固定的版本清单中，或包内容指纹不匹配");
+    return Object.freeze({ ...options, url, source, sha256, sessionVersion, ...(official ? { expectedId: official.id, expectedVersion: official.version } : {}) });
 }
 
-// Add a cache-busting parameter so watch builds load the latest output.
-function withCacheBust(url: string) {
-    return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+// 准备阶段只下载和计算摘要，绝不 import 插件来读取元数据。
+export async function preparePluginFromUrl(value: string, options: PluginSourceOptions = {}) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    const url = normalizePluginUrl(value);
+    const source = await fetchPluginSource(url);
+    assertCurrentSession(sessionVersion);
+    return prepareSource(url, source, sessionVersion, options);
 }
 
-// Install or replace a plugin from a URL and enable it immediately.
-// bustCache bypasses HTTP/CDN caches during upgrades while persisting a clean URL without the timestamp query.
-export async function installPluginFromUrl(url: string, opts?: { official?: boolean; bustCache?: boolean }) {
-    const source = await fetchPluginSource(opts?.bustCache ? withCacheBust(url) : url);
-    const plugin = await evaluatePluginSource(source);
-    deactivatePlugin(plugin.id); // Replace the previous version.
-    usePluginStore.getState().upsert({ id: plugin.id, name: plugin.name || plugin.id, version: plugin.version || "0.0.0", description: plugin.description, url, source, enabled: true, official: opts?.official });
+export function prepareInstalledPlugin(record: InstalledPlugin) {
+    return prepareSource(record.url, record.source, useUserStore.getState().sessionVersion, { official: record.official, local: record.local, expectedId: record.id.startsWith("local:") ? undefined : record.id, replaceId: record.id });
+}
+
+// 调用者必须在展示来源、内容指纹和页面权限后，提交用户确认的同一个摘要。
+export async function installPreparedPlugin(prepared: PreparedPlugin, approvedHash: string) {
+    assertCurrentSession(prepared.sessionVersion);
+    if (approvedHash !== prepared.sha256 || await pluginSourceHash(prepared.source) !== approvedHash) throw new Error("插件内容尚未确认或已变更");
+    assertCurrentSession(prepared.sessionVersion);
+    const plugin = await evaluatePluginSource(prepared.source);
+    assertCurrentSession(prepared.sessionVersion);
+    if ((prepared.expectedId && plugin.id !== prepared.expectedId) || (prepared.expectedVersion && plugin.version !== prepared.expectedVersion)) throw new Error("插件标识或版本与已确认的来源不符");
+    const existing = usePluginStore.getState().plugins.find((record) => record.id === plugin.id);
+    if (existing && normalizePluginUrl(existing.url) !== prepared.url && !(existing.official && prepared.official)) throw new Error("同名插件来自其他来源，请先卸载后再安装");
+    deactivatePlugin(plugin.id);
+    if (prepared.replaceId && prepared.replaceId !== plugin.id) usePluginStore.getState().remove(prepared.replaceId);
+    usePluginStore.getState().upsert({ id: plugin.id, name: plugin.name || plugin.id, version: plugin.version || "0.0.0", description: plugin.description, url: prepared.url, source: prepared.source, enabled: true, official: prepared.official, local: prepared.local, approval: { url: prepared.url, sha256: approvedHash, userId: useUserStore.getState().user?.id || "" } });
     activatePlugin(plugin);
     return plugin;
 }
 
-export async function updatePlugin(record: InstalledPlugin) {
-    // Upgrades must fetch the latest output and therefore always bypass caches.
-    return installPluginFromUrl(record.url, { official: record.official, bustCache: true });
-}
-
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
-    usePluginStore.getState().setEnabled(record.id, enabled);
     if (!enabled) {
+        usePluginStore.getState().setEnabled(record.id, false);
         deactivatePlugin(record.id);
         return;
     }
-    // Reload local plugins from their URL when enabled because the cached source may be stale.
-    const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-    const plugin = await evaluatePluginSource(source);
-    activatePlugin(plugin);
+    const prepared = await prepareInstalledPlugin(record);
+    if (!record.approval || record.approval.userId !== (useUserStore.getState().user?.id || "") || record.approval.url !== prepared.url || record.approval.sha256 !== prepared.sha256) throw new Error("插件需要重新确认来源与页面权限");
+    await installPreparedPlugin(prepared, record.approval.sha256);
 }
 
 export function uninstallPlugin(id: string) {
@@ -95,76 +112,53 @@ let loaded = false;
 export async function ensurePluginsLoaded() {
     if (loaded) return;
     loaded = true;
+    const sessionVersion = useUserStore.getState().sessionVersion;
     await usePluginStore.persist.rehydrate();
-    await loadLocalPlugins(); // Discover disabled local plugins first, then activate all enabled records.
+    if (sessionVersion !== useUserStore.getState().sessionVersion) { loaded = false; return; }
+    await loadLocalPlugins();
+    if (sessionVersion !== useUserStore.getState().sessionVersion) { loaded = false; return; }
     const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
     await Promise.all(
         records.map(async (record) => {
             try {
-                // Local plugins use the latest output; other plugins use their cached source.
-                const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-                activatePlugin(await evaluatePluginSource(source));
+                await setPluginEnabled(record, true);
             } catch (error) {
+                if (sessionVersion !== useUserStore.getState().sessionVersion) return;
+                usePluginStore.getState().setEnabled(record.id, false);
                 console.error(`[plugin] Failed to load: ${record.id}`, error);
             }
         }),
     );
-    await loadDevPlugins();
 }
 
-// Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
-// Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
+// 本地与开发目录只发现待确认来源，不执行模块，也不替换已批准的缓存版本。
 async function loadLocalPlugins() {
-    let urls: unknown;
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    let urls: unknown = [];
     try {
-        const response = await fetch("/plugins/index.json");
-        if (!response.ok) return;
-        urls = await response.json();
-    } catch {
-        return; // Skip when no local manifest exists, such as production builds without plugins.
-    }
-    if (!Array.isArray(urls) || !urls.length) return;
-    const store = usePluginStore.getState();
+        const response = await fetch("/plugins/index.json", { credentials: "omit", redirect: "error" });
+        if (response.ok) urls = await response.json();
+    } catch { /* 没有本地插件清单时仍可发现开发配置。 */ }
+    const configured = import.meta.env.DEV ? (import.meta.env.VITE_DEV_PLUGINS || "").split(",").map((url) => url.trim()).filter(Boolean) : [];
+    const discovered = [...(Array.isArray(urls) ? urls.filter((url): url is string => typeof url === "string" && url.startsWith("/plugins/") && !url.includes("..")) : []), ...configured];
     await Promise.all(
-        urls.map(async (url: string) => {
+        discovered.map(async (value) => {
             try {
-                const source = await fetchPluginSource(withCacheBust(url));
-                const plugin = await evaluatePluginSource(source);
-                const existing = store.plugins.find((item) => item.id === plugin.id);
-                store.upsert({
-                    id: plugin.id,
-                    name: plugin.name || plugin.id,
-                    version: plugin.version || "0.0.0",
-                    description: plugin.description,
-                    url,
-                    source,
-                    enabled: existing?.enabled ?? false, // Preserve the user setting; new discoveries default to disabled.
-                    local: true,
-                });
+                const url = normalizePluginUrl(value);
+                if (usePluginStore.getState().plugins.some((record) => normalizePluginUrl(record.url) === url)) return;
+                const source = await fetchPluginSource(url);
+                assertCurrentSession(sessionVersion);
+                usePluginStore.getState().upsert({ id: `local:${url}`, name: new URL(url).pathname.split("/").pop() || url, version: "待确认", url, source, enabled: false, local: true });
             } catch (error) {
-                console.error(`[plugin] Failed to discover local plugin: ${url}`, error);
+                console.error(`[plugin] Failed to discover local plugin: ${value}`, error);
             }
         }),
     );
 }
 
-// During local development, refetch VITE_DEV_PLUGINS URLs without caching or persistence on every startup.
-// Together with watch builds, refreshing the page loads code changes without reinstalling the plugin.
-async function loadDevPlugins() {
-    const raw = import.meta.env.VITE_DEV_PLUGINS;
-    if (!raw) return;
-    const urls = raw.split(",").map((item) => item.trim()).filter(Boolean);
-    await Promise.all(
-        urls.map(async (url) => {
-            try {
-                const source = await fetchPluginSource(withCacheBust(url));
-                const plugin = await evaluatePluginSource(source);
-                deactivatePlugin(plugin.id);
-                activatePlugin(plugin);
-                console.info(`[plugin] Dev plugin loaded: ${plugin.id} (${url})`);
-            } catch (error) {
-                console.error(`[plugin] Failed to load dev plugin: ${url}`, error);
-            }
-        }),
-    );
-}
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    loaded = false;
+    for (const record of usePluginStore.getState().plugins) deactivatePlugin(record.id);
+    usePluginStore.setState((current) => ({ plugins: current.plugins.map((record) => ({ ...record, enabled: false })) }));
+});

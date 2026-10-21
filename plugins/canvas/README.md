@@ -47,21 +47,23 @@ npm run dev     # watch,改动自动构建并同步
 
 ## 官方插件注册表
 
-本项目官方插件由 CI 集中构建后发布到孤儿分支 `plugins-dist`(**构建产物不进 git**),画布「节点插件」面板顶部的**官方插件**区经 jsDelivr 从该分支远程拉取并一键安装;第三方插件仍走下方「第三方插件」的 JS URL 安装。构建脚本与发布说明见 [`registry/`](./registry/README.md);清单地址可用 `VITE_PLUGIN_REGISTRY_URL` 覆盖成自建来源。
+本项目官方插件由 CI 集中构建后发布到 `plugins-dist`。前端默认使用 `web/src/constant/official-plugins.ts` 随应用审查的固定提交和包 SHA-256，分支新产物不会自动变成受信任版本。自建来源须同时配置 `VITE_PLUGIN_REGISTRY_URL` 与该清单的独立 `VITE_PLUGIN_REGISTRY_SHA256`，每包还须有 `sha256`。构建脚本与发布说明见 [`registry/`](./registry/README.md)。
+
+插件安装、启用、更新均需确认来源、内容指纹和页面权限。插件作为可信页面代码运行，不是沙箱；不要安装不信任的代码。停用或卸载后刷新页面，确保旧脚本的全局副作用停止。
 
 ## 本地开发
 
 `npm run dev` 起 watch,产物会同步到 `web/public/plugins/<name>.js`。此后有两种方式在画布里用到它:
 
-**方式一(推荐):自动发现。** 画布启动时会扫描 `web/public/plugins/` 下的插件,自动加入「节点插件」管理器列表,**默认关闭**;打开开关即启用。无需手动填 URL,启用时会按文件重新拉取,配合 watch 改完刷新即最新。
+**方式一(推荐):自动发现。** 画布启动时扫描 `web/public/plugins/` 来源，只列出停用项，不执行模块读取元数据；打开开关并确认内容才启用。使用已批准的缓存版本，watch 更新后需点击更新并确认新内容。
 
-**方式二:`VITE_DEV_PLUGINS`。** 在 `web/.env.local` 声明(逗号分隔多个),这些插件每次刷新页面都**重新拉取并直接激活**(不缓存、不落库、无开关):
+**方式二:`VITE_DEV_PLUGINS`。** 在 `web/.env.local` 声明（逗号分隔多个），仅开发模式把这些来源加入待确认列表，不直接执行：
 
 ```env
 VITE_DEV_PLUGINS=/plugins/markdown.js,/plugins/svg.js
 ```
 
-再起画布 `web`(`npm run dev`)。流程即:改 `src/index.tsx` → watch 自动构建 → 刷新画布看到最新效果,无需反复安装。
+再起画布 `web`（`npm run dev`），首次启用或更新时在插件管理器确认相应版本。
 
 ## 用 SDK 写插件
 

@@ -4,7 +4,7 @@ import { AlertTriangle, Download, Puzzle, RefreshCw, Trash2 } from "lucide-react
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { installPreparedPlugin, prepareInstalledPlugin, preparePluginFromUrl, setPluginEnabled, uninstallPlugin, type PreparedPlugin } from "@/lib/canvas/plugin-loader";
 import { fetchOfficialPlugins, hasUpgrade, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
@@ -12,7 +12,7 @@ import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin
 export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     const plugins = usePluginStore((state) => state.plugins);
     const [url, setUrl] = useState("");
     const [installing, setInstalling] = useState(false);
@@ -43,12 +43,29 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         if (open && official.length === 0 && !loadingOfficial && !officialError) void loadOfficial();
     }, [open, official.length, loadingOfficial, officialError, loadOfficial]);
 
+    const confirmPlugin = async (prepared: PreparedPlugin) => {
+        const accepted = await modal.confirm({
+            title: "确认插件来源与权限",
+            content: <div className="space-y-3 text-sm">
+                <p>{prepared.official ? "随应用固定的官方版本" : "发布者未经验证，请自行确认来源可信"}</p>
+                <p className="break-all">来源：{prepared.url}</p>
+                <p className="break-all text-xs">内容指纹（SHA-256）：{prepared.sha256}</p>
+                <p>插件将以当前登录页面的权限运行，可读取页面与画布内容、调用用户接口并向第三方发送数据。仅信任你认可的代码；停用后请刷新页面以停止已运行的脚本。</p>
+            </div>,
+            okText: "信任此版本并执行",
+            cancelText: "取消",
+            focusable: { autoFocusButton: "cancel" },
+        });
+        return accepted ? installPreparedPlugin(prepared, prepared.sha256) : null;
+    };
+
     const handleInstallUrl = async () => {
         const target = url.trim();
         if (!target) return;
         setInstalling(true);
         try {
-            const plugin = await installPluginFromUrl(target);
+            const plugin = await confirmPlugin(await preparePluginFromUrl(target));
+            if (!plugin) return;
             message.success(t("canvas.plugins.installedPlugin", { name: plugin.name }));
             setUrl("");
         } catch (error) {
@@ -61,7 +78,8 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     const handleInstallOfficial = async (entry: OfficialPluginEntry) => {
         setBusyId(entry.id);
         try {
-            const plugin = await installPluginFromUrl(entry.url, { official: true });
+            const plugin = await confirmPlugin(await preparePluginFromUrl(entry.url, { official: true, expectedId: entry.id }));
+            if (!plugin) return;
             message.success(t("canvas.plugins.installed", { name: plugin.name }));
         } catch (error) {
             message.error(t("canvas.plugins.installFailed", { error: error instanceof Error ? error.message : String(error) }));
@@ -70,10 +88,10 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         }
     };
 
-    const runOnPlugin = async (record: InstalledPlugin, action: () => Promise<void>, successText: string) => {
+    const runOnPlugin = async (record: InstalledPlugin, action: () => Promise<unknown>, successText: string) => {
         setBusyId(record.id);
         try {
-            await action();
+            if (await action() === null) return;
             message.success(successText);
         } catch (error) {
             message.error(`${error instanceof Error ? error.message : String(error)}`);
@@ -82,26 +100,22 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         }
     };
 
-    // Installed plugin actions: enable toggle plus update/uninstall for non-local plugins.
+    // 所有来源都通过相同的确认流程启用与更新。
     // Highlight the update action when a newer remote version is available.
     const installedControls = (record: InstalledPlugin, upgradable = false) => (
         <>
-            <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, () => setPluginEnabled(record, checked), t(checked ? "canvas.plugins.enabled" : "canvas.plugins.disabled"))} />
-            {!record.local && (
-                <>
-                    <Button
-                        type={upgradable ? "primary" : "text"}
-                        size="small"
-                        icon={<RefreshCw className="size-4" />}
-                        loading={busyId === record.id}
-                        title={t(upgradable ? "canvas.plugins.upgradeAvailable" : "canvas.plugins.updateFromSource")}
-                        onClick={() => runOnPlugin(record, async () => void (await updatePlugin(record)), t("canvas.plugins.updated"))}
-                    />
-                    <Popconfirm title={t("canvas.plugins.uninstallTitle")} okText={t("canvas.plugins.uninstall")} cancelText={t("canvas.editors.cancel")} onConfirm={() => uninstallPlugin(record.id)}>
-                        <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title={t("canvas.plugins.uninstall")} />
-                    </Popconfirm>
-                </>
-            )}
+            <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, async () => checked ? confirmPlugin(await prepareInstalledPlugin(record)) : setPluginEnabled(record, false), t(checked ? "canvas.plugins.enabled" : "canvas.plugins.disabled"))} />
+            <Button
+                type={upgradable ? "primary" : "text"}
+                size="small"
+                icon={<RefreshCw className="size-4" />}
+                loading={busyId === record.id}
+                title={t(upgradable ? "canvas.plugins.upgradeAvailable" : "canvas.plugins.updateFromSource")}
+                onClick={() => runOnPlugin(record, async () => confirmPlugin(await preparePluginFromUrl(record.official ? official.find((entry) => entry.id === record.id)?.url || record.url : record.url, { official: record.official, local: record.local, expectedId: record.id.startsWith("local:") ? undefined : record.id, replaceId: record.id })), t("canvas.plugins.updated"))}
+            />
+            <Popconfirm title={t("canvas.plugins.uninstallTitle")} okText={t("canvas.plugins.uninstall")} cancelText={t("canvas.editors.cancel")} onConfirm={() => uninstallPlugin(record.id)}>
+                <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title={t("canvas.plugins.uninstall")} />
+            </Popconfirm>
         </>
     );
 
