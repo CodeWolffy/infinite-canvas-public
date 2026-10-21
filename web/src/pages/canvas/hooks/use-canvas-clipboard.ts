@@ -38,7 +38,7 @@ type CanvasClipboardParams = {
 export function useCanvasClipboard({ canEdit, nodesRef, connectionsRef, selectedNodeIdsRef, getCanvasCenter, screenToCanvas, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId }: CanvasClipboardParams) {
     const { message } = App.useApp();
     const { t } = useTranslation();
-    const clipboardRef = useRef<CanvasClipboard | null>(null);
+    const clipboardRef = useRef<(CanvasClipboard & { sessionVersion: number }) | null>(null);
 
     const copySelectedNodes = useCallback(() => {
         const selectedIds = selectedNodeIdsRef.current;
@@ -55,15 +55,16 @@ export function useCanvasClipboard({ canEdit, nodesRef, connectionsRef, selected
         if (!copiedNodes.length) return;
 
         clipboardRef.current = {
+            sessionVersion: useUserStore.getState().sessionVersion,
             nodes: copiedNodes,
-            connections: connectionsRef.current.filter((connection) => selectedIds.has(connection.fromNodeId) && selectedIds.has(connection.toNodeId)).map((connection) => ({ ...connection })),
+            connections: connectionsRef.current.filter((connection) => selectedIds.has(connection.toNodeId)).map((connection) => ({ ...connection })),
         };
     }, [connectionsRef, nodesRef, selectedNodeIdsRef]);
 
     const pasteCopiedNodes = useCallback(() => {
         if (!canEdit()) return true;
         const clipboard = clipboardRef.current;
-        if (!clipboard?.nodes.length) return false;
+        if (!clipboard?.nodes.length || clipboard.sessionVersion !== useUserStore.getState().sessionVersion) return false;
 
         const center = getCanvasCenter();
         const bounds = clipboard.nodes.reduce(
@@ -99,10 +100,11 @@ export function useCanvasClipboard({ canEdit, nodesRef, connectionsRef, selected
             return { ...node, metadata: { ...node.metadata, groupId: idMap.get(groupId) } };
         });
 
+        const existingNodeIds = new Set(nodesRef.current.map((node) => node.id));
         const nextConnections = clipboard.connections.flatMap((connection, index) => {
-            const fromNodeId = idMap.get(connection.fromNodeId);
+            const fromNodeId = idMap.get(connection.fromNodeId) ?? connection.fromNodeId;
             const toNodeId = idMap.get(connection.toNodeId);
-            if (!fromNodeId || !toNodeId) return [];
+            if (!toNodeId || !existingNodeIds.has(fromNodeId) && !idMap.has(connection.fromNodeId)) return [];
             return [
                 {
                     ...connection,
@@ -120,7 +122,7 @@ export function useCanvasClipboard({ canEdit, nodesRef, connectionsRef, selected
         setContextMenu(null);
         setDialogNodeId(pastedNodes[0]?.type === CanvasNodeType.Group ? null : pastedNodes[0]?.id || null);
         return true;
-    }, [canEdit, getCanvasCenter, setConnections, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
+    }, [canEdit, getCanvasCenter, nodesRef, setConnections, setContextMenu, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds]);
 
     const createImageFileNode = useCallback(async (file: File, position: Position, sessionVersion = useUserStore.getState().sessionVersion) => {
         if (!canEdit() || useUserStore.getState().sessionVersion !== sessionVersion) return;

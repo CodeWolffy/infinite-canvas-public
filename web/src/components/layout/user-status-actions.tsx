@@ -1,6 +1,6 @@
-import type { CSSProperties } from "react";
+import { lazy, Suspense, useState, type CSSProperties } from "react";
 import { Dropdown, Tooltip } from "antd";
-import { Activity, BookOpen, CircleUserRound, Keyboard, LogOut, ShieldCheck } from "lucide-react";
+import { Activity, BookOpen, CircleUserRound, Keyboard, LogOut, Settings2, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -15,6 +15,8 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
+const GenerationPreferencesModal = lazy(() => import("./generation-preferences-modal"));
+
 type UserStatusActionsProps = {
     variant?: "default" | "canvas";
     onOpenShortcuts?: () => void;
@@ -28,6 +30,8 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const canvasTheme = canvasThemes[theme];
     const user = useUserStore((state) => state.user);
     const logout = useUserStore((state) => state.logout);
+    const sessionVersion = useUserStore((state) => state.sessionVersion);
+    const [preferencesOpen, setPreferencesOpen] = useState(false);
     const naturalIconClass = "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
     const versionStyle = iconStyle;
@@ -54,6 +58,10 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
             <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} title={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} />
             <VersionReleaseModal style={versionStyle} />
             <NotificationCenter />
+            <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => setPreferencesOpen(true)} aria-label={t("config.preferences.generation")} title={t("config.preferences.generation")}>
+                <Settings2 className="size-4" />
+            </button>
+            {preferencesOpen ? <Suspense fallback={null}><GenerationPreferencesModal key={sessionVersion} onClose={() => setPreferencesOpen(false)} /></Suspense> : null}
             <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
             <Dropdown
                 trigger={["click"]}

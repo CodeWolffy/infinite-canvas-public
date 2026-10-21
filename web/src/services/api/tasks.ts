@@ -35,8 +35,8 @@ export async function waitForGenerationTask(id: string, signal?: AbortSignal) {
 
 export function selectedPlatformModel(models: PublicModel[], selected: string, capability: PublicModel["capability"]) {
     const id = selected.includes("::") ? selected.slice(selected.indexOf("::") + 2) : selected;
-    const model = models.find((item) => item.id === id && item.capability === capability) || models.find((item) => item.capability === capability);
-    if (!model) throw new Error("暂无可用模型，请联系管理员发布模型并配置渠道");
+    const model = models.find((item) => item.id === id && item.capability === capability);
+    if (!model) throw new Error(selected ? "所选模型已不可用，请重新选择模型" : "暂无可用模型，请联系管理员发布模型并配置渠道");
     return model.id;
 }
 

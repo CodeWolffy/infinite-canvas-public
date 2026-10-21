@@ -555,6 +555,7 @@ func geminiParts(response map[string]any) ([]any, error) {
 func geminiImageConfig(params map[string]any) map[string]any {
 	ratio := str(params["aspectRatio"])
 	size := strings.ToUpper(str(params["imageSize"]))
+	resolution := strings.ToUpper(str(params["resolution"]))
 	var width, height int
 	_, _ = fmt.Sscanf(str(params["size"]), "%dx%d", &width, &height)
 	if ratio == "" && width > 0 && height > 0 {
@@ -571,24 +572,27 @@ func geminiImageConfig(params map[string]any) map[string]any {
 		}
 	}
 	if size == "" {
-		switch strings.ToLower(str(params["quality"])) {
-		case "low", "standard", "1k":
-			size = "1K"
-		case "medium", "hd", "2k":
-			size = "2K"
-		case "high", "4k":
-			size = "4K"
-		default:
-			if max(width, height) > 3072 {
-				size = "4K"
-			} else if max(width, height) > 1536 {
-				size = "2K"
-			} else {
-				size = "1K"
-			}
+		switch resolution {
+		case "1K", "2K", "4K":
+			size = resolution
 		}
 	}
-	config := map[string]any{"imageSize": size}
+	if size == "" && resolution != "AUTO" && width > 0 && height > 0 {
+		switch edge := max(width, height); {
+		case edge <= 768:
+			size = "512"
+		case edge <= 1536:
+			size = "1K"
+		case edge <= 3072:
+			size = "2K"
+		default:
+			size = "4K"
+		}
+	}
+	config := map[string]any{}
+	if size != "" {
+		config["imageSize"] = size
+	}
 	if ratio != "" {
 		config["aspectRatio"] = ratio
 	}
@@ -602,7 +606,9 @@ func (a *App) generateGemini(ctx context.Context, c channel, capability, prompt 
 	config := map[string]any{}
 	if capability == "image" {
 		config["responseModalities"] = []string{"TEXT", "IMAGE"}
-		config["imageConfig"] = geminiImageConfig(params)
+		if imageConfig := geminiImageConfig(params); len(imageConfig) > 0 {
+			config["imageConfig"] = imageConfig
+		}
 	} else if capability == "audio" {
 		config["responseModalities"] = []string{"AUDIO"}
 		voice := str(params["voice"])

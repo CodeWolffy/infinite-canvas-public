@@ -3,9 +3,9 @@ import { persist } from "zustand/middleware";
 
 import { modelPriceLabel, type ModelPricing } from "@/lib/model-price";
 import type { ModelReasoning, ReasoningEffort } from "@/lib/model-reasoning";
-import type { PublicModel } from "@/services/api/generation";
+import { getGenerationPreferences, type PublicModel } from "@/services/api/generation";
 import { fetchPublicModels } from "@/hooks/use-public-models";
-import { useUserStore } from "@/stores/use-user-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type { ReasoningEffort } from "@/lib/model-reasoning";
@@ -41,11 +41,14 @@ export type AiConfig = {
     background: string;
     count: string;
     canvasImageCount: string;
+    nodeRegenerateBehavior: "new-node" | "overwrite";
+    autoFocusOnSelect: boolean;
 };
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const PLATFORM_CHANNEL_ID = "platform";
+let pendingPreferences: { sessionVersion: number; promise: Promise<Record<string, unknown>> } | null = null;
 
 export const defaultConfig: AiConfig = {
     platformModels: [],
@@ -71,11 +74,14 @@ export const defaultConfig: AiConfig = {
     background: "",
     count: "1",
     canvasImageCount: "3",
+    nodeRegenerateBehavior: "new-node",
+    autoFocusOnSelect: false,
 };
 
 type ConfigStore = {
     config: AiConfig;
     hydratePlatformModels: () => Promise<void>;
+    hydratePreferences: () => Promise<Record<string, unknown>>;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 };
 
@@ -106,8 +112,11 @@ export function modelMatchesCapability(config: AiConfig, value: string, capabili
 
 export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
     const defaultModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
-    if (currentModel && modelMatchesCapability(config, currentModel, capability)) return currentModel;
-    if (defaultModel && modelMatchesCapability(config, defaultModel, capability)) return defaultModel;
+    for (const model of [currentModel, defaultModel]) {
+        if (!model) continue;
+        const configuredCapability = modelCapabilityOf(config, model);
+        if (!configuredCapability || configuredCapability === capability) return model;
+    }
     return "";
 }
 
@@ -128,17 +137,17 @@ function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
     const platformModels: ChannelModel[] = models.map((model) => ({ ...model, name: model.id }));
     const firstOf = (capability: ModelCapability) => platformModels.find((model) => model.capability === capability);
     const valueOf = (model?: ChannelModel) => (model ? encodeChannelModel(PLATFORM_CHANNEL_ID, model.name) : "");
-    const imageModel = valueOf(firstOf("image"));
-    const textModel = valueOf(firstOf("text"));
+    const imageModel = config.imageModel || valueOf(firstOf("image"));
+    const textModel = config.textModel || valueOf(firstOf("text"));
     return {
         ...config,
         platformModels,
         models: platformModels.map((model) => encodeChannelModel(PLATFORM_CHANNEL_ID, model.name)),
-        model: imageModel || textModel,
+        model: config.model || imageModel || textModel,
         imageModel,
         textModel,
-        videoModel: valueOf(firstOf("video")),
-        audioModel: valueOf(firstOf("audio")),
+        videoModel: config.videoModel || valueOf(firstOf("video")),
+        audioModel: config.audioModel || valueOf(firstOf("audio")),
     };
 }
 
@@ -151,6 +160,27 @@ export const useConfigStore = create<ConfigStore>()(
                 const models = await fetchPublicModels();
                 if (useUserStore.getState().sessionVersion !== sessionVersion) return;
                 set((state) => ({ config: platformConfig(state.config, models) }));
+            },
+            hydratePreferences: () => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
+                if (pendingPreferences?.sessionVersion === sessionVersion) return pendingPreferences.promise;
+                const promise = getGenerationPreferences().then((preferences) => {
+                    assertCurrentSession(sessionVersion);
+                    set((state) => {
+                        const config = { ...state.config };
+                        for (const key of ["size", "vquality", "canvasImageCount"] as const) {
+                            if (typeof preferences[key] === "string") config[key] = preferences[key];
+                        }
+                        if (typeof preferences.imageModelId === "string" && preferences.imageModelId) config.imageModel = preferences.imageModelId;
+                        if (typeof preferences.videoModelId === "string" && preferences.videoModelId) config.videoModel = preferences.videoModelId;
+                        config.nodeRegenerateBehavior = preferences.nodeRegenerateBehavior === "overwrite" ? "overwrite" : "new-node";
+                        config.autoFocusOnSelect = preferences.autoFocusOnSelect === true;
+                        return { config };
+                    });
+                    return preferences;
+                }).finally(() => { if (pendingPreferences?.promise === promise) pendingPreferences = null; });
+                pendingPreferences = { sessionVersion, promise };
+                return promise;
             },
             updateConfig: (key, value) =>
                 set((state) => ({
@@ -169,6 +199,8 @@ export const useConfigStore = create<ConfigStore>()(
                     background: state.config.background,
                     count: state.config.count,
                     canvasImageCount: state.config.canvasImageCount,
+                    nodeRegenerateBehavior: state.config.nodeRegenerateBehavior,
+                    autoFocusOnSelect: state.config.autoFocusOnSelect,
                     reasoningEffort: state.config.reasoningEffort,
                     systemPrompt: state.config.systemPrompt,
                     videoSeconds: state.config.videoSeconds,
@@ -190,6 +222,8 @@ export const useConfigStore = create<ConfigStore>()(
                         background: persistedConfig.background ?? defaults.background,
                         count: persistedConfig.count ?? defaults.count,
                         canvasImageCount: persistedConfig.canvasImageCount ?? defaults.canvasImageCount,
+                        nodeRegenerateBehavior: persistedConfig.nodeRegenerateBehavior === "overwrite" ? "overwrite" : "new-node",
+                        autoFocusOnSelect: persistedConfig.autoFocusOnSelect === true,
                         reasoningEffort: persistedConfig.reasoningEffort ?? defaults.reasoningEffort,
                         systemPrompt: persistedConfig.systemPrompt ?? defaults.systemPrompt,
                         videoSeconds: persistedConfig.videoSeconds ?? defaults.videoSeconds,

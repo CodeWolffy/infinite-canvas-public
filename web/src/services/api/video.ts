@@ -1,4 +1,4 @@
-import { clampVideoSeconds, computeVideoSize } from "@/lib/media-size";
+import { clampVideoSeconds, computeVideoSize, inferVideoRatio, parseVideoResolution } from "@/lib/media-size";
 import { readVideoMeta, type UploadedFile } from "@/services/file-storage";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { boolConfig, type AiConfig } from "@/stores/use-config-store";
@@ -14,6 +14,19 @@ export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: stri
 export type VideoGenerationTask = { id: string; provider: "platform"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
+export function videoGenerationParameters(config: AiConfig) {
+    const ratio = inferVideoRatio(config.size || "16:9");
+    return {
+        seconds: clampVideoSeconds(config.videoSeconds),
+        size: /^\d+x\d+$/.test(config.size) ? config.size : computeVideoSize(config.vquality, config.size || "16:9"),
+        ...(ratio !== "auto" ? { ratio } : {}),
+        resolution_name: parseVideoResolution(config.vquality),
+        mode: config.videoMode === "reference" ? "reference" : "frames",
+        generate_audio: boolConfig(config.videoGenerateAudio, true),
+        watermark: boolConfig(config.videoWatermark, false),
+    };
+}
+
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: VideoMediaOptions) {
     return waitForVideoGenerationTask(config, await createVideoGenerationTask(config, prompt, references, options), options);
 }
@@ -27,10 +40,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     assertCurrentSession(session);
     if (options?.signal?.aborted) throw new DOMException("已停止准备", "AbortError");
     const modelId = selectedPlatformModel(models, config.model || config.videoModel, "video");
-    const { tasks } = await createGenerationBatch({ modelId, prompt, count: 1, referenceMediaIds, canvasProjectId: options?.canvasProjectId, parameters: {
-        seconds: clampVideoSeconds(config.videoSeconds), size: /^\d+x\d+$/.test(config.size) ? config.size : computeVideoSize(config.vquality, config.size), resolution_name: config.vquality,
-        mode: config.videoMode, generate_audio: boolConfig(config.videoGenerateAudio, true), watermark: boolConfig(config.videoWatermark, false),
-    } });
+    const { tasks } = await createGenerationBatch({ modelId, prompt, count: 1, referenceMediaIds, canvasProjectId: options?.canvasProjectId, parameters: videoGenerationParameters(config) });
     assertCurrentSession(session);
     return { id: tasks[0].id, provider: "platform", model: modelId };
 }

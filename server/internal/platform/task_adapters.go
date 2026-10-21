@@ -57,7 +57,7 @@ func (a *App) taskAdapterRoutes(admin *gin.RouterGroup) {
 }
 
 func (a *App) submitOpenAIVideo(ctx context.Context, c channel, task Row, params map[string]any, refs []referenceMedia) (generationResult, error) {
-	body := selectedParams(params, "seconds", "size", "resolution_name", "generate_audio", "watermark", "mode")
+	body := selectedParams(params, "seconds", "size", "ratio", "resolution_name", "generate_audio", "watermark", "mode")
 	body["model"] = c.UpstreamModel
 	body["prompt"] = task["prompt"]
 	if body["mode"] == nil {
@@ -93,6 +93,9 @@ func (a *App) submitOpenAIVideo(ctx context.Context, c channel, task Row, params
 		}
 		if name != "" {
 			fields = append(fields, formFile{name, ref})
+			if strings.HasPrefix(ref.MIME, "image/") {
+				fields = append(fields, formFile{"images", ref})
+			}
 		}
 	}
 	req, err := c.multipartRequest(ctx, "videos", body, fields)

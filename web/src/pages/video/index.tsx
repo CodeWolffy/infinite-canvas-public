@@ -14,7 +14,8 @@ import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { moveListItem, summaryLogBase, type GenerationLog } from "@/lib/generation-log";
-import { clampVideoSeconds, computeVideoSize } from "@/lib/media-size";
+import { clampVideoSeconds } from "@/lib/media-size";
+import { videoGenerationParameters } from "@/services/api/video";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "@/services/image-storage";
 import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
@@ -22,7 +23,7 @@ import { selectedPlatformModel } from "@/services/api/tasks";
 import { useSaveToAssets } from "@/hooks/use-save-to-assets";
 import { useGenerationBatches, useWorkbenchBootstrap, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionLabel, useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, modelOptionLabel, modelOptionName, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -94,8 +95,8 @@ export default function VideoPage() {
         preferencesRef,
         batches: { setLogs, setActiveBatchIds, applyDetail, setPreviewLog, setResults },
         toLog: (batch, models) => summaryToLog(batch, models),
-        applyPreferences: (preferences, models) => {
-            if (typeof preferences.videoModelId === "string" && models.some((item) => item.id === preferences.videoModelId)) {
+        applyPreferences: (preferences) => {
+            if (typeof preferences.videoModelId === "string" && preferences.videoModelId) {
                 updateConfig("videoModel", preferences.videoModelId);
             }
             for (const key of ["vquality", "videoSeconds", "videoGenerateAudio", "videoWatermark", "videoMode"] as const) {
@@ -202,16 +203,7 @@ export default function VideoPage() {
             ensureNotifyPermission();
             const referenceMediaIds = references.map((item) => item.storageKey).filter((id): id is string => Boolean(id));
             const modelId = selectedPlatformModel(modelsRef.current, currentModel, "video");
-            const seconds = Number(clampVideoSeconds(effectiveConfig.videoSeconds || "6"));
-            const size = /^\d+x\d+$/.test(effectiveConfig.size) ? effectiveConfig.size : computeVideoSize(effectiveConfig.vquality, effectiveConfig.size);
-            const parameters = {
-                seconds: String(seconds),
-                size,
-                resolution_name: effectiveConfig.vquality || "720",
-                mode: effectiveConfig.videoMode === "reference" ? "reference" : "frames",
-                generate_audio: boolConfig(effectiveConfig.videoGenerateAudio, true),
-                watermark: boolConfig(effectiveConfig.videoWatermark, false),
-            };
+            const parameters = videoGenerationParameters(effectiveConfig);
             assertCurrentSession(sessionVersion);
             const created = await createGenerationBatch({
                 modelId,
@@ -377,8 +369,8 @@ export default function VideoPage() {
     const updateGenerationConfig: UpdateAiConfig = (key, value) => {
         updateConfig(key, value);
         if (!["vquality", "size", "videoSeconds", "videoGenerateAudio", "videoWatermark", "videoMode", "videoModel"].includes(key)) return;
-        const preferences = { ...preferencesRef.current, [key === "size" ? "videoSize" : key]: value };
-        preferencesRef.current = preferences;
+        const preferences = { [key === "size" ? "videoSize" : key === "videoModel" ? "videoModelId" : key]: key === "videoModel" && typeof value === "string" ? modelOptionName(value) : value };
+        preferencesRef.current = { ...preferencesRef.current, ...preferences };
         void updateGenerationPreferences(preferences).catch(() => undefined);
     };
 

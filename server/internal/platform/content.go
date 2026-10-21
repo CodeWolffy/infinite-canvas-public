@@ -119,8 +119,9 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = a.DB.Exec(c.Request.Context(), "INSERT INTO user_preferences(user_id,preferences) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET preferences=excluded.preferences,updated_at=now()", currentUser(c).ID, jsonBytes(input))
-		return gin.H{"preferences": input}, err
+		var raw []byte
+		err = a.DB.QueryRow(c.Request.Context(), "INSERT INTO user_preferences(user_id,preferences) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET preferences=user_preferences.preferences || excluded.preferences,updated_at=now() RETURNING preferences", currentUser(c).ID, jsonBytes(input)).Scan(&raw)
+		return gin.H{"preferences": json.RawMessage(raw)}, err
 	}))
 	api.GET("/announcement", respond(func(c *gin.Context) (any, error) {
 		var raw []byte

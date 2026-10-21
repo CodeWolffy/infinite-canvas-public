@@ -18,6 +18,7 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     const hydrateProjects = useCanvasStore((state) => state.hydrateProjects);
     const hydrateAssets = useAssetStore((state) => state.hydrateAssets);
     const hydratePlatformModels = useConfigStore((state) => state.hydratePlatformModels);
+    const hydratePreferences = useConfigStore((state) => state.hydratePreferences);
     const userId = useUserStore((state) => state.user?.id || "");
     const agentPanelOpen = useAgentStore((state) => state.panelOpen);
     const agentEnabled = useAgentStore((state) => state.enabled);
@@ -26,8 +27,8 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     const [agentPanelUsed, setAgentPanelUsed] = useState(hasAgentBootstrapInHash);
 
     useLayoutEffect(() => {
-        if (userId) void Promise.all([hydrateProjects(userId), hydrateAssets(userId), hydratePlatformModels()]).catch(() => undefined);
-    }, [hydrateAssets, hydratePlatformModels, hydrateProjects, userId]);
+        if (userId) void Promise.all([hydrateProjects(userId), hydrateAssets(userId), hydratePlatformModels(), hydratePreferences()]).catch(() => undefined);
+    }, [hydrateAssets, hydratePlatformModels, hydratePreferences, hydrateProjects, userId]);
 
     useLayoutEffect(() => {
         if (agentPanelOpen) setAgentPanelUsed(true);

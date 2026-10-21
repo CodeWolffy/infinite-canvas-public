@@ -251,6 +251,7 @@ test("personal configuration and delayed model hydration stay within the authent
     imports.nanoid = nodeRequire("nanoid");
     imports["zustand/middleware"] = { persist: (creator: any, options: any) => persist(creator, { ...options, storage: createJSONStorage(() => ({ getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })) }) };
     const models = deferred();
+    imports["@/services/api/generation"] = { getGenerationPreferences: async () => ({}) };
     imports["@/hooks/use-public-models"] = { fetchPublicModels: () => models.promise, usePublicModels: () => ({ data: [] }) };
     imports["@/lib/model-price"] = load("../lib/model-price.ts");
     const config = load("use-config-store.ts").useConfigStore;

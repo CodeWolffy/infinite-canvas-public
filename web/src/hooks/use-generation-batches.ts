@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, watchGenerationBatch, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { deleteGenerationBatch, getGenerationBatch, watchGenerationBatch, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { fetchPublicModels } from "@/hooks/use-public-models";
 import { getCapabilityBatches } from "@/services/api/tasks";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { useConfigStore } from "@/stores/use-config-store";
 
 export type GenerationBatchLog = { id: string; createdAt: number; status: "pending" | "success" | "failed" };
 
@@ -165,7 +166,7 @@ export function useWorkbenchBootstrap<L extends GenerationBatchLog, R>(options: 
     useEffect(() => {
         const sessionVersion = useUserStore.getState().sessionVersion;
         let disposed = false;
-        void Promise.all([fetchPublicModels(), getCapabilityBatches(options.capability), getGenerationPreferences()]).then(async ([availableModels, batchResp, preferences]) => {
+        void Promise.all([fetchPublicModels(), getCapabilityBatches(options.capability), useConfigStore.getState().hydratePreferences()]).then(async ([availableModels, batchResp, preferences]) => {
             if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
             const batches = batchResp.batches;
             const models = availableModels.filter((item) => item.capability === options.capability);

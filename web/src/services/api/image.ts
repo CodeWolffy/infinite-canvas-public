@@ -5,7 +5,7 @@ import { fetchPublicModels } from "@/hooks/use-public-models";
 import { mediaId } from "@/services/api/media";
 import { createTextConversation, createTextRequest } from "@/services/api/text";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { imageSizePresets } from "@/lib/media-size";
+import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { resolveReasoningEffort } from "@/lib/model-reasoning";
@@ -28,22 +28,7 @@ type RequestOptions = {
     onTasksUpdated?: (detail: GenerationBatchDetail) => void;
 };
 
-const QUALITY_BASE: Record<string, number> = {
-    low: 1024,
-    medium: 2048,
-    high: 2880,
-    xhigh: 3840,
-    max: 3840,
-    standard: 1024,
-    hd: 2048,
-};
-const QUALITY_ALIASES: Record<string, string> = {
-    "1k": "low",
-    "2k": "medium",
-    "4k": "high",
-    xhigh: "xhigh",
-    max: "max",
-};
+const IMAGE_QUALITY_VALUES = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655360;
@@ -56,8 +41,7 @@ const BATCH_MAX_WAIT_MS = 10 * 60 * 1000;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
-    const normalized = QUALITY_ALIASES[value] || value;
-    return QUALITY_BASE[normalized] ? normalized : undefined;
+    return IMAGE_QUALITY_VALUES.includes(value) ? value : undefined;
 }
 
 /** Only "transparent" is forwarded; any other value (incl. empty) means keep the default opaque background. */
@@ -65,28 +49,15 @@ function normalizeBackground(background: string | undefined) {
     return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
 }
 
-/** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
-function resolveSize(quality: string | undefined, ratio: string): string {
+/** Map a bare ratio to a 1K size; quality is independent of resolution. */
+function resolveSize(ratio: string): string {
     const parsedRatio = parseImageRatio(ratio);
-    const scale = quality === "max" || quality === "xhigh" || quality === "high" ? "4k" : quality === "medium" || quality === "hd" ? "2k" : "1k";
-    const preset = imageSizePresets[scale][ratio];
+    const preset = imageSizePresets["1k"][ratio];
     if (preset) return preset;
-    const basePixels = quality ? QUALITY_BASE[quality] : undefined;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
-    let longSide: number;
-    let shortSide: number;
-
-    if (basePixels) {
-        const targetPixels = basePixels * basePixels;
-        const longSideRaw = Math.sqrt(targetPixels * longRatio);
-        longSide = Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-        shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    } else {
-        shortSide = DEFAULT_IMAGE_SHORT_SIDE;
-        longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    }
-
+    const shortSide = DEFAULT_IMAGE_SHORT_SIDE;
+    const longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     const width = isLandscape ? longSide : shortSide;
     const height = isLandscape ? shortSide : longSide;
     validateImageSize(width, height);
@@ -123,7 +94,7 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error(apiText("imagePixelLimit"));
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
+function resolveRequestSize(size: string) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
@@ -131,7 +102,7 @@ function resolveRequestSize(quality: string | undefined, size: string) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) return resolveSize(value);
     throw new Error(apiText("invalidImageSizeFormat"));
 }
 
@@ -305,10 +276,10 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
 }
 
 export function platformImageParameters(config: AiConfig) {
-    const size = resolveRequestSize(config.quality, config.size || "auto");
+    const size = resolveRequestSize(config.size || "auto");
     const quality = normalizeQuality(config.quality || "");
     const background = normalizeBackground(config.background);
-    return { ...(size ? { size } : {}), ...(quality ? { quality } : {}), ...(background ? { background } : {}) };
+    return { ...(size ? { size } : {}), resolution: inferMediaScale(config.size), ...(quality ? { quality } : {}), ...(background ? { background } : {}) };
 }
 
 async function ensureReferenceMedia(image: ReferenceImage) {

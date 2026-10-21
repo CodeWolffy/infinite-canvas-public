@@ -101,7 +101,7 @@ export default function ImagePage() {
         batches: { setLogs, setActiveBatchIds, applyDetail, setPreviewLog, setResults },
         toLog: (batch, models) => summaryToLog(batch, models),
         applyPreferences: (preferences, models) => {
-            const preferredModelId = typeof preferences.imageModelId === "string" && models.some((item) => item.id === preferences.imageModelId) ? preferences.imageModelId : models[0]?.id || "";
+            const preferredModelId = typeof preferences.imageModelId === "string" && preferences.imageModelId ? preferences.imageModelId : models[0]?.id || "";
             const initialModel = remixState?.modelId || preferredModelId;
             setModelId(initialModel);
             if (initialModel) updateConfig("imageModel", initialModel);
@@ -375,8 +375,8 @@ export default function ImagePage() {
             setModelId(value);
         }
         if (!["quality", "size", "count", "background", "imageModel"].includes(key)) return;
-        const preferences = { ...preferencesRef.current, [key === "imageModel" ? "imageModelId" : key]: key === "imageModel" && typeof value === "string" ? modelOptionName(value) : value };
-        preferencesRef.current = preferences;
+        const preferences = { [key === "imageModel" ? "imageModelId" : key]: key === "imageModel" && typeof value === "string" ? modelOptionName(value) : value };
+        preferencesRef.current = { ...preferencesRef.current, ...preferences };
         void updateGenerationPreferences(preferences).catch(() => undefined);
     };
 
