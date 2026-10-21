@@ -68,7 +68,7 @@ func activeTaskLimit(ctx context.Context, tx pgx.Tx, userID string, count, limit
 	return nil
 }
 
-const taskSelect = "t.id,t.batch_id,t.capability,t.status,t.attempt_count,t.max_attempts,t.moderation_id,t.sequence,t.run,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,t.model_name,t.model_display_name,t.conversation_id,t.response_message_id,t.output_media_id,t.price_micros,t.pricing_kind,t.prompt_tokens,t.cached_tokens,t.completion_tokens,t.billed_micros,m.mime_type,m.byte_size,m.width,m.height,EXISTS(SELECT 1 FROM assets a WHERE a.media_id=t.output_media_id AND a.owner_id=t.user_id) AS is_saved"
+const taskSelect = "t.id,t.batch_id,t.capability,t.status,(t.status IN('reviewing','queued','running') AND t.upstream_submitted_at IS NULL) AS can_cancel,t.attempt_count,t.max_attempts,t.moderation_id,t.sequence,t.run,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,t.model_name,t.model_display_name,t.conversation_id,t.response_message_id,t.output_media_id,t.price_micros,t.pricing_kind,t.prompt_tokens,t.cached_tokens,t.completion_tokens,t.billed_micros,m.mime_type,m.byte_size,m.width,m.height,EXISTS(SELECT 1 FROM assets a WHERE a.media_id=t.output_media_id AND a.owner_id=t.user_id) AS is_saved"
 
 func taskView(row Row) Row {
 	if row["outputMediaId"] != nil {
@@ -166,6 +166,9 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 				return nil
 			}
 			if !errors.Is(err, notFound) {
+				return err
+			}
+			if err = requireNoDebt(ctx, tx, u.ID); err != nil {
 				return err
 			}
 			if err = activeTaskLimit(ctx, tx, u.ID, input.Count, settings.ActiveTasks); err != nil {
@@ -324,15 +327,23 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if err := lockWallet(ctx, tx, u.ID); err != nil {
 				return err
 			}
-			task, err := one(ctx, tx, "SELECT t.* FROM generation_tasks t JOIN generation_batches b ON b.id=t.batch_id WHERE t.id=$1 AND t.user_id=$2 AND b.deleted_at IS NULL FOR UPDATE OF t", id, u.ID)
+			task, err := one(ctx, tx, "SELECT t.*,b.canvas_project_id FROM generation_tasks t JOIN generation_batches b ON b.id=t.batch_id WHERE t.id=$1 AND t.user_id=$2 AND b.deleted_at IS NULL FOR UPDATE OF t", id, u.ID)
 			if err != nil {
 				return err
+			}
+			if canvasID := str(task["canvasProjectId"]); canvasID != "" {
+				if err = projectWriteAccess(ctx, tx, canvasID, u.ID); err != nil {
+					return err
+				}
 			}
 			if task["status"] == "reviewing" || task["status"] == "queued" || task["status"] == "running" {
 				return nil
 			}
 			if task["status"] != "failed" && task["status"] != "canceled" {
 				return problem(409, "task_completed", "已完成的任务不能重试")
+			}
+			if err = requireNoDebt(ctx, tx, u.ID); err != nil {
+				return err
 			}
 			decision, err := a.checkSensitive(ctx, sensitiveInput(str(task["prompt"]), object(task["parameters"])), u.ID)
 			if err != nil {
@@ -368,7 +379,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if _, err = changeWallet(ctx, tx, u.ID, "hold", id+":"+str(run), -price, price, "重试预冻结"); err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, effectiveMaxAttempts(settings, model))
+			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,upstream_submitted_at=NULL,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, effectiveMaxAttempts(settings, model))
 			return err
 		})
 		if err != nil {
@@ -402,6 +413,9 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if task["status"] != "reviewing" && task["status"] != "queued" && task["status"] != "running" {
 			return nil
 		}
+		if task["upstreamSubmittedAt"] != nil {
+			return problem(409, "task_submitted", "任务已提交上游，无法取消，将继续执行并正常结算")
+		}
 		canceledTask = task
 		price := integer(task["priceMicros"])
 		if _, err = changeWallet(ctx, tx, owner, "release", taskReference(task), price, -price, "任务取消退回冻结余额"); err != nil {
@@ -427,7 +441,7 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 	if err != nil {
 		return err
 	}
-	// 事务提交后再广播：取消状态已落库，执行中的上游请求可以安全中断。
+	// 事务提交后再广播；提交上游与取消共用任务行锁，取消成功后不能再发起上游请求。
 	if canceled {
 		a.publishCancel(ctx, id)
 		// SSE 只在收到信号时查库，取消是 worker 之外的状态变化，需要单独通知订阅者。

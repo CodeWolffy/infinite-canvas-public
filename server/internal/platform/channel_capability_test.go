@@ -153,10 +153,7 @@ func channelCapabilityInput(capability string) Row {
 func TestChannelCapabilityConfiguration(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
-	admin, cookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
-		t.Fatal(err)
-	}
+	_, cookie, password := testAdmin(t, a)
 	router := a.Router()
 	channels, models := map[string]string{}, map[string]string{}
 	for _, capability := range []string{"image", "text", "video", "audio"} {
@@ -183,8 +180,8 @@ func TestChannelCapabilityConfiguration(t *testing.T) {
 					method, path string
 					body Row
 				}{
-					{"PUT", path, Row{"upstreamModel": "single", "weight": 100, "enabled": true}},
-					{"POST", path + "/batch", Row{"upstreamModels": []string{"batch-a", "batch-b"}, "weight": 100, "enabled": true}},
+					{"PUT", path, Row{"upstreamModel": "single", "weight": 100, "enabled": true, "securityProof": securityProof{Password: password}}},
+					{"POST", path + "/batch", Row{"upstreamModels": []string{"batch-a", "batch-b"}, "weight": 100, "enabled": true, "securityProof": securityProof{Password: password}}},
 				} {
 					response := testRequest(router, request.method, request.path, request.body, cookie)
 					if response.Code != want {
@@ -231,10 +228,7 @@ func TestChannelCapabilityConfiguration(t *testing.T) {
 func TestMismatchedChannelCannotRun(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
-	user, cookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", user); err != nil {
-		t.Fatal(err)
-	}
+	_, cookie, password := testAdmin(t, a)
 	imageModel, _ := capabilityModel(t, a, "image", "https://example.invalid", 0)
 	_, textChannel := capabilityModel(t, a, "text", "https://example.invalid", 0)
 	if _, err := a.DB.Exec(ctx, "DELETE FROM model_channels WHERE model_id=$1", imageModel); err != nil {
@@ -256,7 +250,7 @@ func TestMismatchedChannelCannotRun(t *testing.T) {
 	if _, err := modelForTask(ctx, tx, imageModel); err == nil {
 		t.Fatal("model admission accepted a mismatched channel")
 	}
-	response := testRequest(a.Router(), "POST", "/api/admin/playground/test", Row{"channelId": textChannel, "model": "mismatch", "capability": "image", "prompt": "test"}, cookie)
+	response := testRequest(a.Router(), "POST", "/api/admin/playground/test", Row{"channelId": textChannel, "model": "mismatch", "capability": "image", "prompt": "test", "securityProof": securityProof{Password: password}}, cookie)
 	if response.Code != http.StatusBadRequest || responseRow(t, response)["error"] != "invalid_capability" {
 		t.Fatalf("playground accepted the wrong type: %d %s", response.Code, response.Body.String())
 	}

@@ -56,7 +56,7 @@ func (a *App) creditReferral(ctx context.Context, tx pgx.Tx, userID, orderID str
 	if err != nil || !settings.ReferralEnabled {
 		return err
 	}
-	percent, err := decimal.NewFromString(settings.ReferralPercent)
+	percent, err := boundedDecimal(settings.ReferralPercent, 19, 6)
 	if err != nil || percent.IsNegative() {
 		return problem(503, "invalid_referral_settings", "邀请返利比例配置不正确，请联系管理员")
 	}

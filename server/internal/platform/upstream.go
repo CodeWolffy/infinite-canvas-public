@@ -401,6 +401,17 @@ func (c channel) multipartRequest(ctx context.Context, path string, params map[s
 	c.authorize(req)
 	return req, nil
 }
+type responsesContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+type responsesMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
 func (a *App) generateText(ctx context.Context, c channel, task Row, params map[string]any) (generationResult, error) {
 	stored := []Row{{"role": "user", "content": task["prompt"]}}
 	var err error
@@ -434,20 +445,24 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 		}
 	}
 	messages := []any{}
+	responseMessages := []responsesMessage{}
 	anthropicMessages := []any{}
 	contents := []any{}
 	system := str(params["systemPrompt"])
 	if system != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": system})
+		responseMessages = append(responseMessages, responsesMessage{Role: "system", Content: jsonBytes(system)})
 	}
 	for _, m := range stored {
 		refs := attachments[str(m["id"])]
 		parts := []any{}
 		openParts := []any{}
+		responseParts := []responsesContent{}
 		claudeParts := []any{}
 		if str(m["content"]) != "" {
 			parts = append(parts, map[string]any{"text": m["content"]})
 			openParts = append(openParts, map[string]any{"type": "text", "text": m["content"]})
+			responseParts = append(responseParts, responsesContent{Type: "input_text", Text: str(m["content"])})
 			claudeParts = append(claudeParts, map[string]any{"type": "text", "text": m["content"]})
 		}
 		for _, ref := range refs {
@@ -457,6 +472,7 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			encoded := base64.StdEncoding.EncodeToString(ref.Data)
 			parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": ref.MIME, "data": encoded}})
 			openParts = append(openParts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:" + ref.MIME + ";base64," + encoded}})
+			responseParts = append(responseParts, responsesContent{Type: "input_image", ImageURL: "data:" + ref.MIME + ";base64," + encoded})
 			claudeParts = append(claudeParts, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": ref.MIME, "data": encoded}})
 		}
 		var openAIContent any = m["content"]
@@ -464,6 +480,11 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 			openAIContent = openParts
 		}
 		messages = append(messages, map[string]any{"role": m["role"], "content": openAIContent})
+		responseContent := jsonBytes(str(m["content"]))
+		if len(refs) > 0 {
+			responseContent = jsonBytes(responseParts)
+		}
+		responseMessages = append(responseMessages, responsesMessage{Role: str(m["role"]), Content: responseContent})
 		anthropicMessages = append(anthropicMessages, map[string]any{"role": m["role"], "content": claudeParts})
 		role := str(m["role"])
 		if role == "assistant" {
@@ -509,7 +530,7 @@ func (a *App) generateText(ctx context.Context, c channel, task Row, params map[
 	} else if strings.Trim(c.EndpointPath, "/") == "responses" {
 		body := selectedParams(params, "temperature", "top_p")
 		body["model"] = c.UpstreamModel
-		body["input"] = messages
+		body["input"] = responseMessages
 		body["stream"] = true
 		if effort != "" {
 			body["reasoning"] = Row{"effort": effort}

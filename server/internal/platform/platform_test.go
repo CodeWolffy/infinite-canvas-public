@@ -33,6 +33,13 @@ import (
 func mustIP(address string) netip.Addr { return netip.MustParseAddr(address) }
 func testApp(t *testing.T) *App {
 	t.Helper()
+	if os.Getenv("CI") == "true" {
+		for _, key := range []string{"TEST_DATABASE_URL", "TEST_REDIS_ADDR", "TEST_MINIO_ADDR"} {
+			if os.Getenv(key) == "" {
+				t.Fatalf("CI 缺少 %s，不能跳过关键集成测试", key)
+			}
+		}
+	}
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("需要独立的 TEST_DATABASE_URL")
@@ -812,8 +819,8 @@ func TestRotateKeysReencryptsLegacyCiphertext(t *testing.T) {
 	}
 }
 
-// 用户取消任务必须中断正在执行的上游请求，且余额退回、状态为 canceled。
-func TestCancelPropagatesToUpstream(t *testing.T) {
+// 已提交的任务禁止取消；上游继续完成，冻结金额正常结算。
+func TestSubmittedTaskCannotCancelUpstream(t *testing.T) {
 	a := testApp(t)
 	if a.Redis == nil || a.S3 == nil {
 		t.Skip("需要 TEST_REDIS_ADDR 与 TEST_MINIO_ADDR")
@@ -822,6 +829,11 @@ func TestCancelPropagatesToUpstream(t *testing.T) {
 	ctx := context.Background()
 	upstreamStarted := make(chan struct{})
 	upstreamCanceled := make(chan struct{})
+	complete := make(chan struct{})
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
 	var startedOnce, canceledOnce sync.Once
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 必须读完请求体：否则 http.Server 不会启动后台读，客户端断开也不会取消 r.Context()。
@@ -830,11 +842,15 @@ func TestCancelPropagatesToUpstream(t *testing.T) {
 		select {
 		case <-r.Context().Done():
 			canceledOnce.Do(func() { close(upstreamCanceled) })
+		case <-complete:
+			_ = json.NewEncoder(w).Encode(Row{"data": []Row{{"b64_json": base64.StdEncoding.EncodeToString(imageData.Bytes())}}})
 		case <-time.After(30 * time.Second):
 			// 上限等待，避免断言失败时整个测试包被挂死。
 		}
 	}))
 	defer upstream.Close()
+	var completeOnce sync.Once
+	defer completeOnce.Do(func() { close(complete) })
 	modelID, channelID := uuid.NewString(), uuid.NewString()
 	sealed, err := a.seal("test-upstream-key")
 	if err != nil {
@@ -870,20 +886,22 @@ func TestCancelPropagatesToUpstream(t *testing.T) {
 	if _, ok := a.running.Load(str(task["id"])); !ok {
 		t.Fatal("执行中的任务未注册取消函数")
 	}
-	if err = a.cancelTask(ctx, str(task["id"]), userID, false); err != nil {
-		t.Fatal(err)
+	if err = a.cancelTask(ctx, str(task["id"]), userID, false); err == nil {
+		t.Fatal("已提交的上游任务被取消并退款")
 	}
 	select {
 	case <-upstreamCanceled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("取消未传播到上游请求")
+		t.Fatal("拒绝取消后中断了上游")
+	default:
 	}
+	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+	completeOnce.Do(func() { close(complete) })
 	<-done
 	saved, err := one(ctx, a.DB, "SELECT status,error_code FROM generation_tasks WHERE id=$1", task["id"])
-	if err != nil || saved["status"] != "canceled" || saved["errorCode"] != "canceled" {
+	if err != nil || saved["status"] != "succeeded" || saved["errorCode"] != nil {
 		t.Fatalf("任务状态不正确: %v %v", saved, err)
 	}
-	testBalance(t, a, userID, 3*moneyScale, 0)
+	testBalance(t, a, userID, 2*moneyScale, 0)
 }
 
 // 进程退出时在途任务应重排回队列，不计失败也不退款。
@@ -896,8 +914,14 @@ func TestShutdownRequeuesRunningTask(t *testing.T) {
 	ctx := context.Background()
 	upstreamStarted := make(chan struct{})
 	var startedOnce sync.Once
+	var attempts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.ReadAll(r.Body)
+		if attempts.Add(1) > 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":%q}]}`, base64.StdEncoding.EncodeToString(reviewPNG(t)))
+			return
+		}
 		startedOnce.Do(func() { close(upstreamStarted) })
 		select {
 		case <-r.Context().Done():
@@ -923,11 +947,12 @@ func TestShutdownRequeuesRunningTask(t *testing.T) {
 		t.Fatalf("创建任务失败: %d %s", created.Code, created.Body.String())
 	}
 	testBalance(t, a, userID, 2*moneyScale, moneyScale)
-	task, err := one(ctx, a.DB, "UPDATE generation_tasks SET status='running',worker_token=$1,started_at=now(),deadline=now()+interval '480 seconds' WHERE id=(SELECT id FROM generation_tasks WHERE user_id=$2 AND status='queued' LIMIT 1) RETURNING *", uuid.NewString(), userID)
-	if err != nil {
+	if _, err = a.DB.Exec(ctx, "UPDATE generation_tasks SET max_attempts=1 WHERE user_id=$1 AND status='queued'", userID); err != nil {
 		t.Fatal(err)
 	}
+	task := claimForTest(t, a, userID)
 	root, stop := context.WithCancel(ctx)
+	defer stop()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -946,11 +971,43 @@ func TestShutdownRequeuesRunningTask(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("退出时任务未结束")
 	}
-	saved, err := one(ctx, a.DB, "SELECT status,deadline,worker_token,error_code FROM generation_tasks WHERE id=$1", task["id"])
-	if err != nil || saved["status"] != "queued" || saved["deadline"] != nil || saved["workerToken"] != nil || saved["errorCode"] != nil {
+	saved, err := one(ctx, a.DB, "SELECT status,deadline,worker_token,error_code,channel_id,slot_token,attempt_count,cardinality(attempted_key_ids) AS attempted_keys FROM generation_tasks WHERE id=$1", task["id"])
+	if err != nil || saved["status"] != "queued" || saved["deadline"] != nil || saved["workerToken"] != nil || saved["errorCode"] != nil || saved["channelId"] != nil || saved["slotToken"] != nil || integer(saved["attemptCount"]) != 0 || integer(saved["attemptedKeys"]) != 0 {
 		t.Fatalf("任务未按退出重排: %v %v", saved, err)
 	}
+	if slots, err := a.Redis.ZCard(ctx, "ic:slots:"+channelID).Result(); err != nil || slots != 0 {
+		t.Fatalf("退出后渠道槽位未释放: slots=%d err=%v", slots, err)
+	}
+	var interrupted, canceledCosts int
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM request_logs WHERE task_id=$1 AND error_category='shutdown'", task["id"]).Scan(&interrupted); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM upstream_cost_entries WHERE task_id=$1 AND status='canceled'", task["id"]).Scan(&canceledCosts); err != nil {
+		t.Fatal(err)
+	}
+	if interrupted != 1 || canceledCosts != 1 {
+		t.Fatalf("退出尝试记录未关闭: logs=%d costs=%d", interrupted, canceledCosts)
+	}
 	testBalance(t, a, userID, 2*moneyScale, moneyScale)
+	// 重新领取并完整执行，而不是只检查 queued；单 Key 且重试次数为 1 也必须能恢复。
+	a.shuttingDown.Store(false)
+	restarted := claimForTest(t, a, userID)
+	a.executeGuarded(ctx, restarted)
+	saved, err = one(ctx, a.DB, "SELECT status,attempt_count FROM generation_tasks WHERE id=$1", task["id"])
+	if err != nil || saved["status"] != "succeeded" || integer(saved["attemptCount"]) != 1 || attempts.Load() != 2 {
+		t.Fatalf("重排后未执行成功: %v %v attempts=%d", saved, err, attempts.Load())
+	}
+	if err = a.finishTask(ctx, restarted, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var holds, charges, releases int
+	if err = a.DB.QueryRow(ctx, "SELECT count(*) FILTER(WHERE kind='hold'),count(*) FILTER(WHERE kind='charge'),count(*) FILTER(WHERE kind='release') FROM wallet_entries WHERE user_id=$1 AND reference=$2", userID, taskReference(task)).Scan(&holds, &charges, &releases); err != nil {
+		t.Fatal(err)
+	}
+	if holds != 1 || charges != 1 || releases != 0 {
+		t.Fatalf("重排重复冻结或结算: ledger=%d/%d/%d", holds, charges, releases)
+	}
+	testBalance(t, a, userID, 2*moneyScale, 0)
 }
 
 // 高危管理操作必须带二次验证：缺失或密码错误返回 400，正确才执行。

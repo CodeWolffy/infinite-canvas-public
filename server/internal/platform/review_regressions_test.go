@@ -85,8 +85,8 @@ func TestPlaygroundReturnsUpstreamResultsAndRecordsCost(t *testing.T) {
 		t.Skip("需要 TEST_REDIS_ADDR")
 	}
 	ctx := context.Background()
-	user, cookie := testUser(t, a, moneyScale)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", user); err != nil {
+	user, cookie, password := testAdmin(t, a)
+	if _, err := a.DB.Exec(ctx, "UPDATE wallets SET balance_micros=$2 WHERE user_id=$1", user, moneyScale); err != nil {
 		t.Fatal(err)
 	}
 	encoded := base64.StdEncoding.EncodeToString(reviewPNG(t))
@@ -106,7 +106,7 @@ func TestPlaygroundReturnsUpstreamResultsAndRecordsCost(t *testing.T) {
 		if _, err := a.DB.Exec(ctx, "UPDATE model_channels SET cost_config=$3 WHERE model_id=$1 AND channel_id=$2", model, channel, jsonBytes(Row{"fixed": "0.1"})); err != nil {
 			t.Fatal(err)
 		}
-		response := testRequest(a.Router(), "POST", "/api/admin/playground/test", Row{"channelId": channel, "model": "test", "capability": capability, "prompt": "hello"}, cookie)
+		response := testRequest(a.Router(), "POST", "/api/admin/playground/test", Row{"channelId": channel, "model": "test", "capability": capability, "prompt": "hello", "securityProof": securityProof{Password: password}}, cookie)
 		result := responseRow(t, response)
 		if response.Code != 200 || result["ok"] != true || result["rawResponse"] == nil || strings.Contains(response.Body.String(), "test-key") {
 			t.Fatalf("playground: %d %s", response.Code, response.Body.String())

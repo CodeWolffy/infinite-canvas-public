@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,34 @@ import (
 )
 
 const moneyScale int64 = 1_000_000
+
+var decimalInput = regexp.MustCompile(`^([+-]?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?$`)
+
+// 先限定有效位和小数位，再交给 decimal；不能先展开不可信指数再检查范围。
+func boundedDecimal(value string, whole, fraction int64) (decimal.Decimal, error) {
+	parts := decimalInput.FindStringSubmatch(value)
+	if parts == nil || parts[2]+parts[3] == "" {
+		return decimal.Zero, problem(400, "invalid_amount", "数值格式不正确")
+	}
+	digits := strings.TrimLeft(parts[2]+parts[3], "0")
+	if digits == "" {
+		return decimal.Zero, nil
+	}
+	exponent := int64(0)
+	if parts[4] != "" {
+		var err error
+		exponent, err = strconv.ParseInt(parts[4], 10, 32)
+		if err != nil {
+			return decimal.Zero, problem(400, "invalid_amount", "数值超出范围")
+		}
+	}
+	significant := strings.TrimRight(digits, "0")
+	exponent += int64(len(digits)-len(significant)-len(parts[3]))
+	if exponent < -fraction || int64(len(significant))+exponent > whole {
+		return decimal.Zero, problem(400, "invalid_amount", "数值超出允许范围或精度")
+	}
+	return decimal.NewFromString(parts[1] + significant + "e" + strconv.FormatInt(exponent, 10))
+}
 
 type PlatformSettings struct {
 	GenerationEnabled       bool   `json:"generationEnabled"`
@@ -50,7 +79,11 @@ func (a *App) settings(ctx context.Context, q querier) (PlatformSettings, error)
 	return value, err
 }
 func amountUnits(value string, scale int64) (int64, error) {
-	d, err := decimal.NewFromString(value)
+	var fraction int64
+	for n := scale; n > 1; n /= 10 {
+		fraction++
+	}
+	d, err := boundedDecimal(value, 19, fraction)
 	if err != nil {
 		return 0, problem(400, "invalid_amount", "金额格式不正确")
 	}
@@ -78,6 +111,17 @@ func lockWallet(ctx context.Context, tx pgx.Tx, userID string) error {
 	return err
 }
 
+func requireNoDebt(ctx context.Context, q querier, userID string) error {
+	var balance int64
+	if err := q.QueryRow(ctx, "SELECT balance_micros FROM wallets WHERE user_id=$1", userID).Scan(&balance); err != nil {
+		return err
+	}
+	if balance < 0 {
+		return problem(402, "wallet_in_debt", "账户有待结清费用，请充值抵扣欠费后再生成")
+	}
+	return nil
+}
+
 // 每笔余额变动与不可变账本一起提交。余额不由 Redis 或浏览器推算。
 func changeWallet(ctx context.Context, tx pgx.Tx, userID, kind, reference string, balanceDelta, frozenDelta int64, note string) (bool, error) {
 	if err := lockWallet(ctx, tx, userID); err != nil {
@@ -91,7 +135,9 @@ func changeWallet(ctx context.Context, tx pgx.Tx, userID, kind, reference string
 		return false, nil
 	}
 	var balance, frozen int64
-	err := tx.QueryRow(ctx, "UPDATE wallets SET balance_micros=balance_micros+$2,frozen_micros=frozen_micros+$3,updated_at=now() WHERE user_id=$1 AND balance_micros+$2>=0 AND frozen_micros+$3>=0 RETURNING balance_micros,frozen_micros", userID, balanceDelta, frozenDelta).Scan(&balance, &frozen)
+	// 仅实际结算可形成欠费；到账和退款可以抵扣欠费，新的冻结仍须足额。
+	allowDebt := kind == "charge" || (kind != "hold" && balanceDelta >= 0)
+	err := tx.QueryRow(ctx, "UPDATE wallets SET balance_micros=balance_micros+$2,frozen_micros=frozen_micros+$3,updated_at=now() WHERE user_id=$1 AND ($4 OR balance_micros+$2>=0) AND frozen_micros+$3>=0 RETURNING balance_micros,frozen_micros", userID, balanceDelta, frozenDelta, allowDebt).Scan(&balance, &frozen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, problem(402, "insufficient_balance", "可用余额不足")
 	}
@@ -235,7 +281,7 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		percent, err := decimal.NewFromString(settings.ReferralPercent)
+		percent, err := boundedDecimal(settings.ReferralPercent, 19, 6)
 		if err != nil || percent.IsNegative() {
 			return nil, problem(400, "invalid_settings", "邀请返利比例必须为非负百分比")
 		}

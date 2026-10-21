@@ -64,7 +64,7 @@ func costAmount(config map[string]any, result generationResult, seconds any) (*i
 		if result.DurationSeconds != "" {
 			seconds = result.DurationSeconds
 		}
-		duration, e := decimal.NewFromString(str(seconds))
+		duration, e := boundedDecimal(str(seconds), 131072, 16383)
 		if e != nil || !duration.IsPositive() {
 			return nil, nil
 		}
@@ -98,7 +98,7 @@ func audioDuration(ctx context.Context, data []byte) (string, error) {
 	if err != nil {
 		return "", problem(502, "duration_unavailable", "无法读取音频时长，请检查服务器 ffprobe 配置")
 	}
-	seconds, err := decimal.NewFromString(strings.TrimSpace(string(output)))
+	seconds, err := boundedDecimal(strings.TrimSpace(string(output)), 131072, 16383)
 	if err != nil || !seconds.IsPositive() {
 		return "", problem(502, "duration_unavailable", "音频未包含有效时长")
 	}

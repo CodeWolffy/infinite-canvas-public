@@ -30,6 +30,7 @@ type modelInput struct {
 	PricePerSecond        *string        `json:"pricePerSecond"`
 	Description           *string        `json:"description"`
 	Config                map[string]any `json:"config"`
+	SecurityProof         securityProof  `json:"securityProof"`
 }
 
 func publicModelRows(items []Row) []Row {
@@ -108,6 +109,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			DisplayName       string `json:"displayName" binding:"required,max=80"`
 			TemporaryPassword string `json:"temporaryPassword" binding:"required,min=10,max=128"`
 			Role              string `json:"role" binding:"required,oneof=admin user"`
+			SecurityProof     *securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -116,6 +118,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if !usernamePattern.MatchString(input.Username) {
 			return nil, problem(400, "invalid_username", "用户名格式不正确")
 		}
+		if err = validatePassword(input.TemporaryPassword, input.Username); err != nil {
+			return nil, err
+		}
 		encoded, err := argon2id.CreateHash(input.TemporaryPassword, argon2id.DefaultParams)
 		if err != nil {
 			return nil, err
@@ -123,6 +128,15 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		var u User
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if input.Role == "admin" {
+				proof := securityProof{}
+				if input.SecurityProof != nil {
+					proof = *input.SecurityProof
+				}
+				if err := a.requireSecurityProof(c, tx, proof); err != nil {
+					return err
+				}
+			}
 			var err error
 			u, err = scanUser(tx.QueryRow(ctx, "INSERT INTO users(username,display_name,password_hash,role,must_change_password) VALUES($1,$2,$3,$4,true) RETURNING id,username,display_name,role,status,must_change_password,last_login_at,created_at,password_hash,NULL,NULL", input.Username, input.DisplayName, encoded, input.Role))
 			if err != nil {
@@ -322,8 +336,8 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		}
 		var perSecond any
 		if input.PricePerSecond != nil {
-			if input.Capability != "video" && input.Capability != "audio" {
-				return nil, problem(400, "invalid_price", "按秒计价仅支持视频和音频模型")
+			if input.Capability != "video" {
+				return nil, problem(400, "invalid_price", "按秒计价仅支持视频；音频请改为固定单次价")
 			}
 			n, err := amountUnits(*input.PricePerSecond, moneyScale)
 			if err != nil {
@@ -350,6 +364,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			if !create {
 				old, err := one(ctx, tx, "SELECT capability FROM models WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
 				if err != nil {
@@ -380,6 +397,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		}
 		input, err := body[struct {
 			Status string `json:"status" binding:"required,oneof=draft published disabled"`
+			SecurityProof *securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -387,6 +405,15 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		var row Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if input.Status == "published" {
+				proof := securityProof{}
+				if input.SecurityProof != nil {
+					proof = *input.SecurityProof
+				}
+				if err := a.requireSecurityProof(c, tx, proof); err != nil {
+					return err
+				}
+			}
 			var err error
 			row, err = one(ctx, tx, "SELECT * FROM models WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
 			if err != nil {
@@ -396,6 +423,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 				if _, err = modelTextParameters(row, nil); err != nil {
 					return err
 				}
+			}
+			if input.Status == "published" && row["capability"] == "audio" && row["pricePerSecond"] != nil {
+				return problem(400, "audio_duration_unbounded", "请先将音频模型改为固定单次价后再发布")
 			}
 			row, err = one(ctx, tx, "UPDATE models SET status=$2,updated_at=now() WHERE id=$1 RETURNING *", id, input.Status)
 			return err
@@ -436,6 +466,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			Priority      int    `json:"priority"`
 			Weight        int    `json:"weight" binding:"required,min=1"`
 			Enabled       bool   `json:"enabled"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -443,6 +474,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if err := validateChannelBinding(ctx, tx, id, channelID); err != nil {
+				return err
+			}
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
 				return err
 			}
 			if strings.TrimSpace(input.ID) != "" {
@@ -468,6 +502,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			Priority       int      `json:"priority"`
 			Weight         int      `json:"weight" binding:"required,min=1"`
 			Enabled        bool     `json:"enabled"`
+			SecurityProof  securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -475,6 +510,9 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if err := validateChannelBinding(ctx, tx, id, channelID); err != nil {
+				return err
+			}
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
 				return err
 			}
 			for _, m := range input.UpstreamModels {
@@ -571,7 +609,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 	}))
 	admin.GET("/tasks", respond(func(c *gin.Context) (any, error) {
 		limit, offset := pagination(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT t.id,t.batch_id,t.capability,t.status,t.attempt_count,t.max_attempts,t.model_display_name,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,u.username FROM generation_tasks t JOIN users u ON u.id=t.user_id WHERE ($1='' OR t.status=$1) AND ($2='' OR t.capability=$2) ORDER BY t.queued_at DESC LIMIT $3 OFFSET $4", c.Query("status"), c.Query("capability"), limit, offset)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT t.id,t.batch_id,t.capability,t.status,(t.status IN('reviewing','queued','running') AND t.upstream_submitted_at IS NULL) AS can_cancel,t.attempt_count,t.max_attempts,t.model_display_name,t.error_code,t.error_message,t.queued_at,t.started_at,t.finished_at,u.username FROM generation_tasks t JOIN users u ON u.id=t.user_id WHERE ($1='' OR t.status=$1) AND ($2='' OR t.capability=$2) ORDER BY t.queued_at DESC LIMIT $3 OFFSET $4", c.Query("status"), c.Query("capability"), limit, offset)
 		return gin.H{"tasks": items}, err
 	}))
 	admin.POST("/tasks/:id/cancel", respond(func(c *gin.Context) (any, error) {
@@ -613,6 +651,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 			TimeoutMS       int    `json:"timeoutMs" binding:"required,min=1000"`
 			MaxConcurrency  int    `json:"maxConcurrency" binding:"required,min=1"`
 			CooldownSeconds int    `json:"cooldownSeconds" binding:"min=0"`
+			SecurityProof   *securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -647,9 +686,21 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if !create {
-				old, err := one(ctx, tx, "SELECT capability FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
+				old, err := one(ctx, tx, "SELECT capability,base_url,protocol FROM channels WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id)
 				if err != nil {
 					return err
+				}
+				if str(old["baseUrl"]) != strings.TrimRight(input.BaseURL, "/") || old["protocol"] != input.Protocol {
+					proof := securityProof{}
+					if input.SecurityProof != nil {
+						proof = *input.SecurityProof
+					}
+					if err = a.requireSecurityProof(c, tx, proof); err != nil {
+						return err
+					}
+					if err = a.audit(ctx, tx, currentUser(c).ID, "channel.destination", id, Row{"previousUrl": old["baseUrl"], "baseUrl": input.BaseURL, "previousProtocol": old["protocol"], "protocol": input.Protocol}); err != nil {
+						return err
+					}
 				}
 				if old["capability"] != input.Capability {
 					var bound bool

@@ -159,7 +159,7 @@ func (a *App) textEvents(c *gin.Context) {
 			}
 			detail := value.(gin.H)
 			request := detail["request"].(Row)
-			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"])
+			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"]) + ":" + str(request["canCancel"])
 			if key != last {
 				c.SSEvent("snapshot", value)
 				last = key
@@ -180,6 +180,40 @@ func (a *App) textEvents(c *gin.Context) {
 			_, _ = c.Writer.Write([]byte(": ping\n\n"))
 			c.Writer.Flush()
 		}
+	}
+}
+
+type openAITokenDetails struct {
+	CachedTokens *int64 `json:"cached_tokens"`
+}
+
+type openAIUsage struct {
+	PromptTokens        *int64              `json:"prompt_tokens"`
+	InputTokens         *int64              `json:"input_tokens"`
+	CompletionTokens    *int64              `json:"completion_tokens"`
+	OutputTokens        *int64              `json:"output_tokens"`
+	PromptTokensDetails *openAITokenDetails `json:"prompt_tokens_details"`
+	InputTokensDetails  *openAITokenDetails `json:"input_tokens_details"`
+}
+
+func (usage openAIUsage) apply(result *generationResult) {
+	if usage.PromptTokens != nil {
+		result.PromptTokens = *usage.PromptTokens
+	}
+	if usage.InputTokens != nil {
+		result.PromptTokens = *usage.InputTokens
+	}
+	if usage.CompletionTokens != nil {
+		result.CompletionTokens = *usage.CompletionTokens
+	}
+	if usage.OutputTokens != nil {
+		result.CompletionTokens = *usage.OutputTokens
+	}
+	if usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens != nil {
+		result.CachedTokens = *usage.PromptTokensDetails.CachedTokens
+	}
+	if usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens != nil {
+		result.CachedTokens = *usage.InputTokensDetails.CachedTokens
 	}
 }
 
@@ -291,21 +325,12 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 				usage = object(object(payload["response"])["usage"])
 			}
 			if len(usage) > 0 {
-				if prompt := integer(usage["prompt_tokens"]); prompt > 0 {
-					result.PromptTokens = prompt
-				} else if input := integer(usage["input_tokens"]); input > 0 {
-					result.PromptTokens = input
+				var value openAIUsage
+				if err := json.Unmarshal(jsonBytes(usage), &value); err != nil {
+					return err
 				}
-				if cached := integer(object(usage["prompt_tokens_details"])["cached_tokens"]); cached > 0 {
-					result.CachedTokens = cached
-				} else if cached := integer(object(usage["input_token_details"])["cached_tokens"]); cached > 0 {
-					result.CachedTokens = cached
-				}
-				if comp := integer(usage["completion_tokens"]); comp > 0 {
-					result.CompletionTokens = comp
-				} else if out := integer(usage["output_tokens"]); out > 0 {
-					result.CompletionTokens = out
-				}
+				// usage 可能分帧到达，缺失字段不能把已收到的输入量或缓存量清零。
+				value.apply(&result)
 			}
 		}
 		if int64(content.Len()+len(delta)) > a.Config.MaxGenerated*2 {

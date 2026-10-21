@@ -39,6 +39,7 @@ type Config struct {
 	SecureCookie, TrustProxy, AllowPrivateHosts                          bool
 	SessionDays, WorkerConcurrency, OrphanDays, LogDays, DBMaxConns      int
 	MaxUpload, MaxGenerated                                              int64
+	UserContentQuota                                                     int64
 	HeaderTimeout                                                        time.Duration
 	// ShutdownGrace 是退出时等待在途任务收尾的最长时间。
 	ShutdownGrace time.Duration
@@ -155,6 +156,11 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		return nil, err
 	}
 	cfg.MaxGenerated = int64(generated)
+	contentQuota, err := envInt("USER_CONTENT_QUOTA_BYTES", 256*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	cfg.UserContentQuota = int64(contentQuota)
 	grace, err := envInt("SHUTDOWN_GRACE_SECONDS", 30)
 	if err != nil {
 		return nil, err
@@ -168,6 +174,7 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		return nil, err
 	}
 	poolConfig.MaxConns = int32(cfg.DBMaxConns)
+	poolConfig.ConnConfig.RuntimeParams["ic.user_content_quota_bytes"] = strconv.FormatInt(cfg.UserContentQuota, 10)
 	poolConfig.MinConns = 2
 	poolConfig.MaxConnLifetime = 30 * time.Minute
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
@@ -543,6 +550,10 @@ func fail(c *gin.Context, err error) {
 	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
+		if pg.Code == "P0001" && pg.Message == "user_content_quota" {
+			c.AbortWithStatusJSON(413, gin.H{"error": "user_content_quota", "message": "个人内容容量已达上限，请删除或缩小素材、画布及历史内容，或联系管理员"})
+			return
+		}
 		if pg.Code == "23505" {
 			c.AbortWithStatusJSON(409, gin.H{"error": "conflict", "message": "数据已存在或请求正在执行"})
 			return

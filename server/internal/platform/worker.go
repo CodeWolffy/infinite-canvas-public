@@ -123,8 +123,8 @@ func classify(err error) *upstreamError {
 		return upstream
 	}
 	var api *apiError
-	if errors.As(err, &api) && api.Code == "storage_quota" {
-		return &upstreamError{Category: "storage_quota"}
+	if errors.As(err, &api) && (api.Code == "storage_quota" || api.Code == "wallet_in_debt") {
+		return &upstreamError{Category: api.Code, Message: api.Message}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &upstreamError{Category: "timeout", Retryable: true}
@@ -468,6 +468,17 @@ func (a *App) executeTask(root context.Context, task Row) {
 				return
 			}
 			task["deadline"] = deadline
+			// 与取消共用任务行锁；只有取得提交权后才创建调用记录并访问上游。
+			submitted, err := a.submitTask(jobCtx, task)
+			if err != nil {
+				last = classify(err)
+				return
+			}
+			if !submitted {
+				canceled = true
+				return
+			}
+			a.publishTaskChange(jobCtx, task)
 			log, err := one(jobCtx, a.DB, "SELECT id FROM request_logs WHERE task_id=$1 AND status='running' ORDER BY started_at DESC LIMIT 1", task["id"])
 			if errors.Is(err, notFound) {
 				log, err = one(jobCtx, a.DB, "INSERT INTO request_logs(user_id,type,task_id,model_id,model_name_snapshot,model_display_name_snapshot,channel_id,channel_name_snapshot,upstream_model,status,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10) RETURNING id", task["userId"], task["capability"], task["id"], task["modelId"], task["modelName"], task["modelDisplayName"], candidate.ID, candidate.Name, candidate.UpstreamModel, nullable(candidate.KeyID))
@@ -481,7 +492,7 @@ func (a *App) executeTask(root context.Context, task Row) {
 				last = &upstreamError{Category: "storage"}
 				return
 			}
-			// 单独包一层可取消上下文：cancelTask 触发时只中断上游请求，不影响随后的落库与槽位释放。
+			// 进程退出仍可中断执行；用户在提交标记落库后不能取消。
 			runCtx, stopRun := context.WithCancel(jobCtx)
 			defer stopRun()
 			taskID := str(task["id"])
@@ -498,8 +509,8 @@ func (a *App) executeTask(root context.Context, task Row) {
 				}
 				last = classify(err)
 				// 进程退出：在途任务重排回队列，不计失败也不退款，重启后继续执行。
-				if a.shuttingDown.Load() && last.Category == "canceled" {
-					a.requeue(context.Background(), task, false)
+				if root.Err() != nil && last.Category == "canceled" {
+					a.requeueInterrupted(context.Background(), task, candidate)
 					task["status"] = "queued"
 					return
 				}
@@ -628,6 +639,32 @@ func (a *App) executeTask(root context.Context, task Row) {
 	}
 }
 
+// 退出中断不是渠道失败：退回本次尝试及其 Key 排除记录，已输出文本或已完成上游的任务禁止重放。
+func (a *App) requeueInterrupted(ctx context.Context, task Row, ch channel) {
+	var queued bool
+	err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		result, err := tx.Exec(ctx, `UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_model=NULL,slot_token=NULL,
+			attempt_count=GREATEST(attempt_count-1,0),attempted_key_ids=array_remove(attempted_key_ids,$3::uuid),available_at=now()
+			WHERE id=$1 AND worker_token=$2 AND status='running' AND upstream_task_id IS NULL AND partial_text='' AND NOT upstream_completed`, task["id"], task["workerToken"], nullable(ch.KeyID))
+		if err != nil || result.RowsAffected() == 0 {
+			return err
+		}
+		queued = true
+		if _, err = tx.Exec(ctx, "UPDATE request_logs SET status='failed',error_category='shutdown',error_message='服务重启中断，任务已重新排队',finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer WHERE task_id=$1 AND status='running'", task["id"]); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status='canceled',updated_at=now() WHERE task_id=$1 AND status='running'", task["id"])
+		return err
+	})
+	if err != nil {
+		slog.Warn("退出重排失败，等待租约恢复", "task", task["id"], "error", err)
+	} else if queued {
+		a.publishTaskChange(ctx, task)
+	} else {
+		a.settle(ctx, task, nil, nil, &upstreamError{Category: "stream_interrupted"})
+	}
+}
+
 func (a *App) requeue(ctx context.Context, task Row, resuming bool) {
 	query := "UPDATE generation_tasks SET status='queued',worker_token=NULL,deadline=NULL,available_at=now()+interval '2.5 seconds' WHERE id=$1 AND worker_token=$2 AND status='running'"
 	if resuming {
@@ -724,18 +761,18 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		if err := lockWallet(ctx, tx, str(original["userId"])); err != nil {
 			return err
 		}
-		task, err := one(ctx, tx, "SELECT * FROM generation_tasks WHERE id=$1 FOR UPDATE", original["id"])
+		task, err := loadSettlementTask(ctx, tx, str(original["id"]))
 		if err != nil {
 			return err
 		}
-		if task["status"] != "running" || task["workerToken"] != original["workerToken"] || integer(task["run"]) != integer(original["run"]) {
+		if task.Status != "running" || task.WorkerToken == nil || *task.WorkerToken != str(original["workerToken"]) || task.Run != integer(original["run"]) {
 			return nil
 		}
 		// 结算前的最终防护：非文本任务没有媒体结果不允许按成功扣费。
-		if failure == nil && task["capability"] != "text" && media == nil {
+		if failure == nil && task.Capability != "text" && media == nil {
 			failure = &upstreamError{Category: "upstream_error"}
 		}
-		price := integer(task["priceMicros"])
+		price := task.PriceMicros
 		status := "succeeded"
 		var errorCode, errorMessage, mediaID, messageID any
 		var billedMicros, calculatedMicros int64
@@ -745,57 +782,57 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 			status = "failed"
 			errorCode = failure.Category
 			errorMessage = failure.Error()
-			if _, err = changeWallet(ctx, tx, str(task["userId"]), "release", taskReference(task), price, -price, "生成失败退回冻结余额"); err != nil {
+			if _, err = changeWallet(ctx, tx, task.UserID, "release", task.reference(), price, -price, "生成失败退回冻结余额"); err != nil {
 				return err
 			}
 		} else {
 			if media != nil {
 				mediaID = media["id"]
-				if err = syncMediaRefs(ctx, tx, "task", str(task["id"]), str(task["userId"]), []string{str(mediaID)}); err != nil {
+				if err = syncMediaRefs(ctx, tx, "task", task.ID, task.UserID, []string{str(mediaID)}); err != nil {
 					return err
 				}
 			}
-			if task["capability"] == "text" {
+			if task.Capability == "text" {
 				if strings.TrimSpace(result.Text) == "" {
 					return errors.New("文本结果为空")
 				}
 				messageID = uuid.NewString()
-				if _, err = tx.Exec(ctx, "INSERT INTO messages(id,conversation_id,role,content) VALUES($1,$2,'assistant',$3)", messageID, task["conversationId"], result.Text); err != nil {
+				if _, err = tx.Exec(ctx, "INSERT INTO messages(id,conversation_id,role,content) VALUES($1,$2,'assistant',$3)", messageID, task.ConversationID, result.Text); err != nil {
 					return err
 				}
-				if _, err = tx.Exec(ctx, "UPDATE conversations SET updated_at=now() WHERE id=$1", task["conversationId"]); err != nil {
+				if _, err = tx.Exec(ctx, "UPDATE conversations SET updated_at=now() WHERE id=$1", task.ConversationID); err != nil {
 					return err
 				}
 			}
 			billedMicros = price
 			usageBased := false
-			if task["capability"] == "text" {
+			if task.Capability == "text" {
 				promptTokens, cachedTokens, completionTokens = result.PromptTokens, result.CachedTokens, result.CompletionTokens
 			}
-			if str(task["pricingKind"]) == "token" && task["capability"] == "text" {
+			if task.PricingKind == "token" && task.Capability == "text" {
 				usageBased = true
 				promptTokens, cachedTokens, completionTokens = result.PromptTokens, result.CachedTokens, result.CompletionTokens
-				cachedPrice := integer(task["cachedPricePerMillion"])
-				if task["cachedPricePerMillion"] == nil {
-					cachedPrice = integer(task["inputPricePerMillion"])
+				cachedPrice := task.InputPrice
+				if task.CachedPrice != nil {
+					cachedPrice = *task.CachedPrice
 				}
 				// 上游未返回 usage 时回退按冻结额结算，避免按 0 计费。
 				if result.PromptTokens > 0 || result.CompletionTokens > 0 {
-					billedMicros, err = tokenCost(result.PromptTokens, result.CachedTokens, result.CompletionTokens, integer(task["inputPricePerMillion"]), cachedPrice, integer(task["outputPricePerMillion"]))
+					billedMicros, err = tokenCost(result.PromptTokens, result.CachedTokens, result.CompletionTokens, task.InputPrice, cachedPrice, task.OutputPrice)
 					if err != nil {
 						return err
 					}
 				} else {
 					usageBased = false
 				}
-			} else if task["pricePerSecond"] != nil && (task["capability"] == "video" || task["capability"] == "audio") {
-				duration := str(task["seconds"])
-				if task["capability"] == "audio" && result.DurationSeconds != "" {
+			} else if task.PricePerSecond != nil && (task.Capability == "video" || task.Capability == "audio") {
+				duration := task.Seconds
+				if task.Capability == "audio" && result.DurationSeconds != "" {
 					duration = result.DurationSeconds
 					actualSeconds = duration
 				}
-				if seconds, e := decimal.NewFromString(duration); e == nil && seconds.IsPositive() {
-					billedMicros, err = roundedMicros(seconds.Mul(decimal.NewFromInt(integer(task["pricePerSecond"]))))
+				if seconds, e := boundedDecimal(duration, 131072, 16383); e == nil && seconds.IsPositive() {
+					billedMicros, err = roundedMicros(seconds.Mul(decimal.NewFromInt(*task.PricePerSecond)))
 					if err != nil {
 						return err
 					}
@@ -804,38 +841,25 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 			}
 			calculatedMicros = billedMicros
 			if usageBased {
-				// 冻结额只是预估：结算时全额释放冻结，实付与冻结的差额在余额上多退少补；补扣不足时封顶为冻结额。
-				charge := billedMicros
-				note := "生成成功结算"
-				if billedMicros > price {
-					var available int64
-					if err = tx.QueryRow(ctx, "SELECT balance_micros FROM wallets WHERE user_id=$1", task["userId"]).Scan(&available); err != nil {
-						return err
-					}
-					if available < billedMicros-price {
-						charge = price
-						note = fmt.Sprintf("生成成功结算（实际费用 %s，余额不足以补扣，按冻结额结算）", money(billedMicros))
-					}
-				}
-				if _, err = changeWallet(ctx, tx, str(task["userId"]), "charge", taskReference(task), price-charge, -price, note); err != nil {
+				// 冻结额只是预算，实际费用完整入账；不足部分记为欠费，后续到账先抵扣。
+				if _, err = changeWallet(ctx, tx, task.UserID, "charge", task.reference(), price-billedMicros, -price, "生成成功按实际费用结算"); err != nil {
 					return err
 				}
-				billedMicros = charge
-			} else if _, err = changeWallet(ctx, tx, str(task["userId"]), "charge", taskReference(task), 0, -price, "生成成功结算"); err != nil {
+			} else if _, err = changeWallet(ctx, tx, task.UserID, "charge", task.reference(), 0, -price, "生成成功结算"); err != nil {
 				return err
 			}
 		}
-		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds),partial_text=CASE WHEN $2='succeeded' THEN '' ELSE partial_text END WHERE id=$1", task["id"], status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds),partial_text=CASE WHEN $2='succeeded' THEN '' ELSE partial_text END WHERE id=$1", task.ID, status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE task_id=$1 AND status='running'", task["id"], status); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE task_id=$1 AND status='running'", task.ID, status); err != nil {
 			return err
 		}
 		billed := "0"
 		if failure == nil {
 			billed = money(billedMicros)
 		}
-		_, err = tx.Exec(ctx, "UPDATE request_logs SET status=$2,error_category=$3,error_message=$4,billed_amount=$5,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer,first_token_ms=(SELECT (extract(epoch FROM(first_token_at-request_logs.started_at))*1000)::integer FROM generation_tasks WHERE id=$1),output_tokens=$6 WHERE task_id=$1 AND status='running'", task["id"], status, errorCode, errorMessage, billed, integer(completionTokens))
+		_, err = tx.Exec(ctx, "UPDATE request_logs SET status=$2,error_category=$3,error_message=$4,billed_amount=$5,finished_at=now(),duration_ms=(extract(epoch FROM(now()-started_at))*1000)::integer,first_token_ms=(SELECT (extract(epoch FROM(first_token_at-request_logs.started_at))*1000)::integer FROM generation_tasks WHERE id=$1),output_tokens=$6 WHERE task_id=$1 AND status='running'", task.ID, status, errorCode, errorMessage, billed, integer(completionTokens))
 		return err
 	})
 	if err == nil {

@@ -72,10 +72,7 @@ func TestGroupPermissionsQuoteAndPermanentBalance(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
 	user, cookie := testUser(t, a, 10*moneyScale)
-	admin, adminCookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
-		t.Fatal(err)
-	}
+	_, adminCookie, password := testAdmin(t, a)
 	model, _ := capabilityModel(t, a, "image", "https://example.invalid", 2*moneyScale)
 	other, _ := capabilityModel(t, a, "image", "https://example.invalid", 2*moneyScale)
 	group := uuid.NewString()
@@ -86,7 +83,7 @@ func TestGroupPermissionsQuoteAndPermanentBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := a.Router()
-	policy := testRequest(router, "PUT", "/api/admin/user-groups/"+group+"/policy", map[string]any{"modelIds": []string{model}}, adminCookie)
+	policy := testRequest(router, "PUT", "/api/admin/user-groups/"+group+"/policy", map[string]any{"modelIds": []string{model}, "securityProof": securityProof{Password: password}}, adminCookie)
 	if policy.Code != 204 {
 		t.Fatalf("policy: %d %s", policy.Code, policy.Body.String())
 	}
@@ -430,7 +427,7 @@ func TestMonitoringChangesAndBalanceNotifications(t *testing.T) {
 	}
 }
 
-func TestAudioDurationBillingAndProbeIsolation(t *testing.T) {
+func TestLegacyAudioDurationBillingAndProbeIsolation(t *testing.T) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		t.Skip("需要服务器同款 ffprobe")
 	}
@@ -446,16 +443,17 @@ func TestAudioDurationBillingAndProbeIsolation(t *testing.T) {
 		_, _ = w.Write(wav)
 	}))
 	defer upstream.Close()
-	model, channel := capabilityModel(t, a, "audio", upstream.URL, 0)
-	if _, err = a.DB.Exec(ctx, "UPDATE models SET price_per_second=100000 WHERE id=$1", model); err != nil {
-		t.Fatal(err)
-	}
+	model, channel := capabilityModel(t, a, "audio", upstream.URL, 500000)
 	if _, err = a.DB.Exec(ctx, "UPDATE model_channels SET cost_config=$3 WHERE model_id=$1 AND channel_id=$2", model, channel, jsonBytes(Row{"second": "0.05"})); err != nil {
 		t.Fatal(err)
 	}
 	response := testRequest(a.Router(), "POST", "/api/generation-batches", map[string]any{"requestId": uuid.NewString(), "modelId": model, "count": 1, "prompt": "test", "parameters": map[string]string{"response_format": "wav"}}, cookie)
 	if response.Code != 200 {
 		t.Fatalf("create audio: %d %s", response.Code, response.Body.String())
+	}
+	// 模拟升级前已经提交的按秒音频；新任务只允许固定单次价，旧在途任务继续按实际时长结算。
+	if _, err = a.DB.Exec(ctx, "UPDATE generation_tasks SET price_per_second=100000,seconds=5,upstream_submitted_at=now() WHERE user_id=$1", user); err != nil {
+		t.Fatal(err)
 	}
 	task := capabilityTask(t, a, user)
 	a.executeTask(ctx, task)
@@ -804,10 +802,7 @@ func TestStorageQuotaRejectsUploadAndGeneration(t *testing.T) {
 func TestMultiUpstreamModelBindings(t *testing.T) {
 	ctx := context.Background()
 	a := testApp(t)
-	admin, adminCookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", admin); err != nil {
-		t.Fatal(err)
-	}
+	_, adminCookie, password := testAdmin(t, a)
 	model, channel := capabilityModel(t, a, "image", "https://example.invalid", moneyScale)
 	router := a.Router()
 
@@ -817,6 +812,7 @@ func TestMultiUpstreamModelBindings(t *testing.T) {
 		"priority":       10,
 		"weight":         100,
 		"enabled":        true,
+		"securityProof":  securityProof{Password: password},
 	}, adminCookie)
 	if batchResp.Code != 200 {
 		t.Fatalf("batch bind failed: %d %s", batchResp.Code, batchResp.Body.String())

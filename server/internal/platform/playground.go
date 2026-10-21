@@ -10,6 +10,7 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type upstreamTraceKey struct{}
@@ -51,6 +52,7 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 		Capability string         `json:"capability" binding:"omitempty,oneof=text image"`
 		Prompt     string         `json:"prompt" binding:"required"`
 		Parameters map[string]any `json:"parameters"`
+		SecurityProof securityProof `json:"securityProof"`
 	}](c)
 	if err != nil {
 		return nil, err
@@ -74,6 +76,14 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 	ch.UpstreamModel = input.Model
 	if ch.Protocol == "anthropic" && input.Capability == "text" && explicitTextTokens(input.Parameters) == 0 {
 		return nil, problem(400, "output_limit_required", "Claude Messages 必须填写最大输出 token 数")
+	}
+	if err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+			return err
+		}
+		return a.audit(ctx, tx, currentUser(c).ID, "channel.playground", ch.ID, Row{"model": input.Model, "capability": input.Capability})
+	}); err != nil {
+		return nil, err
 	}
 	task := Row{"id": uuid.NewString(), "run": 1, "probe": true, "userId": currentUser(c).ID, "note": "渠道在线调试", "capability": input.Capability, "prompt": input.Prompt, "parameters": input.Parameters}
 	bindings, err := rows(ctx, a.DB, "SELECT b.id,b.model_id,b.cost_config FROM model_channels b JOIN models m ON m.id=b.model_id WHERE b.channel_id=$1 AND b.upstream_model=$2 AND m.capability=$3 AND m.deleted_at IS NULL", ch.ID, ch.UpstreamModel, input.Capability)

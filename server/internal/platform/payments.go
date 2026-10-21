@@ -54,6 +54,13 @@ func (a *App) paymentConfig(ciphertext string) (PaymentConfig, error) {
 	return config, err
 }
 
+func (a *App) paymentRate(c *gin.Context, purpose string, accountLimit, ipLimit int) error {
+	if err := a.rate(c, "payment:"+purpose+":user:"+currentUser(c).ID, accountLimit, time.Minute); err != nil {
+		return err
+	}
+	return a.rate(c, "payment:"+purpose+":ip:"+hash(a.clientIP(c)), ipLimit, time.Minute)
+}
+
 func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 	input, err := body[struct {
 		ChannelID string `json:"channelId" binding:"required,uuid"`
@@ -77,8 +84,9 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 	channelID := uuid.MustParse(input.ChannelID).String()
 	digest := hash(channelID + ":" + input.Method + ":" + str(cents))
 	var order Row
+	created := false
 	err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "order:"+u.ID+":"+requestKey); err != nil {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "orders:"+u.ID); err != nil {
 			return err
 		}
 		existing, err := one(ctx, tx, "SELECT * FROM payment_orders WHERE user_id=$1 AND request_key=$2", u.ID, requestKey)
@@ -92,6 +100,16 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 		if !errors.Is(err, notFound) {
 			return err
 		}
+		if err = a.paymentRate(c, "create", 10, 60); err != nil {
+			return err
+		}
+		var pending int
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM payment_orders WHERE user_id=$1 AND status='pending'", u.ID).Scan(&pending); err != nil {
+			return err
+		}
+		if pending >= 10 {
+			return problem(429, "pending_order_limit", "最多保留 10 笔待支付订单，请先完成支付或刷新已有订单")
+		}
 		channel, err := one(ctx, tx, "SELECT * FROM payment_channels WHERE id=$1 AND enabled AND $2=ANY(methods)", channelID, input.Method)
 		if err != nil {
 			return problem(400, "payment_unavailable", "该充值渠道暂不可用")
@@ -102,6 +120,7 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 		}
 		expires := time.Now().Add(time.Duration(settings.PaymentOrderMinutes) * time.Minute)
 		order, err = one(ctx, tx, "INSERT INTO payment_orders(user_id,channel_id,method,amount_cents,encrypted_config,provider,request_key,request_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *", u.ID, channelID, input.Method, cents, channel["encryptedConfig"], channel["provider"], requestKey, digest, expires)
+		created = err == nil
 		return err
 	})
 	if err != nil {
@@ -113,6 +132,12 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 	expires := order["expiresAt"].(time.Time)
 	if !expires.After(time.Now()) {
 		return nil, problem(409, "order_expired", "订单已过期，请刷新订单状态")
+	}
+	// 首次调用未取得支付链接时仍能用原编号恢复；这些真实网关重试也受下单频控保护。
+	if !created {
+		if err = a.paymentRate(c, "create", 10, 60); err != nil {
+			return nil, err
+		}
 	}
 	lockKey, token := "ic:payment:create:"+str(order["id"]), uuid.NewString()
 	locked, err := a.Redis.SetNX(ctx, lockKey, token, time.Until(expires)).Result()
@@ -159,6 +184,9 @@ func (a *App) refreshPaymentOrder(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	if order["status"] == "pending" {
+		if err = a.paymentRate(c, "query", 60, 120); err != nil {
+			return nil, err
+		}
 		if err := a.reconcilePayment(ctx, order); err != nil {
 			return nil, problem(502, "payment_query_failed", "暂时无法确认支付状态，订单会保留，请稍后刷新")
 		}
@@ -167,62 +195,80 @@ func (a *App) refreshPaymentOrder(c *gin.Context) (any, error) {
 }
 
 func (a *App) creditPayment(ctx context.Context, id string, result PaymentResult) error {
+	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		return a.creditPaymentTx(ctx, tx, id, result)
+	})
+}
+
+func (a *App) creditPaymentTx(ctx context.Context, tx pgx.Tx, id string, result PaymentResult) error {
 	if !result.Paid || result.TradeNo == "" {
 		return problem(400, "invalid_payment", "支付结果未确认")
 	}
-	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-		order, err := one(ctx, tx, "SELECT * FROM payment_orders WHERE id=$1 FOR UPDATE", id)
-		if err != nil {
-			return err
+	order, err := one(ctx, tx, "SELECT * FROM payment_orders WHERE id=$1 FOR UPDATE", id)
+	if err != nil {
+		return err
+	}
+	if result.MerchantOrder != merchantOrder(id) || result.AmountCents != integer(order["amountCents"]) || result.Method != str(order["method"]) {
+		return problem(400, "payment_mismatch", "支付通知与订单不匹配")
+	}
+	if order["status"] == "paid" {
+		if order["tradeNo"] != result.TradeNo {
+			return problem(409, "payment_mismatch", "支付交易号不匹配")
 		}
-		if result.MerchantOrder != merchantOrder(id) || result.AmountCents != integer(order["amountCents"]) || result.Method != str(order["method"]) {
-			return problem(400, "payment_mismatch", "支付通知与订单不匹配")
-		}
-		if order["status"] == "paid" {
-			if order["tradeNo"] != result.TradeNo {
-				return problem(409, "payment_mismatch", "支付交易号不匹配")
-			}
-			return nil
-		}
-		// 已本地关闭的易支付订单仍可能收到真实支付；验签确认后照常入账，绝不吞掉迟到款项。
-		credited, err := changeWallet(ctx, tx, str(order["userId"]), "recharge", id, result.AmountCents*10000, 0, "余额充值")
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, "UPDATE payment_orders SET status='paid',trade_no=$2,paid_at=now() WHERE id=$1", id, result.TradeNo); err != nil {
-			return err
-		}
-		if !credited {
-			return nil
-		}
-		if err = a.creditReferral(ctx, tx, str(order["userId"]), id, result.AmountCents*10000); err != nil {
-			return err
-		}
-		return a.notifyCredit(ctx, tx, str(order["userId"]), "recharge", result.AmountCents*10000)
-	})
+		return nil
+	}
+	// 已本地关闭的易支付订单仍可能收到真实支付；验签确认后照常入账，绝不吞掉迟到款项。
+	credited, err := changeWallet(ctx, tx, str(order["userId"]), "recharge", id, result.AmountCents*10000, 0, "余额充值")
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "UPDATE payment_orders SET status='paid',trade_no=$2,paid_at=now() WHERE id=$1", id, result.TradeNo); err != nil {
+		return err
+	}
+	if !credited {
+		return nil
+	}
+	if err = a.creditReferral(ctx, tx, str(order["userId"]), id, result.AmountCents*10000); err != nil {
+		return err
+	}
+	return a.notifyCredit(ctx, tx, str(order["userId"]), "recharge", result.AmountCents*10000)
 }
 func (a *App) reconcilePayment(ctx context.Context, order Row) error {
-	config, err := a.paymentConfig(str(order["encryptedConfig"]))
-	if err != nil {
-		return err
-	}
-	result, err := a.queryPayment(ctx, order, config)
-	if err != nil {
-		return err
-	}
-	if result.Paid {
-		return a.creditPayment(ctx, str(order["id"]), result)
-	}
-	if result.Closed || !order["expiresAt"].(time.Time).After(time.Now()) {
-		if !result.Closed {
-			if err = a.closePayment(ctx, order, config); err != nil {
-				return err
-			}
+	return pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+		var locked bool
+		// 事务锁跨实例合并同订单查询，断连自动释放；支付回调不依赖此锁。
+		if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))", "payment:query:"+str(order["id"])).Scan(&locked); err != nil {
+			return err
 		}
-		_, err = a.DB.Exec(ctx, "UPDATE payment_orders SET status='closed' WHERE id=$1 AND status='pending'", order["id"])
-		return err
-	}
-	return nil
+		if !locked {
+			return nil
+		}
+		current, err := one(ctx, tx, "SELECT * FROM payment_orders WHERE id=$1", order["id"])
+		if err != nil || current["status"] != "pending" {
+			return err
+		}
+		config, err := a.paymentConfig(str(current["encryptedConfig"]))
+		if err != nil {
+			return err
+		}
+		result, err := a.queryPayment(ctx, current, config)
+		if err != nil {
+			return err
+		}
+		if result.Paid {
+			return a.creditPaymentTx(ctx, tx, str(current["id"]), result)
+		}
+		if result.Closed || !current["expiresAt"].(time.Time).After(time.Now()) {
+			if !result.Closed {
+				if err = a.closePayment(ctx, current, config); err != nil {
+					return err
+				}
+			}
+			_, err = tx.Exec(ctx, "UPDATE payment_orders SET status='closed' WHERE id=$1 AND status='pending'", current["id"])
+			return err
+		}
+		return nil
+	})
 }
 
 func (a *App) paymentCallbacks(r *gin.Engine) {

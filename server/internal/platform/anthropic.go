@@ -1,13 +1,11 @@
 package platform
 
-import "github.com/shopspring/decimal"
-
 func explicitTextTokens(params map[string]any) int64 {
 	for _, key := range []string{"max_completion_tokens", "max_tokens", "maxOutputTokens"} {
 		if value := params[key]; value != nil {
-			n, err := decimal.NewFromString(str(value))
-			if err == nil && n.IsPositive() && n.Equal(n.Truncate(0)) && n.LessThanOrEqual(decimal.NewFromInt(1<<63-1)) {
-				return n.IntPart()
+			n, err := amountUnits(str(value), 1)
+			if err == nil && n > 0 {
+				return n
 			}
 			return 0
 		}

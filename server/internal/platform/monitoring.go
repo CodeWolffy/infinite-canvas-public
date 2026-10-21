@@ -16,7 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/shopspring/decimal"
 )
 
 // 只保留零成本的周期检查：模型列表与渠道余额。生成检测会真实调用上游，已移除。
@@ -118,7 +117,7 @@ func (a *App) monitoringRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		if input.BalanceThreshold != nil {
-			value, e := decimal.NewFromString(*input.BalanceThreshold)
+			value, e := boundedDecimal(*input.BalanceThreshold, 19, 6)
 			if e != nil || value.IsNegative() {
 				return nil, problem(400, "invalid_balance", "余额提醒阈值必须为非负数")
 			}
@@ -306,9 +305,11 @@ func (a *App) runMonitor(root context.Context, row Row) {
 		if err == nil && info["balance"] != nil {
 			balance = fmt.Sprint(info["balance"])
 			balanceStatus = "ok"
-			threshold, _ := decimal.NewFromString(*config.BalanceThreshold)
-			value, _ := decimal.NewFromString(str(balance))
-			if value.LessThanOrEqual(threshold) {
+			threshold, thresholdErr := boundedDecimal(*config.BalanceThreshold, 19, 6)
+			value, valueErr := boundedDecimal(str(balance), 19, 6)
+			if thresholdErr != nil || valueErr != nil {
+				balanceStatus = "unavailable"
+			} else if value.LessThanOrEqual(threshold) {
 				balanceStatus = "low"
 			}
 		} else {

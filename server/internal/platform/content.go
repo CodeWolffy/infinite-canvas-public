@@ -80,7 +80,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 	a.mediaRoutes(api)
 	api.GET("/models", respond(func(c *gin.Context) (any, error) {
 		u := currentUser(c)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT id,name,display_name,capability,sort_order,description,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,price_per_second,coalesce(config->'reasoningEfforts','[]'::jsonb) AS reasoning_efforts,coalesce(config->'imageInput','false'::jsonb) AS image_input FROM models m WHERE m.status='published' AND m.deleted_at IS NULL AND EXISTS(SELECT 1 FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND (g.model_ids IS NULL OR m.id=ANY(g.model_ids))) AND EXISTS(SELECT 1 FROM available_model_channels v WHERE v.model_id=m.id) ORDER BY sort_order,created_at", u.ID)
+		items, err := rows(c.Request.Context(), a.DB, "SELECT id,name,display_name,capability,sort_order,description,price_micros,input_price_per_million,cached_price_per_million,output_price_per_million,price_per_second,coalesce(config->'reasoningEfforts','[]'::jsonb) AS reasoning_efforts,coalesce(config->'imageInput','false'::jsonb) AS image_input FROM models m WHERE m.status='published' AND m.deleted_at IS NULL AND (m.capability<>'audio' OR m.price_per_second IS NULL) AND EXISTS(SELECT 1 FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1 AND (g.model_ids IS NULL OR m.id=ANY(g.model_ids))) AND EXISTS(SELECT 1 FROM available_model_channels v WHERE v.model_id=m.id) ORDER BY sort_order,created_at", u.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +114,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		}
 		return gin.H{"preferences": json.RawMessage(raw)}, err
 	}))
-	api.PUT("/preferences", respond(func(c *gin.Context) (any, error) {
+	api.PUT("/preferences", a.rateLimit("preferences-write", 60, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[map[string]any](c)
 		if err != nil {
 			return nil, err
@@ -326,7 +326,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		items, err := rows(c.Request.Context(), a.DB, "SELECT id,title,note,created_at,coalesce(jsonb_array_length(snapshot->'nodes'),0) AS node_count,coalesce(jsonb_array_length(snapshot->'connections'),0) AS connection_count FROM canvas_project_history WHERE project_id=$1 ORDER BY created_at DESC,id DESC", id)
 		return gin.H{"history": items}, err
 	}))
-	api.POST("/canvas-projects/:id/history", respond(func(c *gin.Context) (any, error) {
+	api.POST("/canvas-projects/:id/history", a.rateLimit("canvas-history-write", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
 			return nil, err
@@ -359,7 +359,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		})
 		return gin.H{"history": saved}, err
 	}))
-	api.POST("/canvas-projects/:id/history/:historyId/restore", respond(func(c *gin.Context) (any, error) {
+	api.POST("/canvas-projects/:id/history/:historyId/restore", a.rateLimit("canvas-history-write", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
 			return nil, err
@@ -593,8 +593,8 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		})
 		return gin.H{"asset": saved}, err
 	})
-	api.POST("/assets", save)
-	api.PUT("/assets/:id", save)
+	api.POST("/assets", a.rateLimit("assets-write", 60, time.Minute), save)
+	api.PUT("/assets/:id", a.rateLimit("assets-write", 60, time.Minute), save)
 	api.DELETE("/assets/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {

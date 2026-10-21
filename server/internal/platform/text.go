@@ -148,7 +148,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 				}
 			}
 		}
-		latest, err := one(ctx, a.DB, "SELECT id,conversation_id,model_id,parameters,status,error_code,error_message,response_message_id,partial_text,stream_sequence,run,attempt_count,max_attempts,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE conversation_id=$1 ORDER BY queued_at DESC LIMIT 1", id)
+		latest, err := one(ctx, a.DB, "SELECT id,conversation_id,model_id,parameters,status,(status IN('reviewing','queued','running') AND upstream_submitted_at IS NULL) AS can_cancel,error_code,error_message,response_message_id,partial_text,stream_sequence,run,attempt_count,max_attempts,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE conversation_id=$1 ORDER BY queued_at DESC LIMIT 1", id)
 		if errors.Is(err, notFound) {
 			err = nil
 		}
@@ -220,6 +220,9 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 				return nil
 			}
 			if !errors.Is(err, notFound) {
+				return err
+			}
+			if err = requireNoDebt(ctx, tx, u.ID); err != nil {
 				return err
 			}
 			if err = activeTaskLimit(ctx, tx, u.ID, 1, settings.ActiveTasks); err != nil {
@@ -329,7 +332,7 @@ func (a *App) textRequestDetail(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	ctx := c.Request.Context()
-	task, err := one(ctx, a.DB, "SELECT id,conversation_id,response_message_id,status,error_code,error_message,partial_text,stream_sequence,run,attempt_count,max_attempts,prompt_tokens,cached_tokens,completion_tokens,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE id=$1 AND user_id=$2 AND capability='text'", id, currentUser(c).ID)
+	task, err := one(ctx, a.DB, "SELECT id,conversation_id,response_message_id,status,(status IN('reviewing','queued','running') AND upstream_submitted_at IS NULL) AS can_cancel,error_code,error_message,partial_text,stream_sequence,run,attempt_count,max_attempts,prompt_tokens,cached_tokens,completion_tokens,billed_micros,price_micros,queued_at AS created_at,finished_at FROM generation_tasks WHERE id=$1 AND user_id=$2 AND capability='text'", id, currentUser(c).ID)
 	if err != nil {
 		return nil, err
 	}

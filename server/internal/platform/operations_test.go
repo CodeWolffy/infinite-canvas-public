@@ -15,7 +15,7 @@ func TestSettlementRegression(t *testing.T) {
 		balance, hold, prompt, cached, cachePrice, charged int64
 	}{
 		{"extra_charge_once", 3_000_000, 1_000_000, 500_000, 0, 3_000_000, 1_500_000},
-		{"insufficient_extra_matches_ledger", 1_200_000, 1_000_000, 500_000, 0, 3_000_000, 1_000_000},
+		{"insufficient_extra_becomes_debt", 1_200_000, 1_000_000, 500_000, 0, 3_000_000, 1_500_000},
 		{"free_cached_tokens", 3_000_000, 1_000_000, 500_000, 500_000, 0, 0},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
@@ -141,11 +141,8 @@ func TestRedeemDifferentCodesRegression(t *testing.T) {
 func TestPerSecondModelSaveRegression(t *testing.T) {
 	a := testApp(t)
 	ctx := context.Background()
-	user, cookie := testUser(t, a, 0)
-	if _, err := a.DB.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", user); err != nil {
-		t.Fatal(err)
-	}
-	response := testRequest(a.Router(), "POST", "/api/admin/models", map[string]any{"name": "video-test", "displayName": "video-test", "capability": "video", "status": "draft", "price": "0", "pricePerSecond": "0.15"}, cookie)
+	_, cookie, password := testAdmin(t, a)
+	response := testRequest(a.Router(), "POST", "/api/admin/models", map[string]any{"name": "video-test", "displayName": "video-test", "capability": "video", "status": "draft", "price": "0", "pricePerSecond": "0.15", "securityProof": securityProof{Password: password}}, cookie)
 	if response.Code != 200 {
 		t.Fatalf("create model: %d %s", response.Code, response.Body.String())
 	}

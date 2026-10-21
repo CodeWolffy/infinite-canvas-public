@@ -107,14 +107,51 @@ func (a *App) secondFactor(ctx context.Context, tx pgx.Tx, userID, code string, 
 	return err
 }
 
-func (a *App) verifySecurityProof(c *gin.Context, tx pgx.Tx, proof securityProof) error {
+func (a *App) securityProofQuota(c *gin.Context) (func(), error) {
+	if a.Redis == nil {
+		return nil, problem(503, "rate_limit_unavailable", "二次验证频控服务暂时不可用，请稍后重试")
+	}
+	keys := []string{"ic:proof:user:" + currentUser(c).ID, "ic:proof:ip:" + hash(a.clientIP(c))}
+	token := uuid.NewString()
+	refund := func() {
+		for _, key := range keys {
+			_ = a.Redis.ZRem(context.WithoutCancel(c.Request.Context()), key, token).Err()
+		}
+	}
+	// 用户确认：每账号 5 次、每 IP 30 次明确凭证错误，均为 5 分钟滑动窗口。
+	wait, err := loginQuotaScript.Run(c.Request.Context(), a.Redis, keys, token, 300000, 5, 300000, 30).Int64()
+	if err != nil {
+		refund()
+		return nil, problem(503, "rate_limit_unavailable", "二次验证频控服务暂时不可用，请稍后重试")
+	}
+	if wait > 0 {
+		c.Header("Retry-After", str((wait+999)/1000))
+		return nil, problem(429, "too_many_requests", "二次验证错误次数过多，请稍后重试")
+	}
+	return refund, nil
+}
+
+func (a *App) verifySecurityProof(c *gin.Context, tx pgx.Tx, proof securityProof) (result error) {
+	refund, err := a.securityProofQuota(c)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		var failure *apiError
+		if !errors.As(result, &failure) || (failure.Code != "invalid_password" && failure.Code != "invalid_mfa") {
+			refund()
+		}
+	}()
 	u := currentUser(c)
 	var encoded string
 	if err := tx.QueryRow(c.Request.Context(), "SELECT password_hash FROM users WHERE id=$1 FOR UPDATE", u.ID).Scan(&encoded); err != nil {
 		return err
 	}
 	valid, err := argon2id.ComparePasswordAndHash(proof.Password, encoded)
-	if err != nil || !valid {
+	if err != nil {
+		return err
+	}
+	if !valid {
 		return problem(400, "invalid_password", "当前密码错误")
 	}
 	return a.secondFactor(c.Request.Context(), tx, u.ID, proof.Code, false)

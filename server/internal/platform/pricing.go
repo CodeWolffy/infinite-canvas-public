@@ -21,14 +21,14 @@ func roundedMicros(value decimal.Decimal) (int64, error) {
 func paramSeconds(params map[string]any) (decimal.Decimal, error) {
 	seconds := decimal.Zero
 	if value := params["seconds"]; value != nil && value != "" {
-		parsed, err := decimal.NewFromString(str(value))
+		parsed, err := boundedDecimal(str(value), 131072, 16383)
 		if err != nil || !parsed.IsPositive() {
 			return parsed, problem(400, "invalid_duration", "生成时长必须为正数")
 		}
 		seconds = parsed
 	}
 	if value := params["durationSeconds"]; value != nil && value != "" {
-		parsed, err := decimal.NewFromString(str(value))
+		parsed, err := boundedDecimal(str(value), 131072, 16383)
 		if err != nil || !parsed.IsPositive() {
 			return parsed, problem(400, "invalid_duration", "生成时长必须为正数")
 		}
@@ -42,6 +42,9 @@ func paramSeconds(params map[string]any) (decimal.Decimal, error) {
 
 // 创建、重试和预报价使用相同的价格快照，零单价与未配置分别处理。
 func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any, promptEstimate int64) (Row, error) {
+	if model["capability"] == "audio" && model["pricePerSecond"] != nil {
+		return nil, problem(400, "audio_duration_unbounded", "按秒计价音频暂不可用，请联系管理员改为固定单次价")
+	}
 	p := Row{"pricingKind": "fixed", "groupDiscount": discount.String(), "seconds": nil}
 	for _, field := range []string{"priceMicros", "inputPricePerMillion", "cachedPricePerMillion", "outputPricePerMillion", "pricePerSecond"} {
 		p[field] = nil
@@ -86,14 +89,27 @@ func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any,
 	return p, nil
 }
 
-func promptEstimate(ctx context.Context, q querier, conversation, content, system string) (int64, error) {
-	var history int64
+func promptEstimate(ctx context.Context, q querier, conversation, content, system string, attachments ...string) (int64, error) {
+	var history, images int64
 	if conversation != "" {
 		if err := q.QueryRow(ctx, "SELECT coalesce(sum(octet_length(m.content)),0) FROM messages m WHERE m.conversation_id=$1 AND "+approvedMessage, conversation).Scan(&history); err != nil {
 			return 0, err
 		}
+		// 图片按传给上游的 base64 字节预算，历史附件也计入；实际用量仍以结算为准。
+		if err := q.QueryRow(ctx, `SELECT coalesce(sum(4*((o.byte_size+2)/3)),0) FROM media_objects o
+			JOIN media_references r ON r.media_id=o.id JOIN messages m ON r.owner_kind='message' AND r.owner_id=m.id
+			WHERE m.conversation_id=$1 AND `+approvedMessage, conversation).Scan(&images); err != nil {
+			return 0, err
+		}
 	}
-	return (history + int64(len(content)+len(system)) + 1024) / 4, nil
+	var incoming int64
+	if len(attachments) > 0 {
+		if err := q.QueryRow(ctx, "SELECT coalesce(sum(4*((byte_size+2)/3)),0) FROM media_objects WHERE id=ANY($1::uuid[])", attachments).Scan(&incoming); err != nil {
+			return 0, err
+		}
+	}
+	// 不再假定所有文字都能按每 token 四字节压缩；沿用既有 1024 的消息开销预算。
+	return history + int64(len(content)+len(system)) + images + incoming + 1024, nil
 }
 
 func (a *App) quoteRoutes(api *gin.RouterGroup) {
@@ -104,6 +120,7 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 			Content        string         `json:"content"`
 			System         string         `json:"systemPrompt"`
 			ConversationID string         `json:"conversationId" binding:"omitempty,uuid"`
+			AttachmentMediaIDs []string    `json:"attachmentMediaIds" binding:"max=20,dive,uuid"`
 			Parameters     map[string]any `json:"parameters"`
 		}](c)
 		if err != nil {
@@ -128,7 +145,16 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 				return nil, err
 			}
 		}
-		estimate, err := promptEstimate(ctx, a.DB, input.ConversationID, input.Content, input.System)
+		if len(input.AttachmentMediaIDs) > 0 {
+			var visible int
+			if err = a.DB.QueryRow(ctx, "SELECT count(DISTINCT m.id) FROM media_objects m WHERE m.id=ANY($1::uuid[]) AND m.status='ready' AND "+mediaVisibility, input.AttachmentMediaIDs, u.ID, false).Scan(&visible); err != nil {
+				return nil, err
+			}
+			if visible != len(input.AttachmentMediaIDs) {
+				return nil, problem(400, "invalid_media", "包含重复、无权访问或不可用的文件")
+			}
+		}
+		estimate, err := promptEstimate(ctx, a.DB, input.ConversationID, input.Content, input.System, input.AttachmentMediaIDs...)
 		if err != nil {
 			return nil, err
 		}

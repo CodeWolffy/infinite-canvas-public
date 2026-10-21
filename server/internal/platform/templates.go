@@ -46,7 +46,7 @@ func (a *App) templateRoutes(api *gin.RouterGroup, admin *gin.RouterGroup) {
 		return gin.H{"project": project}, err
 	}))
 
-	admin.POST("/canvas-templates", respond(func(c *gin.Context) (any, error) {
+	admin.POST("/canvas-templates", a.rateLimit("template-write", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Title       string `json:"title" binding:"required,max=200"`
 			Description string `json:"description" binding:"max=500"`
@@ -77,7 +77,7 @@ func (a *App) templateRoutes(api *gin.RouterGroup, admin *gin.RouterGroup) {
 		})
 		return gin.H{"template": tpl}, err
 	}))
-	admin.PUT("/canvas-templates/:id", respond(func(c *gin.Context) (any, error) {
+	admin.PUT("/canvas-templates/:id", a.rateLimit("template-write", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
 			return nil, err

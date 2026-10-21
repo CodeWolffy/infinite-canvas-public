@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -166,7 +167,11 @@ func (a *App) publicShareRoutes(r *gin.Engine) {
 		}
 		var allowed bool
 		if str(share["kind"]) == "canvas" {
-			err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM media_references WHERE owner_kind='canvas' AND owner_id=$1 AND media_id=$2)", share["targetId"], mediaID).Scan(&allowed)
+			var project Row
+			project, err = one(ctx, a.DB, "SELECT snapshot FROM canvas_projects WHERE id=$1", share["targetId"])
+			if err == nil {
+				allowed = slices.Contains(extractMediaIDs(publicCanvasSnapshot(project["snapshot"])), mediaID)
+			}
 		} else {
 			err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND media_id=$2)", share["targetId"], mediaID).Scan(&allowed)
 		}

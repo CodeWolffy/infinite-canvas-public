@@ -14,12 +14,16 @@ func (a *App) groupPolicyRoutes(admin *gin.RouterGroup) {
 		input, err := body[struct {
 			ModelIDs     []string `json:"modelIds" binding:"omitempty,dive,uuid"`
 			StorageQuota int64    `json:"storageQuotaBytes" binding:"omitempty,min=0"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			if len(input.ModelIDs) > 0 {
 				var count int
 				if err := tx.QueryRow(ctx, "SELECT count(*) FROM models WHERE id=ANY($1::text[]::uuid[]) AND deleted_at IS NULL", input.ModelIDs).Scan(&count); err != nil {
@@ -36,7 +40,7 @@ func (a *App) groupPolicyRoutes(admin *gin.RouterGroup) {
 			if result.RowsAffected() != 1 {
 				return notFound
 			}
-			return a.audit(ctx, tx, currentUser(c).ID, "group.policy", id, input)
+			return a.audit(ctx, tx, currentUser(c).ID, "group.policy", id, Row{"modelIds": input.ModelIDs, "storageQuotaBytes": input.StorageQuota})
 		})
 		return nil, err
 	}))

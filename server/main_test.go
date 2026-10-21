@@ -19,6 +19,13 @@ func TestLoadMigrationsMatchesDirectory(t *testing.T) {
 	count := 0
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			content, err := os.ReadFile("migrations/" + entry.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count >= len(migrations) || migrations[count] != string(content) {
+				t.Fatalf("迁移 %s 的内容或加载顺序不一致", entry.Name())
+			}
 			count++
 		}
 	}
@@ -27,8 +34,5 @@ func TestLoadMigrationsMatchesDirectory(t *testing.T) {
 	}
 	if !strings.Contains(migrations[0], "CREATE TABLE users") {
 		t.Fatal("第一条迁移应创建基础表")
-	}
-	if !strings.Contains(migrations[len(migrations)-1], "ALTER TABLE canvas_projects ADD COLUMN revision") {
-		t.Fatal("最后一条迁移应为画布修订号")
 	}
 }

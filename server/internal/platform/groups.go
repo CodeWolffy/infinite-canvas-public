@@ -135,20 +135,30 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 	admin.POST("/user-groups", respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Name     string          `json:"name" binding:"required,max=80"`
-			Discount decimal.Decimal `json:"discount" binding:"required"`
+			Discount string          `json:"discount" binding:"required"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
 		}
-		if input.Discount.IsNegative() || input.Discount.GreaterThan(decimal.NewFromInt(10)) {
+		discount, err := boundedDecimal(input.Discount, 2, 4)
+		if err != nil || discount.IsNegative() || discount.GreaterThan(decimal.NewFromInt(10)) {
 			return nil, problem(400, "invalid_discount", "折扣需在 0–10 之间")
 		}
 		ctx := c.Request.Context()
-		group, err := one(ctx, a.DB, "INSERT INTO user_groups(name,discount) VALUES($1,$2) RETURNING id,name,discount,created_at", strings.TrimSpace(input.Name), input.Discount)
-		if err != nil {
-			return nil, err
-		}
-		return gin.H{"group": group}, a.audit(ctx, a.DB, currentUser(c).ID, "group.create", str(group["id"]), input)
+		var group Row
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
+			var err error
+			group, err = one(ctx, tx, "INSERT INTO user_groups(name,discount) VALUES($1,$2) RETURNING id,name,discount,created_at", strings.TrimSpace(input.Name), discount)
+			if err != nil {
+				return err
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "group.create", str(group["id"]), Row{"name": input.Name, "discount": discount.String()})
+		})
+		return gin.H{"group": group}, err
 	}))
 	admin.PUT("/user-groups/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
@@ -157,20 +167,30 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		}
 		input, err := body[struct {
 			Name     string          `json:"name" binding:"required,max=80"`
-			Discount decimal.Decimal `json:"discount" binding:"required"`
+			Discount string          `json:"discount" binding:"required"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
 		}
-		if input.Discount.IsNegative() || input.Discount.GreaterThan(decimal.NewFromInt(10)) {
+		discount, err := boundedDecimal(input.Discount, 2, 4)
+		if err != nil || discount.IsNegative() || discount.GreaterThan(decimal.NewFromInt(10)) {
 			return nil, problem(400, "invalid_discount", "折扣需在 0–10 之间")
 		}
 		ctx := c.Request.Context()
-		group, err := one(ctx, a.DB, "UPDATE user_groups SET name=$2,discount=$3 WHERE id=$1 RETURNING id,name,discount,created_at", id, strings.TrimSpace(input.Name), input.Discount)
-		if err != nil {
-			return nil, err
-		}
-		return gin.H{"group": group}, a.audit(ctx, a.DB, currentUser(c).ID, "group.update", id, input)
+		var group Row
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
+			var err error
+			group, err = one(ctx, tx, "UPDATE user_groups SET name=$2,discount=$3 WHERE id=$1 RETURNING id,name,discount,created_at", id, strings.TrimSpace(input.Name), discount)
+			if err != nil {
+				return err
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "group.update", id, Row{"name": input.Name, "discount": discount.String()})
+		})
+		return gin.H{"group": group}, err
 	}))
 	admin.DELETE("/user-groups/:id", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
@@ -205,6 +225,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		}
 		input, err := body[struct {
 			GroupID *string `json:"groupId"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -217,6 +238,9 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		var u User
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			result, err := tx.Exec(ctx, "UPDATE users SET group_id=$2,updated_at=now() WHERE id=$1", id, input.GroupID)
 			if err != nil {
 				return err
@@ -228,7 +252,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			return a.audit(ctx, tx, currentUser(c).ID, "user.group", id, input)
+			return a.audit(ctx, tx, currentUser(c).ID, "user.group", id, Row{"groupId": input.GroupID})
 		})
 		if err != nil {
 			return nil, err
@@ -253,6 +277,7 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 			MaxUses   int        `json:"maxUses" binding:"required,min=1"`
 			Count     int        `json:"count"`
 			ExpiresAt *time.Time `json:"expiresAt"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -278,6 +303,9 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		secrets := make([]string, 0, count)
 		items := make([]Row, 0, count)
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			for i := 0; i < count; i++ {
 				code := strings.ReplaceAll(uuid.NewString(), "-", "")
 				created, err := one(ctx, tx, "INSERT INTO redeem_codes(code_hash,code_hint,created_by,note,amount_micros,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, amount, input.MaxUses, input.ExpiresAt)
