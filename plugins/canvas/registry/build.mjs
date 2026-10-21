@@ -1,7 +1,7 @@
 // 官方插件集中构建:一次进程构建所有官方插件 + 生成清单,产物进 dist/(已 gitignore)。
 // 官方插件目录本身不各自安装依赖:统一从本目录 node_modules 解析 SDK(nodePaths)。
-// CI(publish-plugins.yml)把 dist/ 强推到 plugins-dist 分支,前端经 jsDelivr 远程拉取。
-// 本地自测:`npm install && npm run build`,再把 VITE_PLUGIN_REGISTRY_URL 指向本地 dist。
+// 应用默认使用上游固定产物,本脚本仅供本地开发和自托管;构建前需安装各插件的运行依赖。
+// 自托管时把 VITE_PLUGIN_REGISTRY_URL 指向发布的清单,并配置其 SHA-256。
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";

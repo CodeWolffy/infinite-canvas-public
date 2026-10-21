@@ -11,6 +11,12 @@ description: Implemented changes that still need manual verification
 
 本次变更已归入 `v0.20.0` 发布记录；以下人工验收事项继续保留，发布不视为测试通过。
 
+### 官方插件复用上游产物待验收
+
+- 移除本仓库的插件发布工作流，后续发版不再重复构建并推送插件；默认官方列表继续使用上游 `basketikun/infinite-canvas` 的固定产物提交与每包 SHA-256。
+- 已从默认 CDN 下载全部 5 个插件，均返回 200 且内容摘要与固定列表一致。本轮未执行构建或测试。
+- 人工确认插件管理器中的 Markdown、SVG、HTML、3D 全景和便利贴可在确认来源后安装、启用；后续发版不再触发本仓库的 `Publish Official Plugins`。本地开发和自托管构建工具继续保留。
+
 ### 后端 CI 与本机 Docker 更新
 
 - GitHub Actions 在拉取官方 `minio/minio` 镜像时返回 `pull access denied`，尚未运行 Go 测试。现改为从原版本固定提交构建 MinIO，并校验源码 SHA-256；CI、生产及本机 Compose 共用 `docker/minio.Dockerfile`。
