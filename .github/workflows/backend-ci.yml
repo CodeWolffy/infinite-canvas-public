@@ -6,10 +6,12 @@ on:
     tags: ["v*"]
     paths:
       - "server/**"
+      - "docker/minio.Dockerfile"
       - ".github/workflows/backend-ci.yml"
   pull_request:
     paths:
       - "server/**"
+      - "docker/minio.Dockerfile"
       - ".github/workflows/backend-ci.yml"
   workflow_dispatch:
 
@@ -51,6 +53,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          check-latest: true
           cache-dependency-path: server/go.sum
 
       - name: Verify dependencies
@@ -58,7 +61,8 @@ jobs:
 
       - name: Start object storage for integration tests
         run: |
-          docker run --detach --name canvas-ci-minio --publish 9000:9000 --env MINIO_ROOT_USER=canvas-test --env MINIO_ROOT_PASSWORD=canvas-test-only minio/minio:RELEASE.2025-07-23T15-54-02Z server /data
+          docker build --file ../docker/minio.Dockerfile --tag canvas-ci-minio ..
+          docker run --detach --name canvas-ci-minio --publish 9000:9000 --env MINIO_ROOT_USER=canvas-test --env MINIO_ROOT_PASSWORD=canvas-test-only canvas-ci-minio server /data
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://localhost:9000/minio/health/live; then break; fi
             sleep 5

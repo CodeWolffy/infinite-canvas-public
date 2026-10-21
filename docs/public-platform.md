@@ -158,6 +158,8 @@ Compose 项目名为 `infinite-canvas-public`，使用独立数据卷。首次�
 
 如果升级曾报 `column "capability" of relation "channels" contains null values`，拉取修复后的代码并按上述更新命令重新构建启动。失败的迁移已由事务回滚，修复版会从原数据库版本继续升级。
 
+MinIO 社区版已改为仅提供源码，官方 `minio/minio` 镜像无法公开拉取。Compose 与后端 CI 共用 `docker/minio.Dockerfile`，从原 `RELEASE.2025-07-23T15-54-02Z` 对应的固定提交构建并校验源码 SHA-256；首次构建需要访问 GitHub 和 Go 模块代理，耗时会增加。数据目录仍为 `/data`，沿用现有 MinIO 数据卷与凭据；更新时保留 `--build`。
+
 音频按秒计价需要 `ffprobe`。Go Dockerfile 已声明安装 ffmpeg；本地直接启动 Go 时，应先把 ffprobe 加入 PATH。时长读取限定本地文件协议和支持的音频容器，不允许媒体内容引导探测器访问网络。
 
 前端保留现有 Ant Design 6 与 Pro Components beta 组合；由于其 peer 声明仍要求 antd 5，npm 安装使用 `npm install --legacy-peer-deps`，Docker 使用对应的 `npm ci --legacy-peer-deps`。也可使用项目原有的 `bun install`。本地 Vite 支持 `VITE_API_TARGET` 指定独立 Go 开发服务地址。

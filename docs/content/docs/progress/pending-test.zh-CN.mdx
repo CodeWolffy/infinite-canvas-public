@@ -9,6 +9,15 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+本次变更已归入 `v0.20.0` 发布记录；以下人工验收事项继续保留，发布不视为测试通过。
+
+### 后端 CI 与本机 Docker 更新
+
+- GitHub Actions 在拉取官方 `minio/minio` 镜像时返回 `pull access denied`，尚未运行 Go 测试。现改为从原版本固定提交构建 MinIO，并校验源码 SHA-256；CI、生产及本机 Compose 共用 `docker/minio.Dockerfile`。
+- 后续 `govulncheck` 发现旧 Go 工具链和 HTTP/2 依赖的安全公告；CI 显式获取当前 Go 1.26 补丁版，`golang.org/x/net` 升至 `v0.60.0`，联动 `x/crypto v0.57.0`。
+- 本机 Web、API、MinIO 镜像已构建并启动，五个服务健康，`http://localhost:3301/login`、`/health` 及入口 JS/CSS 返回 200。Go 1.26.10、隔离 PostgreSQL 17 / Redis 7 / MinIO / ffprobe 下，后端 116 组、含子用例 182 项通过，无失败或跳过；依赖校验、`go vet`、服务构建和 `govulncheck` 通过。扫描仍提示 1 项未被当前代码调用的模块公告，未改动无关依赖。
+- 更新前已备份 PostgreSQL、MinIO、Redis 和 `.env.local`。原库从版本 20 升至 24，账号/渠道/模型/绑定/任务数量、钱包/账本/密钥摘要一致，排除新加列后的画布与素材内容一致。备份位于忽略目录 `data/local-backups/`，验证日志在 `data/local-verification/ci-minio/`。GitHub Actions 需推送修复后重新运行，用户登录及真实渠道人工验收仍待确认；本轮未新增功能待办。
+
 ### 平台与本地 Agent 安全修复待验收（SEC-07 至 SEC-14）
 
 - Agent：查询参数和片段中的地址/Token 只填充连接设置并清除 URL 凭证；重载和导航栏不自动连接，确认前不连接 SSE、不上传画布。连接弹窗展示目标与数据权限；远程地址必须 HTTPS，本机回环可 HTTP；修改地址/Token 撤销连接授权，远程工具逐次确认，本机默认确认写入、站点生成与素材操作。
