@@ -28,6 +28,7 @@
 ## Support and Security
 
 - [Report a Vulnerability](/docs/support/security)
+- [平台与本地 Agent 安全审查](security-audit.md) — SEC-01 至 SEC-14 的修复行为、回归范围、原始利用前提与剩余验收要求；第三方插件采用明确授权的信任模式。
 - [Sponsor the Project](/docs/support/sponsor)
 
 ## Project Progress

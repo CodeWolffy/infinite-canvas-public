@@ -9,6 +9,41 @@ description: Implemented changes that still need manual verification
 
 当前分支已切换到 `server/` Go 服务。以下事项对应本次实际变更；下方公司版记录不代表 Go 平台已经通过同样的人工验收。
 
+### 平台与本地 Agent 安全修复待验收（SEC-07 至 SEC-14）
+
+- Agent：查询参数和片段中的地址/Token 只填充设置并清除 URL 凭证；重载不自动连接。确认前不建 SSE、不上传画布，弹窗展示目标及数据权限；远程须 HTTPS，本机回环可 HTTP；修改连接配置撤销授权，远程工具逐次确认，本机默认确认敏感操作。
+- 分享：按公开快照派生可访问媒体，聊天专属附件 404；可见节点引用仍可用，与聊天同时引用的文件按节点公开，撤销后旧媒体地址不可用。
+- 本机执行：Claude 提示词走 stdin；Skill 只使用安全 YAML frontmatter，正文不再被当作 frontmatter 解析。恶意命令分隔符、JavaScript 头部不得执行，合法 Skill 操作保持可用。
+- ZIP：压缩包 100 MiB、单文件 50 MiB、总解压 256 MiB、2000 条目，按真实输出流式计量；超限、重复路径或不完整文件整包拒绝，上传前失败，正常导出包可导入。
+- 数据库：迁移 `024_user_content_quota.sql` 先统计非空旧库，不删除内容。偏好、素材、画布/历史和模板按所有者累计逻辑行字节，默认每用户 256 MiB，可用 `USER_CONTENT_QUOTA_BYTES` 调整；事务内序列化计量并在提交时判断净增长，超限 413、无半写入，旧超额内容允许净缩小/删除。MinIO 配额、账务和任务结算保持各自边界。
+- 写入频控：偏好、素材各 60 次/账号/分钟；手工画布历史（含恢复）、模板各 30 次/账号/分钟，超限 429，不阻断删除。
+- 二次验证：每账号 5 次、每 IP 30 次明确密码/MFA 错误/5 分钟；原子预占，成功或系统错误释放，上游失败不计数。超限 429；Redis 故障 503 并拒绝高危写入，不永久锁号。
+- 插件：安装、启用和升级确认来源、摘要及页面权限后才执行；缓存按当前账号授权并校验内容，官方包固定提交及 SHA-256，自托管清单要求独立摘要和包摘要。跳转、摘要不符均拒绝；本地/开发插件只发现待确认项，不自动执行更新。第三方仍需信任，未提供沙箱；停用/卸载或切号后刷新页面停止旧脚本副作用。
+- 已通过前端 3 文件 18 项、Agent 13 项、Go 新增 7 组及已有分享/模板/管理验证 4 组，无跳过；使用独立 PostgreSQL 17.6 / Windows Redis 5.0.14.1，验证后临时服务已停止。范围见 `docs/security-audit.md`，未使用项目现有数据库。本轮无独立构建或语法检查；真实浏览器、真实 Claude CLI、CI Redis 7、生产非空库升级及插件完整功能仍待人工验收。
+
+### 资金与账户安全修复待验收（SEC-01 至 SEC-06）
+
+- 取消保护：仅未提交上游的任务可取消并全退；已提交任务、已有输出的文本及重排为 queued 的视频均返回 409 并继续结算。用户端与管理端按钮按服务端 `canCancel` 更新，只有提交标记变化时 SSE 也须即时推送；删除含已提交任务的文本对话须等任务结束。
+- 可变计费：文本冻结预算计入本对话历史、UTF-8 文字、图片 base64 字节和管理员输出上限；新图片报价在上传后才计入，发送时后端使用权威媒体大小重新计算。实际费用完整结算，不足部分记负余额；欠费阻止新建、重试和排队任务的首次派发，已提交任务继续结算，充值、兑换和其他到账先抵欠费。
+- 音频：按秒计价模型从用户列表隐藏，报价、创建和显式重试均拒绝；管理员改为固定单次价并保存后恢复。升级前已提交的按秒音频仍按实际时长结算，不中途改价。
+- 高危管理：创建管理员、发行兑换码、保存/发布模型、保存/批量绑定上游模型、调整分组折扣/分配/权限及执行在线调试都要当前密码与已启用 MFA。缺少或错误凭据不得写入/调用上游，审计不含密码、验证码或完整兑换码；等待弹窗时切号后不得继续提交旧操作，离开调试页后确认旧弹窗也不发请求。
+- 渠道目的地：更换 Base URL 或协议需二次验证，界面明确原 Key 将获授权发往新目的地；未验证时两个隔离上游中的新地址收不到旧 Key，目的地址审计不含 Key。
+- 数值输入：金额、时长、token 参数、折扣及返利在任意精度展开前校验有效位、指数与原有精度/范围；巨大正负指数应返回参数错误，合法科学计数法和微元边界可用。
+- 支付保护：下单每账号 10 次/分钟、每 IP 60 次/分钟；主动查单每账号 60 次/分钟、每 IP 120 次/分钟；每账号最多 10 笔待支付订单，超限 429 且保留旧订单。并发下单不能超额，同一编号可幂等读取，缺失支付链接的重试仍受下单频控；同订单跨实例查单合并为一次网关请求，独立验签通知在查单期间仍能到账，迟到/重复通知不得重复入账或返利。
+- 非空库升级：执行 `023_transaction_security.sql` 后保留所有余额/冻结/账本，为已尝试、已有输出或上游任务 ID 的存量任务补提交标记；保留冻结非负约束，允许实际补扣形成负余额。升级前备份并核对存量渠道、模型和在途任务。
+- 已执行验证：前端 4 文件 12 项通过；隔离 PostgreSQL 17.6 / Windows Redis 5.0.14.1 下 Go 24 组通过（含子用例 42 项），无失败，覆盖结算欠费、提交/取消竞态、非空库升级、权限与密钥目的地、支付频控和通知/查单幂等。图片上游用例缺少 MinIO 跳过，真实文本上游已验证不能取消并继续结算；关联会话加入二次验证频控后，受影响的 8 组用例复测通过。临时服务在验证后停止，日志位于忽略目录 `data/local-verification/transaction-security/`；CI Redis 7 / MinIO 与真实商户仍待验收。本轮未执行独立构建或语法检查；完整范围见 `docs/security-audit.md`。下方历史取消/退款描述以本节为准。
+
+### 功能可靠性与性能优化待验收
+
+- 生成批次订阅：重复收到同一批次的 queued/running 快照时不反复重建 EventSource；新增或完成其它批次不打断已有连接；断线后轮询可恢复 SSE，完成只提示一次，离开页面或切换账号关闭旧订阅。
+- 退出重排：单渠道、单 Key、最多尝试 1 次的任务在上游返回前退出后仍能重新领取并成功；中断尝试不占用尝试预算或 Key 排除记录，释放原槽位、关闭本轮日志与成本记录，冻结与结算均只记一次。已物化文本不自动重放，沿用现有流中断处理。
+- 重试权限：工作区 editor 创建的图片、视频、音频任务失败或取消后，成员降为 viewer 或被移除时重试应被拒绝，执行轮次、任务状态和钱包保持不变；仍有编辑权限时可正常重试。
+- 文本协议与模型：Responses 图片应按 `input_text` / `input_image` 发送，正确读取 `input_tokens_details.cached_tokens`，分帧 usage 缺省字段不清空已记录用量，按缓存价结算；历史对话选中的模型下线或模型列表刷新移除它后，保留失效提示、禁止报价与发送，明确选择可用模型才继续；新建对话重新初始化默认模型。
+- 画布保存：409 后可从顶栏核对远端版本及规模，选择另存完整个人副本或确认加载远端；副本包含最新节点、连线、对话与视口。读取远端期间本地又有编辑或视口变化时拒绝替换；加载远端时暂停旧快照写回，重新进入干净画布会刷新内容与权限。
+- 离开保护：平移缩放后立即跳转也保存最新视口；正常路由导航等待保存完成，失败或冲突时只弹一个提示，可继续编辑或明确离开。关闭或刷新标签页时尽力提交并显示浏览器提示，浏览器关闭流程不能保证请求完成，需人工确认网络失败与关页场景；viewer 和旧登录会话不写回。
+- 缩略图与大画布：不同账号使用独立 IndexedDB 缓存，切号时撤销旧 Blob URL，旧解码结果不写入新会话；同一媒体不同键前缀共用一次读取。节点、邻接边与分组索引复用于引用选择、生成输入及关联高亮，按需计算面板数据；大组展开与输入排序缓存随图更新失效，确认分组顺序、去重、配置优先及插件资源行为保持正确。
+- 自动化验证：Windows 本机前端完整 19 个文件、100 项测试通过，覆盖真实 React Router 导航、Ant Design 离开提示与文本页选择/发送，以及保存冲突、会话隔离、SSE 和 1200 节点/大组计算；运行时使用 `NODE_OPTIONS=--no-experimental-webstorage`。安装 Go 1.27.3 后执行 `go test -json -count=1 ./...`，两个包均通过；按实际子用例计 38 项通过、0 失败、99 项因缺少独立测试服务或 ffprobe 跳过。首轮发现迁移加载测试仍硬编码版本 22 为最后一条，已改为逐个核对目录文件与内嵌脚本的内容、顺序及数量，复测通过。Responses 分段 usage、金额精度和协议参数已验证；Responses 图片与结算、退出重排、撤权重试等数据库集成测试尚未执行，需配置 `TEST_DATABASE_URL`、`TEST_REDIS_ADDR`、`TEST_MINIO_ADDR` 及音频工具后运行。后端 CI 已配置这些独立服务，缺少必需集成环境时失败；CI 结果及真实渠道、双标签页协作、浏览器关页仍待确认。本轮未执行独立构建或语法检查。
+
 ### 上游 v0.20.0 同步待验收
 
 对照 [v0.19.0 → v0.20.0](https://github.com/basketikun/infinite-canvas/compare/v0.19.0...v0.20.0) 同步用户功能，优先沿用上游算法、默认值与交互；浏览器直连渠道、调用脚本和本地存储统计已从本平台移除，不重新接入，Gemini 与视频协议改动落在 Go 后端。继续使用现有 npm 锁文件，未引入上游 pnpm 工作区配置和赞助内容。
@@ -53,7 +88,7 @@ description: Implemented changes that still need manual verification
 ### Round 1 improvements (backend reliability, security, frontend toolchain) pending verification
 
 - Unified channel availability: after marking a channel as auto-disabled or disabling all of its keys, its models must disappear from the user model list and return once the channel is saved back to "enabled". Scheduling, quoting and channel debugging share the same rule.
-- Cancel propagation: start an image task and cancel it immediately; the upstream request must be interrupted, the task must end as canceled with the full hold refunded, and no upstream cost may be recorded.
+- Cancellation: a task canceled before upstream submission must receive a full refund without an upstream call; a submitted task must reject cancellation and continue settlement, including asynchronous jobs returned to the queue.
 - Requeue on shutdown: restart the API while a task is running (`docker compose restart api`); the task must return to the queue and continue instead of failing or refunding. `SHUTDOWN_GRACE_SECONDS` controls how long shutdown waits for in-flight tasks.
 - Key rotation: follow the four steps in README "轮换渠道加密密钥"; `canvas-server rotate-keys` prints the re-encrypted row count per table. Channel keys, payment config, SMTP password, TOTP secrets and task channel snapshots must keep working after rotation and after removing `CHANNEL_ENCRYPTION_KEY_PREVIOUS`.
 - Second-factor confirmation: editing payment channels, resetting a password, adjusting a balance, clearing request logs, saving platform or mail settings and changing a user role must first show a "安全验证" dialog asking for the current password; canceling it must abort the action. Admins with two-step verification also enter a code.

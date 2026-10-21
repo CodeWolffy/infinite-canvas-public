@@ -9,10 +9,24 @@ description: 当前项目后续值得处理的事项
 
 Go 公益平台本次实现已列入[待测试清单](/zh-CN/docs/progress/pending-test)，待真实渠道、商户支付和生产部署验收；原有 Agent 后续事项保持不变。
 
+功能审查中的生成订阅、退出重排、画布重试权限、Responses 多模态与用量、画布保存冲突、失效模型和缩略图会话隔离已实现修复；大画布计算、关键类型与行为测试一并优化，验证证据和待确认的 Go CI / 人工验收见待测试清单。
+
 本轮代码审查涉及的迁移、成本统计、文件回收、渠道检测与调试、安全通知和素材流转已完成修复与本机 Docker 回归；素材页的 Docker 直访问题也已修复。验证范围及仍需真实环境验收的项目见待测试清单。
 
 - 本地 Agent 接入后续：按[本地 Agent 接入规划](/zh-CN/docs/progress/local-agent-integration-plan)把 Claude Code CLI Adapter 升级为 Claude Agent SDK Adapter，并完善工具队列体验。
 - Agent Skill 后续：补充网络检索安装、Skill 资源文件管理和可控的本地记忆沉淀。
+
+## 资金与账户安全
+
+SEC-01 至 SEC-06 已按确认规则完成代码修复，含提交上游后的取消保护、完整结算与欠费阻断、高危操作二次验证、渠道目的地址授权、十进制预检及支付频控。数据库 023 升级、回归覆盖和真实商户验收已移入[待测试清单](/zh-CN/docs/progress/pending-test)，证据与验证限制见仓库 `docs/security-audit.md`。
+
+### 其他安全审查发现
+
+SEC-07 至 SEC-14 已完成连接授权、公开媒体边界、本地解析/进程安全、ZIP 解压限制、数据库内容配额、二次验证频控及插件来源/版本授权的代码修复，已移入[待测试清单](/zh-CN/docs/progress/pending-test)。新限额均按用户确认值实施；插件仍是受信任代码模式，未提供第三方代码沙箱。
+
+### 依赖审计后续
+
+- P2：复核锁文件中的 Axios、React Router、MCP SDK、proxy-addr、shadcn 与 nanoid 安全公告，按当前调用路径升级或移除不可达依赖；不要将扫描器公告计数当作已确认漏洞数。
 
 ## Go 后端能力后续
 

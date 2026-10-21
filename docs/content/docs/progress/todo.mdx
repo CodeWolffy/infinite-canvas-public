@@ -9,10 +9,24 @@ description: Planned follow-up work
 
 Go 公益平台本次实现已列入[待测试清单](/docs/progress/pending-test)，待真实渠道、商户支付和生产部署验收；原有 Agent 后续事项保持不变。
 
+功能审查中的生成订阅、退出重排、画布重试权限、Responses 多模态与用量、画布保存冲突、失效模型和缩略图会话隔离已实现修复；大画布计算、关键类型与行为测试一并优化，验证证据和待确认的 Go CI / 人工验收见待测试清单。
+
 The code review fixes for migrations, cost reports, media cleanup, channel probes and playground, security notices, and asset transfers have passed local Docker regression checks. Direct access to the asset page in Docker is also fixed. The pending-test list records coverage and remaining real-environment acceptance work.
 
 - Replace the Claude Code CLI adapter with a Claude Agent SDK adapter and improve the tool queue, following the [Local Agent Integration Plan](/docs/progress/local-agent-integration-plan).
 - Add Skill installation from web search, Skill resource-file management, and controlled local-memory persistence.
+
+## Financial and account security
+
+SEC-01 through SEC-06 have code fixes under the confirmed rules: submission-aware cancellation, full settlement and debt blocking, secondary verification, channel destination authorization, decimal validation, and payment limits. Migration 023, regression coverage, and real payment acceptance are recorded in [Pending Tests](/docs/progress/pending-test); evidence and verification limits remain in `docs/security-audit.md`.
+
+### Additional security findings
+
+SEC-07 through SEC-14 have code fixes for connection consent, public media authorization, local parsing and process execution, ZIP extraction, database quotas, verification rate limits, and plugin source/version consent. Acceptance checks are in [Pending Tests](/docs/progress/pending-test). Limits use the confirmed values. Plugins still require trusted code; third-party execution is not sandboxed.
+
+### Dependency audit follow-up
+
+- P2: Review Axios, React Router, MCP SDK, proxy-addr, shadcn, and nanoid advisories against current call paths, then upgrade or remove dependencies as appropriate. Advisory counts are not confirmed vulnerability counts.
 
 ## Go backend capability follow-up
 
