@@ -101,12 +101,12 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     };
 
     // 所有来源都通过相同的确认流程启用与更新。
-    // Highlight the update action when a newer remote version is available.
+    // Show the installed controls alongside the available version.
     const installedControls = (record: InstalledPlugin, upgradable = false) => (
         <>
             <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, async () => checked ? confirmPlugin(await prepareInstalledPlugin(record)) : setPluginEnabled(record, false), t(checked ? "canvas.plugins.enabled" : "canvas.plugins.disabled"))} />
             <Button
-                type={upgradable ? "primary" : "text"}
+                type="text"
                 size="small"
                 icon={<RefreshCw className="size-4" />}
                 loading={busyId === record.id}
@@ -120,16 +120,16 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     );
 
     // Add a green dot at the icon's top-right corner when an update is available.
-    // A card-colored box shadow separates the dot visually from the icon.
+    // A panel-colored box shadow separates the dot visually from the icon.
     const withUpgradeDot = (icon: ReactNode) => (
         <span className="relative inline-flex">
             {icon}
-            <span className="absolute -right-1 -top-1 size-2 rounded-full" style={{ background: "#22c55e", boxShadow: `0 0 0 2px ${theme.node.fill}` }} title={t("canvas.plugins.newVersion")} />
+            <span className="absolute -right-1 -top-1 size-2 rounded-full" style={{ background: "#22c55e", boxShadow: `0 0 0 2px ${theme.toolbar.panel}` }} title={t("canvas.plugins.newVersion")} />
         </span>
     );
 
     const versionTag = (version: string) => (
-        <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]" style={{ background: theme.toolbar.activeBg, color: theme.node.muted }}>
+        <span className="shrink-0 text-[10px]" style={{ color: theme.node.muted }}>
             v{version}
         </span>
     );
@@ -142,8 +142,8 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
 
     // Shared plugin row: icon, title with name and version, description, and actions.
     const row = (key: string, icon: ReactNode, name: string, version: string, subtitle: string | undefined, right: ReactNode) => (
-        <div key={key} className="flex items-center gap-3 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.node.stroke, background: theme.node.fill }}>
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg text-base" style={{ background: theme.toolbar.activeBg, color: theme.node.muted }}>
+        <div key={key} className="flex items-center gap-3 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.node.stroke }}>
+            <span className="grid size-9 shrink-0 place-items-center text-base" style={{ color: theme.node.muted }}>
                 {icon}
             </span>
             <div className="min-w-0 flex-1">
@@ -183,7 +183,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                 <div className="thin-scrollbar max-h-[46vh] space-y-2 overflow-auto">
                     {official.map((entry) => {
                         const record = recordById.get(entry.id);
-                        // Show the update dot and highlight the action when the remote version is newer.
+                        // Show the update dot when the available version is newer.
                         const upgradable = Boolean(record && hasUpgrade(record.version, entry.version));
                         const icon = entry.icon || <Puzzle className="size-4" />;
                         return row(
@@ -196,7 +196,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                             record ? (
                                 installedControls(record, upgradable)
                             ) : (
-                                <Button type="primary" size="small" icon={<Download className="size-4" />} loading={busyId === entry.id} onClick={() => handleInstallOfficial(entry)}>
+                                <Button type="text" size="small" icon={<Download className="size-4" />} loading={busyId === entry.id} onClick={() => handleInstallOfficial(entry)}>
                                     {t("canvas.plugins.install")}
                                 </Button>
                             ),
@@ -213,7 +213,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         <div className="space-y-3">
             <div className="flex gap-2">
                 <Input placeholder={t("canvas.plugins.urlPlaceholder")} value={url} onChange={(event) => setUrl(event.target.value)} onPressEnter={handleInstallUrl} allowClear />
-                <Button type="primary" loading={installing} onClick={handleInstallUrl} icon={<Puzzle className="size-4" />}>
+                <Button type="text" loading={installing} onClick={handleInstallUrl} icon={<Puzzle className="size-4" />}>
                     {t("canvas.plugins.install")}
                 </Button>
             </div>

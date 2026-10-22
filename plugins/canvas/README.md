@@ -47,6 +47,8 @@ npm run dev     # watch,改动自动构建并同步
 
 ## 官方插件注册表
 
+在画布右上角点击「节点插件」拼图按钮，从官方列表安装并确认来源后，底部工具栏的「扩展节点」菜单即可添加对应节点。
+
 本项目直接复用上游 [`basketikun/infinite-canvas`](https://github.com/basketikun/infinite-canvas/tree/plugins-dist) 已发布的官方插件，不再运行本仓库的插件发布 CI。前端默认使用 `web/src/constant/official-plugins.ts` 固定的上游产物提交和包 SHA-256；更新上游分支不会自动替换当前插件，需核对内容后随应用更新固定列表。自建来源须同时配置 `VITE_PLUGIN_REGISTRY_URL` 与该清单的独立 `VITE_PLUGIN_REGISTRY_SHA256`，每包还须有 `sha256`。本地构建与自托管说明见 [`registry/`](./registry/README.md)。
 
 插件安装、启用、更新均需确认来源、内容指纹和页面权限。插件作为可信页面代码运行，不是沙箱；不要安装不信任的代码。停用或卸载后刷新页面，确保旧脚本的全局副作用停止。
