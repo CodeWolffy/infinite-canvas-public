@@ -266,7 +266,11 @@ func TestPasswordResetIsSingleUseAndKeepsMfa(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := link.Query().Get("token")
+	fragment, err := url.ParseQuery(link.Fragment)
+	if err != nil || fragment.Get("token") == "" || link.RawQuery != "" {
+		t.Fatal("reset link must contain a fragment token and no query parameters")
+	}
+	token := fragment.Get("token")
 	input := map[string]string{"token": token, "password": "new-password-value"}
 	if response := testRequest(router, "POST", "/api/auth/password-reset/complete", input, nil); response.Code != 200 {
 		t.Fatalf("reset status %d", response.Code)
@@ -564,7 +568,11 @@ func TestEmailBindingRequiresProofAndSingleUseVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := map[string]string{"token": link.Query().Get("token")}
+	fragment, err := url.ParseQuery(link.Fragment)
+	if err != nil || fragment.Get("token") == "" || link.RawQuery != "" {
+		t.Fatal("verification link must contain a fragment token and no query parameters")
+	}
+	body := map[string]string{"token": fragment.Get("token")}
 	if response := testRequest(router, "POST", "/api/auth/email/verify", body, nil); response.Code != 200 {
 		t.Fatalf("verification: %d", response.Code)
 	}

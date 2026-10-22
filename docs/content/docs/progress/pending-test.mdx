@@ -11,6 +11,11 @@ description: Implemented changes that still need manual verification
 
 本次变更已归入 `v0.20.0` 发布记录；以下人工验收事项继续保留，发布不视为测试通过。
 
+### 后端邮件链接回归 CI 修复
+
+- 密码重置与邮箱验证测试改为从邮件链接片段读取 token，补充 token 非空且链接不含查询参数的断言，保留凭证一次性、会话撤销、MFA 保留与过期拒绝检查。
+- 本机未运行构建、测试或独立语法检查，由推送触发的 GitHub Actions 验证。真实邮件链接的页面交互仍按下方清单人工验收；已检查 TODO，本轮无功能或待办变更。
+
 ### 后端审查修复待验收
 
 - 分享媒体越权：任一登录用户把自己的画布 `viewport` 写成 `{"x":0,"y":0,"k":1,"mediaId":"<他人媒体 ID>"}` 应返回 400（视口只接受 x/y/k）；即使直接写库夹带，`GET /api/shared/<token>/media/<media ID>` 也必须 404，正常节点引用的媒体仍返回 200/304。
