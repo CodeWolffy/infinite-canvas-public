@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -104,7 +105,7 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 			return err
 		}
 		var pending int
-		if err = tx.QueryRow(ctx, "SELECT count(*) FROM payment_orders WHERE user_id=$1 AND status='pending'", u.ID).Scan(&pending); err != nil {
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM payment_orders WHERE user_id=$1 AND status='pending' AND expires_at>now()", u.ID).Scan(&pending); err != nil {
 			return err
 		}
 		if pending >= 10 {
@@ -183,7 +184,7 @@ func (a *App) refreshPaymentOrder(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if order["status"] == "pending" {
+	if order["status"] != "paid" {
 		if err = a.paymentRate(c, "query", 60, 120); err != nil {
 			return nil, err
 		}
@@ -244,7 +245,7 @@ func (a *App) reconcilePayment(ctx context.Context, order Row) error {
 			return nil
 		}
 		current, err := one(ctx, tx, "SELECT * FROM payment_orders WHERE id=$1", order["id"])
-		if err != nil || current["status"] != "pending" {
+		if err != nil || current["status"] == "paid" {
 			return err
 		}
 		config, err := a.paymentConfig(str(current["encryptedConfig"]))
@@ -260,8 +261,13 @@ func (a *App) reconcilePayment(ctx context.Context, order Row) error {
 		}
 		if result.Closed || !current["expiresAt"].(time.Time).After(time.Now()) {
 			if !result.Closed {
-				if err = a.closePayment(ctx, current, config); err != nil {
-					return err
+				// 过期只关闭支付入口；未确认关单的订单继续对账，不占用有效待支付额度。
+				// 经典易支付没有统一关单接口，不能把本地过期当成网关终态。
+				if current["provider"] == "epay" {
+					return nil
+				}
+				if closeErr := a.closePayment(ctx, current, config); closeErr != nil {
+					return closeErr
 				}
 			}
 			_, err = tx.Exec(ctx, "UPDATE payment_orders SET status='closed' WHERE id=$1 AND status='pending'", current["id"])
@@ -291,14 +297,19 @@ func (a *App) paymentCallbacks(r *gin.Engine) {
 		}
 		result, err := a.verifyPayment(c, order, config)
 		if err != nil {
+			slog.Warn("支付回调验签失败", "order", id, "provider", str(order["provider"]), "error", truncate(err.Error(), errorLogLimit))
+			paymentNotifyTotal.WithLabelValues(str(order["provider"]), "verify_failed").Inc()
 			c.String(400, "failure")
 			return
 		}
 		if result.Paid {
 			if err = a.creditPayment(ctx, id, result); err != nil {
+				slog.Error("支付回调入账失败", "order", id, "provider", str(order["provider"]), "error", truncate(err.Error(), errorLogLimit))
+				paymentNotifyTotal.WithLabelValues(str(order["provider"]), "credit_failed").Inc()
 				c.String(500, "failure")
 				return
 			}
+			paymentNotifyTotal.WithLabelValues(str(order["provider"]), "credited").Inc()
 		}
 		if order["provider"] == "wechat" {
 			c.JSON(200, gin.H{"code": "SUCCESS", "message": "成功"})

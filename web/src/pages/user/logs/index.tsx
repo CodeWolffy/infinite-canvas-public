@@ -172,6 +172,7 @@ export default function UserLogsPage() {
                             setPage(1);
                         }}
                     />
+                    {range ? null : <span className="text-xs text-stone-500">默认仅统计最近 30 天，选择时间范围可查看更早记录</span>}
                     <Select
                         value={typeFilter}
                         onChange={(value) => {

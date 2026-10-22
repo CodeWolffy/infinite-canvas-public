@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -91,11 +92,21 @@ func (a *App) bootstrap(ctx context.Context) error {
 	})
 }
 
+// cookieName 在 HTTPS 部署下使用 __Host- 前缀，阻止同注册域的子站用同名 Cookie 覆盖会话。
+func (a *App) cookieName() string {
+	if a.Config.SecureCookie {
+		return "__Host-" + a.Config.CookieName
+	}
+	return a.Config.CookieName
+}
 func (a *App) setCookie(c *gin.Context, token string) {
-	http.SetCookie(c.Writer, &http.Cookie{Name: a.Config.CookieName, Value: token, Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: a.Config.SessionDays * 86400})
+	a.setSessionCookie(c, token, min(a.Config.SessionDays, sessionAbsoluteDays)*86400)
+}
+func (a *App) setSessionCookie(c *gin.Context, token string, maxAge int) {
+	http.SetCookie(c.Writer, &http.Cookie{Name: a.cookieName(), Value: token, Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 func (a *App) clearCookie(c *gin.Context) {
-	http.SetCookie(c.Writer, &http.Cookie{Name: a.Config.CookieName, Value: "", Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	http.SetCookie(c.Writer, &http.Cookie{Name: a.cookieName(), Value: "", Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
 // validatePassword 统一注册、改密、找回与管理员重置四处调用的密码强度要求。
@@ -134,21 +145,26 @@ func validatePassword(password, username string) error {
 	return nil
 }
 
-// renewSession 在会话剩余有效期不足一半时滑动续期，长期活跃的用户不必被强制重新登录。
+// sessionAbsoluteDays 是会话的绝对寿命上限：过期后必须重新登录，避免被窃取的 Cookie 无限续期。
+const sessionAbsoluteDays = 30
+
+// 续期保留 token，避免并发请求及已建立的 SSE 失效；有效期不超过创建后的绝对寿命。
 func (a *App) renewSession(c *gin.Context) error {
-	token, err := c.Cookie(a.Config.CookieName)
+	token, err := c.Cookie(a.cookieName())
 	if err != nil || token == "" {
 		return nil
 	}
-	lifetime := time.Duration(a.Config.SessionDays) * 24 * time.Hour
-	half := time.Now().Add(lifetime / 2)
-	result, err := a.DB.Exec(c.Request.Context(), "UPDATE sessions SET expires_at=now()+$2::interval WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() AND expires_at<$3", hash(token), fmt.Sprintf("%d seconds", int64(lifetime.Seconds())), half)
+	var expires time.Time
+	err = a.DB.QueryRow(c.Request.Context(), `UPDATE sessions SET expires_at=LEAST(now()+($2*interval '1 day'),created_at+($3*interval '1 day'))
+		WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() AND created_at>now()-($3*interval '1 day')
+		AND expires_at<now()+($2*interval '12 hours') AND expires_at<created_at+($3*interval '1 day') RETURNING expires_at`, hash(token), a.Config.SessionDays, sessionAbsoluteDays).Scan(&expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 1 {
-		a.setCookie(c, token)
-	}
+	a.setSessionCookie(c, token, max(1, int(time.Until(expires).Seconds())))
 	return nil
 }
 func (a *App) session(ctx context.Context, q querier, userID string) (string, error) {
@@ -157,15 +173,15 @@ func (a *App) session(ctx context.Context, q querier, userID string) (string, er
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(data)
-	_, err := q.Exec(ctx, "INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,$3)", userID, hash(token), time.Now().AddDate(0, 0, a.Config.SessionDays))
+	_, err := q.Exec(ctx, "INSERT INTO sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+($3*interval '1 day'))", userID, hash(token), min(a.Config.SessionDays, sessionAbsoluteDays))
 	return token, err
 }
 func (a *App) loadUser(c *gin.Context) (User, error) {
-	token, err := c.Cookie(a.Config.CookieName)
+	token, err := c.Cookie(a.cookieName())
 	if err != nil || token == "" {
 		return User{}, problem(401, "unauthorized", "请先登录")
 	}
-	u, err := scanUser(a.DB.QueryRow(c.Request.Context(), "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.password_hash,u.group_id,g.name AS group_name FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN user_groups g ON g.id=u.group_id WHERE s.token_hash=$1 AND s.expires_at>now() AND s.revoked_at IS NULL AND u.status='active'", hash(token)))
+	u, err := scanUser(a.DB.QueryRow(c.Request.Context(), "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.password_hash,u.group_id,g.name AS group_name FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN user_groups g ON g.id=u.group_id WHERE s.token_hash=$1 AND s.expires_at>now() AND s.created_at>now()-($2*interval '1 day') AND s.revoked_at IS NULL AND u.status='active'", hash(token), sessionAbsoluteDays))
 	if errors.Is(err, pgx.ErrNoRows) {
 		a.clearCookie(c)
 		return User{}, problem(401, "unauthorized", "登录已失效")
@@ -223,9 +239,9 @@ for i,key in ipairs(KEYS) do redis.call('ZADD',key,now,ARGV[1]); redis.call('PEX
 return 0`)
 
 func (a *App) loginQuota(c *gin.Context, name, ip string) (func(), error) {
-	keys := []string{"ic:auth:ip:" + hash(ip), "ic:auth:user:" + hash(ip+":"+name)}
+	keys := []string{"ic:auth:ip:" + hash(ip), "ic:auth:user:" + hash(ip+":"+name), "ic:auth:acct:" + hash(name)}
 	token := uuid.NewString()
-	wait, err := loginQuotaScript.Run(c.Request.Context(), a.Redis, keys, token, 300000, 30, 60000, 5).Int64()
+	wait, err := loginQuotaScript.Run(c.Request.Context(), a.Redis, keys, token, 300000, 30, 60000, 5, 3600000, 100).Int64()
 	if err != nil {
 		return nil, problem(503, "rate_limit_unavailable", "登录频控服务暂时不可用")
 	}
@@ -291,6 +307,7 @@ func (a *App) authRoutes(r *gin.Engine) {
 		}
 		match, verifyErr := argon2id.ComparePasswordAndHash(input.Password, encoded)
 		if verifyErr != nil || !match || u.ID == "" {
+			slog.Warn("登录失败", "username", name, "ip", ip, "requestId", requestIDOf(c))
 			return nil, problem(401, "invalid_credentials", "用户名或密码错误")
 		}
 		var token, challenge string
@@ -312,6 +329,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 				return err
 			}
 			if _, err = tx.Exec(c.Request.Context(), "UPDATE users SET last_login_at=now(),updated_at=now() WHERE id=$1", u.ID); err != nil {
+				return err
+			}
+			if err = a.audit(c.Request.Context(), tx, u.ID, "auth.login", u.ID, Row{"ip": ip}); err != nil {
 				return err
 			}
 			token, err = a.sessionWithClient(c.Request.Context(), tx, u.ID, c)
@@ -395,6 +415,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 			if err = a.bindReferral(ctx, tx, id, input.ReferralCode); err != nil {
 				return err
 			}
+			if err = a.audit(ctx, tx, id, "auth.register", id, Row{"ip": a.clientIP(c)}); err != nil {
+				return err
+			}
 			token, err = a.sessionWithClient(ctx, tx, id, c)
 			return err
 		})
@@ -422,7 +445,7 @@ func (a *App) authRoutes(r *gin.Engine) {
 		return gin.H{"user": u}, nil
 	}))
 	r.POST("/api/auth/logout", respond(func(c *gin.Context) (any, error) {
-		token, _ := c.Cookie(a.Config.CookieName)
+		token, _ := c.Cookie(a.cookieName())
 		_, err := a.DB.Exec(c.Request.Context(), "UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", hash(token))
 		a.clearCookie(c)
 		return nil, err
@@ -471,6 +494,9 @@ func (a *App) authRoutes(r *gin.Engine) {
 			}
 			token, err = a.sessionWithClient(ctx, tx, u.ID, c)
 			if err != nil {
+				return err
+			}
+			if err = a.audit(ctx, tx, u.ID, "auth.password_changed", u.ID, Row{}); err != nil {
 				return err
 			}
 			return a.notifySecurity(ctx, tx, u.ID, "password:"+u.ID+":"+fmt.Sprint(time.Now().UnixNano()), "密码已修改", "如果不是你本人操作，请立即联系管理员并重新设置密码。")

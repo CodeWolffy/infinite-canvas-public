@@ -48,7 +48,8 @@ export type AdminChannel = {
     monitorStatus?: string | null;
     monitorError?: string | null;
     monitorCheckedAt?: string | null;
-    monitorToken?: string | null;
+    /** 是否有检测正在排队或执行，令牌本身不下发。 */
+    checking?: boolean;
     nextCheckAt?: string | null;
     modelChanges?: { added: string[]; removed: string[] } | null;
     upstreamModels?: string[];

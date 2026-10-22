@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -60,10 +61,17 @@ type App struct {
 	dummyHash   string
 	streamMu    sync.Mutex
 	streamSinks map[string]map[chan struct{}]struct{}
+	streamUsers map[string]int
+	// statusMu 保护模型状态页的短时缓存。
+	statusMu    sync.Mutex
+	statusCache any
+	statusAt    time.Time
 	shutdown    <-chan struct{}
 	startedAt   time.Time
 	// running 保存本实例正在执行的上游请求的取消函数，键为任务 ID。
 	running sync.Map
+	// uploads 限制本实例同时进行的内存型上传数量。
+	uploads chan struct{}
 	// workersStarted 在 StartWorkers 之后置位，供 /ready 区分「进程存活」与「可以接单」。
 	workersStarted atomic.Bool
 	// shuttingDown 在退出信号到达后置位：在途任务按重排处理，而不是判失败退款。
@@ -195,7 +203,7 @@ func New(ctx context.Context, migrations []string) (*App, error) {
 		_ = rdb.Close()
 		return nil, err
 	}
-	a := &App{DB: db, Redis: rdb, S3: s3, Config: cfg, startedAt: time.Now()}
+	a := &App{DB: db, Redis: rdb, S3: s3, Config: cfg, startedAt: time.Now(), uploads: make(chan struct{}, uploadConcurrency)}
 	if err = a.initialize(ctx, migrations); err != nil {
 		a.Close()
 		return nil, err
@@ -234,7 +242,7 @@ func (a *App) migrationConn(ctx context.Context) (*pgx.Conn, error) {
 	}
 	cfg, err := pgx.ParseConfig(a.Config.DatabaseURL)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	cfg.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	return pgx.ConnectConfig(ctx, cfg)
@@ -455,12 +463,23 @@ func paginationWith(c *gin.Context, defaultLimit, maxLimit int) (int, int) {
 	return limit, offset
 }
 
-// cipherVersion 标记当前密文格式；轮换主密钥时靠它区分新旧格式。
-const cipherVersion = "v1:"
+// 密文格式版本：v2 用 HKDF-SHA256 从主密钥派生 AES 密钥，v1（或无前缀）沿用裸 sha256。
+const (
+	cipherVersion   = "v1:"
+	cipherVersionV2 = "v2:"
+)
 
-func sealWith(key, value string) (string, error) {
-	derived := sha256.Sum256([]byte(key))
-	block, err := aes.NewCipher(derived[:])
+func legacyKey(key string) []byte {
+	sum := sha256.Sum256([]byte(key))
+	return sum[:]
+}
+
+func sealKeyV2(key string) ([]byte, error) {
+	return hkdf.Key(sha256.New, []byte(key), nil, "infinite-canvas/seal/v2", 32)
+}
+
+func sealWithKey(derived []byte, value string) (string, error) {
+	block, err := aes.NewCipher(derived)
 	if err != nil {
 		return "", err
 	}
@@ -475,13 +494,17 @@ func sealWith(key, value string) (string, error) {
 	return base64.RawStdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(value), nil)), nil
 }
 
-func openWith(key, value string) (string, error) {
+// sealWith 保留旧格式（sha256 派生），用于生成历史密文与轮换回归测试。
+func sealWith(key, value string) (string, error) {
+	return sealWithKey(legacyKey(key), value)
+}
+
+func openWithKey(derived []byte, value string) (string, error) {
 	data, err := base64.RawStdEncoding.DecodeString(value)
 	if err != nil {
 		return "", err
 	}
-	derived := sha256.Sum256([]byte(key))
-	block, err := aes.NewCipher(derived[:])
+	block, err := aes.NewCipher(derived)
 	if err != nil {
 		return "", err
 	}
@@ -496,24 +519,41 @@ func openWith(key, value string) (string, error) {
 	return string(plain), err
 }
 
+func openWith(key, value string) (string, error) {
+	return openWithKey(legacyKey(key), value)
+}
+
 func (a *App) seal(value string) (string, error) {
-	sealed, err := sealWith(a.Config.EncryptionKey, value)
+	key, err := sealKeyV2(a.Config.EncryptionKey)
 	if err != nil {
 		return "", err
 	}
-	return cipherVersion + sealed, nil
+	sealed, err := sealWithKey(key, value)
+	if err != nil {
+		return "", err
+	}
+	return cipherVersionV2 + sealed, nil
 }
 
 func (a *App) unseal(value string) (string, error) {
-	versioned := strings.HasPrefix(value, cipherVersion)
-	plain, err := openWith(a.Config.EncryptionKey, strings.TrimPrefix(value, cipherVersion))
+	open := func(master string) (string, error) {
+		if strings.HasPrefix(value, cipherVersionV2) {
+			key, err := sealKeyV2(master)
+			if err != nil {
+				return "", err
+			}
+			return openWithKey(key, strings.TrimPrefix(value, cipherVersionV2))
+		}
+		return openWith(master, strings.TrimPrefix(value, cipherVersion))
+	}
+	plain, err := open(a.Config.EncryptionKey)
 	if err == nil {
 		return plain, nil
 	}
-	// 无版本前缀的旧密文允许用上一把主密钥解密，轮换期间可平滑过渡。
-	if !versioned && a.Config.PreviousEncryptionKey != "" {
-		if legacy, legacyErr := openWith(a.Config.PreviousEncryptionKey, value); legacyErr == nil {
-			return legacy, nil
+	// 两种密文格式都允许使用上一把主密钥，支持分批轮换期间的新旧密文共存。
+	if a.Config.PreviousEncryptionKey != "" {
+		if previous, previousErr := open(a.Config.PreviousEncryptionKey); previousErr == nil {
+			return previous, nil
 		}
 	}
 	return "", err
@@ -632,6 +672,10 @@ func (a *App) Router() *gin.Engine {
 			c.JSON(503, gin.H{"status": "starting"})
 			return
 		}
+		if a.shuttingDown.Load() {
+			c.JSON(503, gin.H{"status": "stopping"})
+			return
+		}
 		c.JSON(200, gin.H{"status": "ready"})
 	})
 	a.authRoutes(r)
@@ -640,7 +684,7 @@ func (a *App) Router() *gin.Engine {
 	// 公开只读分享：token 即权限，不走会话鉴权；只暴露被显式分享的资源。
 	a.publicShareRoutes(r)
 	api := r.Group("/api", a.authenticate())
-	api.GET("/status/models", respond(a.publicStatus))
+	api.GET("/status/models", a.rateLimit("status", 60, time.Minute), respond(a.publicStatus))
 	a.userRoutes(api)
 	a.contentRoutes(api)
 	a.workspaceRoutes(api)

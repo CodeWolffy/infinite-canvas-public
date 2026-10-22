@@ -31,3 +31,8 @@ export async function updateAdminUserRole(id: string, role: UserRole, securityPr
 export async function resetAdminUserPassword(id: string, temporaryPassword: string, securityProof: SecurityProof) {
     return (await apiRequest<UserResponse>(`/api/admin/users/${id}/reset-password`, { method: "POST", body: { temporaryPassword, securityProof } })).user;
 }
+
+/** 用户丢失验证器与恢复码时的人工出口，会撤销该用户全部会话。 */
+export async function resetAdminUserMfa(id: string, securityProof: SecurityProof) {
+    await apiRequest<void>(`/api/admin/users/${id}/reset-mfa`, { method: "POST", body: { securityProof } });
+}

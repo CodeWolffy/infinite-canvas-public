@@ -25,12 +25,12 @@ func (a *App) groupDiscount(ctx context.Context, q querier, user *User) (decimal
 }
 
 // 记录命中的规则及处理方式，不把完整用户提示词写入审计日志。
-func (a *App) checkSensitive(ctx context.Context, text, userID string) (sensitiveDecision, error) {
+func (a *App) checkSensitive(ctx context.Context, q querier, text, userID string) (sensitiveDecision, error) {
 	decision := sensitiveDecision{Matches: []Row{}}
 	if strings.TrimSpace(text) == "" {
 		return decision, nil
 	}
-	items, err := rows(ctx, a.DB, "SELECT id,pattern,action FROM sensitive_words ORDER BY created_at,id")
+	items, err := rows(ctx, q, "SELECT id,pattern,action FROM sensitive_words ORDER BY created_at,id")
 	if err != nil {
 		return decision, err
 	}
@@ -42,7 +42,7 @@ func (a *App) checkSensitive(ctx context.Context, text, userID string) (sensitiv
 		}
 		if strings.Contains(lowered, strings.ToLower(pattern)) {
 			decision.Matches = append(decision.Matches, item)
-			if err := a.audit(ctx, a.DB, userID, "sensitive.match", str(item["id"]), Row{"pattern": pattern, "action": item["action"]}); err != nil {
+			if err := a.audit(ctx, q, userID, "sensitive.match", str(item["id"]), Row{"pattern": pattern, "action": item["action"]}); err != nil {
 				return decision, err
 			}
 			if item["action"] == "block" {
@@ -424,7 +424,15 @@ func (a *App) groupAdminRoutes(admin *gin.RouterGroup) {
 		}
 		info, err := a.channelBalance(ctx, ch)
 		if err != nil {
-			return nil, problem(502, "balance_unavailable", "渠道余额查询失败："+err.Error())
+			// 只回分类与状态码：上游错误正文可能包含内部地址或代理错误页。
+			detail := "上游请求失败"
+			if failure, ok := err.(*upstreamError); ok {
+				detail = failure.Category
+				if failure.Status > 0 {
+					detail = fmt.Sprintf("HTTP %d（%s）", failure.Status, failure.Category)
+				}
+			}
+			return nil, problem(502, "balance_unavailable", "渠道余额查询失败："+(&upstreamTrace{secret: ch.APIKey}).redact(detail))
 		}
 		if info["balance"] == nil {
 			// usage 端点缺失时至少返回额度。

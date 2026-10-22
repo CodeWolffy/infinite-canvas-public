@@ -26,7 +26,12 @@ func canvasSnapshot(value any) error {
 	}
 	return nil
 }
+// canvasViewport 只接受 x/y/k：视口保存不经过媒体引用同步，必须白名单，
+// 否则任意字段都能落进快照，而公开分享按快照内容授权媒体。
 func canvasViewport(value map[string]any) error {
+	if len(value) != 3 {
+		return problem(400, "invalid_viewport", "画布视口只允许 x、y、k")
+	}
 	for _, key := range []string{"x", "y", "k"} {
 		if _, ok := value[key].(float64); !ok {
 			return problem(400, "invalid_viewport", "画布视口格式不正确")
@@ -530,6 +535,16 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 				}
 				if input.Metadata == nil {
 					input.Metadata, _ = old["metadata"].(map[string]any)
+				}
+				// 工作区协作者只能改标题、正文与元数据：替换范围、类型或关联文件
+				// 会把内容换到他人的公开分享页，只有素材所有者（或管理员）可以改。
+				if owner != u.ID && u.Role != "admin" {
+					input.Scope, input.Type = str(old["scope"]), str(old["type"])
+					input.MediaID = nil
+					if old["mediaId"] != nil {
+						mediaID := str(old["mediaId"])
+						input.MediaID = &mediaID
+					}
 				}
 			}
 			// 调整素材所属工作区只允许素材所有者/管理员执行；目标工作区要求编辑者及以上角色。

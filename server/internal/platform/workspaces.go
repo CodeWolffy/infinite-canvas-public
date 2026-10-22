@@ -138,7 +138,7 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 		_, err = a.DB.Exec(ctx, "DELETE FROM workspaces WHERE id=$1", id)
 		return nil, err
 	}))
-	api.POST("/workspaces/:id/members", respond(func(c *gin.Context) (any, error) {
+	api.POST("/workspaces/:id/members", a.rateLimit("workspace-member", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")
 		if err != nil {
 			return nil, err
@@ -156,11 +156,12 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 		}
 		username := strings.ToLower(strings.TrimSpace(input.Username))
 		target, err := one(ctx, a.DB, "SELECT id,status FROM users WHERE username=$1", username)
-		if err != nil {
+		// 不存在与已停用统一返回同一结果，避免被用来枚举用户。
+		if errors.Is(err, notFound) || (err == nil && str(target["status"]) != "active") {
 			return nil, problem(404, "user_not_found", "未找到该用户")
 		}
-		if str(target["status"]) != "active" {
-			return nil, problem(400, "user_inactive", "该用户已被停用")
+		if err != nil {
+			return nil, err
 		}
 		member, err := one(ctx, a.DB, `INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,$3)
 			ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=excluded.role WHERE workspace_members.role<>'owner'

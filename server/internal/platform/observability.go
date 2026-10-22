@@ -38,10 +38,13 @@ var (
 	upstreamAttemptsTotal  = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ic_upstream_attempts_total", Help: "上游渠道调用尝试次数",
 	}, []string{"channel_id", "category"})
+	paymentNotifyTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ic_payment_notify_total", Help: "支付回调处理结果",
+	}, []string{"provider", "result"})
 )
 
 func init() {
-	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, tasksQueuedGauge, tasksRunningGauge, tasksOldestQueuedGauge, upstreamAttemptsTotal)
+	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, tasksQueuedGauge, tasksRunningGauge, tasksOldestQueuedGauge, upstreamAttemptsTotal, paymentNotifyTotal)
 }
 
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

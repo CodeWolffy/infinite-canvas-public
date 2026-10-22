@@ -6,8 +6,42 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestVideoPollingKeepsAcceptedTaskAfterRateLimit(t *testing.T) {
+	for _, protocol := range []string{"openai", "gemini"} {
+		t.Run(protocol, func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempt := calls.Add(1)
+				if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/accepted-task") {
+					t.Errorf("轮询不应重新创建任务: %s %s", r.Method, r.URL.Path)
+				}
+				if attempt == 1 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = io.WriteString(w, `{"error":{"message":"rate limited"}}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"status":"queued","done":false}`)
+			}))
+			defer upstream.Close()
+			a := &App{Config: Config{AllowPrivateHosts: true, MaxGenerated: 50 * 1024 * 1024}}
+			ch := channel{Protocol: protocol, BaseURL: upstream.URL, APIKey: "test-key"}
+			for range 2 {
+				result, err := a.pollVideo(context.Background(), ch, "accepted-task")
+				if err != nil || !result.Pending || result.UpstreamID != "accepted-task" {
+					t.Fatalf("限流后应继续原任务: %+v %v", result, err)
+				}
+			}
+			if calls.Load() != 2 {
+				t.Fatal("应在下一次轮询重新查询同一任务")
+			}
+		})
+	}
+}
 
 func TestGeminiImageResolutionIndependentOfQuality(t *testing.T) {
 	for _, quality := range []string{"low", "medium", "high", "xhigh", "max"} {

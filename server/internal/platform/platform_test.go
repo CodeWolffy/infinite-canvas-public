@@ -752,11 +752,11 @@ func TestSealVersionedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(sealed, cipherVersion) {
+	if !strings.HasPrefix(sealed, cipherVersionV2) {
 		t.Fatalf("新密文缺少版本前缀: %s", sealed)
 	}
 	if plain, err := app.unseal(sealed); err != nil || plain != "secret" {
-		t.Fatalf("v1 密文应能用主密钥解开: %q %v", plain, err)
+		t.Fatalf("新密文应能用主密钥解开: %q %v", plain, err)
 	}
 	legacy, err := sealWith(strings.Repeat("o", 32), "legacy-secret")
 	if err != nil {
@@ -771,6 +771,65 @@ func TestSealVersionedRoundTrip(t *testing.T) {
 	strict := &App{Config: Config{EncryptionKey: strings.Repeat("n", 32)}}
 	if _, err = strict.unseal(legacy); err == nil {
 		t.Fatal("缺少 CHANNEL_ENCRYPTION_KEY_PREVIOUS 时不应解开旧密文")
+	}
+	previous := &App{Config: Config{EncryptionKey: app.Config.PreviousEncryptionKey}}
+	v2, err := previous.seal("previous-v2-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := app.unseal(v2); err != nil || plain != "previous-v2-secret" {
+		t.Fatalf("v2 密文应能用上一把密钥解开: %q %v", plain, err)
+	}
+	if _, err = strict.unseal(v2); err == nil {
+		t.Fatal("缺少上一把密钥时不应解开旧主密钥写入的 v2 密文")
+	}
+}
+
+func TestSessionRenewalKeepsTokenAndAbsoluteExpiry(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	user, cookie := testUser(t, a, 0)
+	if _, err := a.DB.Exec(ctx, "UPDATE sessions SET created_at=now()-interval '29 days',expires_at=now()+interval '1 hour' WHERE user_id=$1", user); err != nil {
+		t.Fatal(err)
+	}
+	router := a.Router()
+	responses := make([]*httptest.ResponseRecorder, 2)
+	var group sync.WaitGroup
+	for i := range responses {
+		group.Add(1)
+		go func(i int) {
+			defer group.Done()
+			responses[i] = testRequest(router, "GET", "/api/auth/me", nil, cookie)
+		}(i)
+	}
+	group.Wait()
+	for _, response := range responses {
+		if response.Code != 200 {
+			t.Fatalf("并发续期不应退出登录: %d %s", response.Code, response.Body.String())
+		}
+		for _, updated := range response.Result().Cookies() {
+			if updated.Name == cookie.Name && (updated.Value != cookie.Value || updated.MaxAge > 86400) {
+				t.Fatal("续期改变了 token 或突破绝对有效期")
+			}
+		}
+	}
+	var capped bool
+	if err := a.DB.QueryRow(ctx, "SELECT token_hash=$2 AND expires_at=created_at+interval '30 days' FROM sessions WHERE user_id=$1", user, hash(cookie.Value)).Scan(&capped); err != nil || !capped {
+		t.Fatalf("数据库会话应保留 token 并限制到创建后 30 天: %v", err)
+	}
+	if response := testRequest(router, "GET", "/api/auth/me", nil, cookie); response.Code != 200 {
+		t.Fatal("旧 Cookie 应继续用于已有请求和实时连接")
+	}
+	if _, err := a.DB.Exec(ctx, "UPDATE sessions SET created_at=now()-interval '31 days',expires_at=now()+interval '7 days' WHERE user_id=$1", user); err != nil {
+		t.Fatal(err)
+	}
+	if response := testRequest(router, "GET", "/api/auth/me", nil, cookie); response.Code != 401 {
+		t.Fatal("超过绝对寿命的会话不应继续通过鉴权")
+	}
+	a.Config.SessionDays = 60
+	user, cookie = testUser(t, a, 0)
+	if err := a.DB.QueryRow(ctx, "SELECT expires_at=created_at+interval '30 days' FROM sessions WHERE user_id=$1", user).Scan(&capped); err != nil || !capped {
+		t.Fatalf("较长 SESSION_DAYS 不应突破绝对有效期: %v", err)
 	}
 }
 
@@ -802,7 +861,7 @@ func TestRotateKeysReencryptsLegacyCiphertext(t *testing.T) {
 	if err = a.DB.QueryRow(ctx, "SELECT encrypted_api_key FROM channel_keys WHERE channel_id=$1", channelID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(stored, cipherVersion) {
+	if !strings.HasPrefix(stored, cipherVersionV2) {
 		t.Fatal("轮换后密文应带版本前缀")
 	}
 	if plain, err := a.unseal(stored); err != nil || plain != "upstream-key" {

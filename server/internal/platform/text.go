@@ -201,7 +201,7 @@ func (a *App) textRoutes(api *gin.RouterGroup) {
 		if err = a.generationAdmission(c, settings); err != nil {
 			return nil, err
 		}
-		decision, err := a.checkSensitive(ctx, sensitiveInput(input.Content+"\n"+input.SystemPrompt, input.Parameters), u.ID)
+		decision, err := a.checkSensitive(ctx, a.DB, sensitiveInput(input.Content+"\n"+input.SystemPrompt, input.Parameters), u.ID)
 		if err != nil {
 			return nil, err
 		} else if decision.Action == "block" {

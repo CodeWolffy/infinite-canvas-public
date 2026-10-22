@@ -694,6 +694,11 @@ func (a *App) pollVideo(ctx context.Context, c channel, id string) (generationRe
 	response, err := a.upstreamJSON(req)
 	if err != nil {
 		failure := classify(err)
+		// 鉴权与参数错误立即失败；短暂限流或网络故障继续查询原任务，沿用原期限。
+		switch failure.Category {
+		case "authentication", "invalid_request", "content_policy":
+			return generationResult{}, err
+		}
 		if failure.Retryable || errors.Is(err, context.DeadlineExceeded) {
 			return generationResult{Pending: true, UpstreamID: id}, nil
 		}
@@ -714,7 +719,8 @@ func (a *App) pollVideo(ctx context.Context, c channel, id string) (generationRe
 			return generationResult{}, err
 		}
 		base, _ := url.Parse(c.BaseURL)
-		if u.Host != base.Host {
+		// 下载地址会带上渠道密钥，只允许与渠道一致的 https（内网 http 渠道除外）。
+		if u.Host != base.Host || u.User != nil || u.Scheme != "https" && !(base.Scheme == "http" && u.Scheme == "http") {
 			return generationResult{}, &upstreamError{Category: "upstream_error"}
 		}
 		download, err := http.NewRequestWithContext(ctx, "GET", address, nil)

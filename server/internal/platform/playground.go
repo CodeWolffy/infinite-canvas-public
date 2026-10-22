@@ -94,9 +94,13 @@ func (a *App) playgroundTest(c *gin.Context) (any, error) {
 		task["modelId"], ch.CostConfig = bindings[0]["modelId"], object(bindings[0]["costConfig"])
 		ch.BindingID = str(bindings[0]["id"])
 	}
-	// 排队期间跟随请求取消；拿到共享槽位后才开始计算渠道执行超时。
+	// 排队期间跟随请求取消；等槽位最多等一个渠道超时，避免渠道长期冷却时请求挂死。
+	waitUntil := time.Now().Add(time.Duration(ch.TimeoutMS) * time.Millisecond)
 	var deadline time.Time
 	for {
+		if time.Now().After(waitUntil) {
+			return nil, problem(504, "probe_timeout", "渠道暂时无法执行检测，请稍后重试")
+		}
 		state, err := one(ctx, a.DB, "SELECT status,cooldown_until FROM channels WHERE id=$1 AND deleted_at IS NULL", ch.ID)
 		if err != nil {
 			return nil, err

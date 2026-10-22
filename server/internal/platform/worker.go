@@ -445,10 +445,17 @@ func (a *App) executeTask(root context.Context, task Row) {
 				} else {
 					err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM available_model_channels v WHERE v.model_id=$1 AND v.channel_id=$2 AND (v.cooldown_until IS NULL OR v.cooldown_until<=now()))", task["modelId"], candidate.ID).Scan(&eligible)
 				}
-				if err != nil || !eligible {
+				if err != nil {
+					last = classify(err)
+					return
+				}
+				// 渠道冷却只等待，不消耗尝试次数；确认没有可用密钥后才视为确定性故障，
+				// 必须结算，否则任务会在「领取→排队」之间无限循环且永不退款。
+				if !eligible {
 					return
 				}
 				if err = a.selectChannelKey(ctx, &candidate, attemptedKeys, false); err != nil {
+					last = classify(err)
 					return
 				}
 			}
@@ -912,18 +919,24 @@ func (a *App) recoverTasks(ctx context.Context) {
 	}
 }
 func (a *App) reconcileExpiredOrders(ctx context.Context) {
+	// 整轮限时：个别网关卡住时不会让对账长期停在同一批订单上。
+	roundCtx, cancelRound := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelRound()
 	// 每轮随机排序：最早一批订单若持续无法确认，不会一直挡住后面的订单。
-	items, err := rows(ctx, a.DB, "SELECT * FROM payment_orders WHERE status='pending' AND expires_at<=now() ORDER BY md5(id::text||$1) LIMIT 100", uuid.NewString())
+	items, err := rows(roundCtx, a.DB, "SELECT * FROM payment_orders WHERE status='pending' AND expires_at<=now() ORDER BY md5(id::text||$1) LIMIT 100", uuid.NewString())
 	if err != nil {
+		if roundCtx.Err() == nil {
+			slog.Warn("读取待对账订单失败", "error", err)
+		}
 		return
 	}
 	for _, order := range items {
-		if ctx.Err() != nil {
+		if roundCtx.Err() != nil {
 			return
 		}
-		deadlineCtx, cancel := context.WithTimeout(ctx, 480*time.Second)
-		_ = a.reconcilePayment(deadlineCtx, order)
-		cancel()
+		if err := a.reconcilePayment(roundCtx, order); err != nil {
+			slog.Warn("订单对账失败", "order", str(order["id"]), "error", truncate(err.Error(), errorLogLimit))
+		}
 	}
 }
 
@@ -950,11 +963,21 @@ func (a *App) cleanupLock(ctx context.Context) bool {
 func (a *App) cleanup(ctx context.Context) {
 	a.logExec(ctx, "清理过期登录令牌", "DELETE FROM auth_tokens WHERE expires_at<now()")
 	a.logExec(ctx, "清理过期邮件", "DELETE FROM mail_outbox WHERE created_at<now()-($1*interval '1 day') AND status IN('sent','failed')", a.Config.LogDays)
-	a.logExec(ctx, "清理过期会话", "DELETE FROM sessions WHERE expires_at<now()")
+	a.logExec(ctx, "清理过期会话", "DELETE FROM sessions WHERE expires_at<now() OR created_at<=now()-($1*interval '1 day')", sessionAbsoluteDays)
 	a.logExec(ctx, "清理过期请求日志", "DELETE FROM request_logs WHERE started_at<now()-($1*interval '1 day') AND status<>'running'", a.Config.LogDays)
 	a.logExec(ctx, "清理过期渠道检测记录", "DELETE FROM channel_checks WHERE created_at<now()-($1*interval '1 day')", checkRetentionDays)
 	a.logExec(ctx, "清理过期通知", "DELETE FROM notifications WHERE created_at<now()-($1*interval '1 day')", notificationRetentionDays)
 	a.logExec(ctx, "清理过期审计日志", "DELETE FROM audit_logs WHERE created_at<now()-($1*interval '1 day') AND action<>'cost.reconciled'", auditRetentionDays)
+	// 失败和取消任务仍可重试，必须保留输入；终态任务的中间输出与渠道凭据可以清理。
+	a.logExec(ctx, "清理过期任务占位字段", `UPDATE generation_tasks SET
+		prompt=CASE WHEN status='succeeded' THEN '' ELSE prompt END,
+		parameters=CASE WHEN status='succeeded' THEN '{}'::jsonb ELSE parameters END,partial_text='',channel_snapshot=NULL
+		WHERE finished_at<now()-($1*interval '1 day') AND status IN('succeeded','failed','canceled')
+		AND (partial_text<>'' OR channel_snapshot IS NOT NULL OR (status='succeeded' AND (prompt<>'' OR parameters<>'{}'::jsonb)))`, contentRetentionDays)
+	// 待审核内容保留到处理完成；只清理已完成审核的正文，并保留接口字段与明确标记。
+	a.logExec(ctx, "清理过期审核正文", `UPDATE moderation_reviews SET request_snapshot=request_snapshot||'{"prompt":"","parameters":{},"snapshotExpired":true}'::jsonb
+		WHERE status<>'pending' AND reviewed_at<now()-($1*interval '1 day') AND request_snapshot->>'snapshotExpired' IS DISTINCT FROM 'true'`, contentRetentionDays)
+	a.logExec(ctx, "清理过期审核记录", "DELETE FROM moderation_reviews r WHERE r.status<>'pending' AND r.reviewed_at<now()-($1*interval '1 day') AND NOT EXISTS(SELECT 1 FROM generation_tasks t WHERE t.moderation_id=r.id)", contentRetentionDays)
 	items, err := rows(ctx, a.DB, "SELECT id FROM media_objects WHERE (status='deleting' OR created_at<now()-($1*interval '1 day')) AND NOT EXISTS(SELECT 1 FROM media_references WHERE media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM generation_tasks WHERE output_media_id=media_objects.id) AND NOT EXISTS(SELECT 1 FROM assets WHERE media_id=media_objects.id)", a.Config.OrphanDays)
 	if err != nil {
 		slog.Warn("读取待清理媒体失败", "error", err)

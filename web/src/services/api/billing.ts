@@ -29,7 +29,7 @@ export const adjustBalance = (id: string, body: { amount: string; note: string; 
 export const getPlatformSettings = () => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings");
 export const savePlatformSettings = (body: PlatformSettings, securityProof: SecurityProof) => apiRequest<{ settings: PlatformSettings }>("/api/admin/platform-settings", { method: "PUT", body: { ...body, securityProof } });
 export const getInvitations = (offset = 0) => apiRequest<{ invitations: Invitation[] }>(`/api/admin/invitations?limit=50&offset=${offset}`);
-export const createInvitation = (body: { note: string; maxUses: number; count?: number; expiresAt?: string }) => apiRequest<{ invitation?: Invitation; code?: string; invitations?: Invitation[]; codes?: string[] }>("/api/admin/invitations", { method: "POST", body });
+export const createInvitation = (body: { note: string; maxUses: number; count?: number; expiresAt?: string }, securityProof: SecurityProof) => apiRequest<{ invitation?: Invitation; code?: string; invitations?: Invitation[]; codes?: string[] }>("/api/admin/invitations", { method: "POST", body: { ...body, securityProof } });
 export const setInvitationDisabled = (id: string, disabled: boolean) => apiRequest<void>(`/api/admin/invitations/${id}`, { method: "PATCH", body: { disabled } });
 export const getAuditLogs = (offset = 0) => apiRequest<{ logs: Array<{ id: string; username: string; action: string; target: string; detail: Record<string, unknown>; createdAt: string }> }>(`/api/admin/audit-logs?limit=50&offset=${offset}`);
 

@@ -137,7 +137,10 @@ func changeWallet(ctx context.Context, tx pgx.Tx, userID, kind, reference string
 	var balance, frozen int64
 	// 仅实际结算可形成欠费；到账和退款可以抵扣欠费，新的冻结仍须足额。
 	allowDebt := kind == "charge" || (kind != "hold" && balanceDelta >= 0)
-	err := tx.QueryRow(ctx, "UPDATE wallets SET balance_micros=balance_micros+$2,frozen_micros=frozen_micros+$3,updated_at=now() WHERE user_id=$1 AND ($4 OR balance_micros+$2>=0) AND frozen_micros+$3>=0 RETURNING balance_micros,frozen_micros", userID, balanceDelta, frozenDelta, allowDebt).Scan(&balance, &frozen)
+	err := tx.QueryRow(ctx, `UPDATE wallets SET balance_micros=balance_micros+$2,frozen_micros=frozen_micros+$3,updated_at=now()
+		WHERE user_id=$1 AND ($4 OR balance_micros::numeric+$2>=0) AND frozen_micros::numeric+$3>=0
+		AND balance_micros::numeric+$2<=9223372036854775807 AND frozen_micros::numeric+$3<=9223372036854775807
+		RETURNING balance_micros,frozen_micros`, userID, balanceDelta, frozenDelta, allowDebt).Scan(&balance, &frozen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, problem(402, "insufficient_balance", "可用余额不足")
 	}
@@ -282,8 +285,8 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		percent, err := boundedDecimal(settings.ReferralPercent, 19, 6)
-		if err != nil || percent.IsNegative() {
-			return nil, problem(400, "invalid_settings", "邀请返利比例必须为非负百分比")
+		if err != nil || percent.IsNegative() || percent.GreaterThan(decimal.NewFromInt(100)) {
+			return nil, problem(400, "invalid_settings", "邀请返利比例必须在 0–100 之间")
 		}
 		settings.ReferralPercent = percent.String()
 		if min < 0 || max < min || settings.UserRPM < 0 || settings.IPRPM < 0 || settings.ActiveTasks < 0 || settings.PaymentOrderMinutes <= 0 {
@@ -311,10 +314,11 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 	}))
 	admin.POST("/invitations", respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
-			Note      string     `json:"note"`
-			MaxUses   int        `json:"maxUses" binding:"required,min=1"`
-			Count     int        `json:"count"`
-			ExpiresAt *time.Time `json:"expiresAt"`
+			Note          string        `json:"note"`
+			MaxUses       int           `json:"maxUses" binding:"required,min=1"`
+			Count         int           `json:"count"`
+			ExpiresAt     *time.Time    `json:"expiresAt"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -333,6 +337,10 @@ func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
 		secrets := make([]string, 0, count)
 		items := make([]Row, 0, count)
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			// 邀请码控制注册入口，与发行兑换码同级，必须二次验证。
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			for i := 0; i < count; i++ {
 				code := strings.ReplaceAll(uuid.NewString(), "-", "")
 				invitation, err := one(ctx, tx, "INSERT INTO invitations(code_hash,code_hint,created_by,note,max_uses,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,code_hint,note,max_uses,used_count,expires_at,disabled,created_at", hash(code), code[:8]+"…", currentUser(c).ID, input.Note, input.MaxUses, input.ExpiresAt)

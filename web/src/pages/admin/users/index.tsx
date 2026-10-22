@@ -3,11 +3,11 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { Alert, App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
+import { Copy, KeyRound, Plus, Search, ShieldOff, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useSecurityProof } from "@/hooks/use-security-proof";
-import { createAdminUser, getAdminUsersPage, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
+import { createAdminUser, getAdminUsersPage, resetAdminUserMfa, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
 import { getUserGroups, setUserGroup } from "@/services/api/billing";
 import type { AuthUser, UserRole } from "@/services/api/auth";
 import { useUserStore } from "@/stores/use-user-store";
@@ -49,6 +49,7 @@ export default function AdminUsersPage() {
     const roleMutation = useMutation({ mutationFn: async ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role, await requestProof()), onSuccess: (user) => { updateUserCache(); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
     const groupMutation = useMutation({ mutationFn: async ({ id, groupId }: { id: string; groupId: string | null }) => setUserGroup(id, groupId, await requestProof()), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); setGroupUser(null); message.success("分组已调整"); }, onError: showError(message.error) });
     const resetMutation = useMutation({ mutationFn: async ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword, await requestProof()), onSuccess: (user, variables) => { updateUserCache(); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
+    const resetMfaMutation = useMutation({ mutationFn: async (user: AuthUser) => resetAdminUserMfa(user.id, await requestProof()), onSuccess: (_, user) => { updateUserCache(); message.success(`${user.displayName} 的两步验证已重置`); }, onError: showError(message.error) });
 
     const users = usersQuery.data?.users || [];
     const total = usersQuery.data?.total || 0;
@@ -63,6 +64,17 @@ export default function AdminUsersPage() {
         statusMutation.mutate({ id: user.id, status });
     };
 
+    const confirmResetMfa = (user: AuthUser) => {
+        modal.confirm({
+            title: `重置 ${user.displayName} 的两步验证？`,
+            content: "该用户将无法再用原验证器登录，全部现有会话会立即失效；请让对方用密码登录后重新绑定。",
+            okText: "确认重置",
+            cancelText: "取消",
+            okButtonProps: { danger: true },
+            onOk: () => resetMfaMutation.mutateAsync(user),
+        });
+    };
+
     const columns: TableColumnsType<AuthUser> = [
         { title: "用户", key: "user", fixed: "left", width: 210, render: (_, user) => <div className="min-w-0"><div className="truncate font-medium text-stone-950 dark:text-stone-100">{user.displayName}</div><div className="truncate text-xs text-stone-500">@{user.username}</div></div> },
         { title: "角色", dataIndex: "role", width: 100, render: (role: UserRole) => <Tag color={role === "admin" ? "gold" : "default"}>{role === "admin" ? "管理员" : "普通用户"}</Tag> },
@@ -71,7 +83,7 @@ export default function AdminUsersPage() {
         { title: "最近登录", dataIndex: "lastLoginAt", width: 170, render: (value: string | null) => <span className="text-stone-500">{value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "尚未登录"}</span> },
         { title: "创建时间", dataIndex: "createdAt", width: 170, render: (value: string) => <span className="text-stone-500">{dayjs(value).format("YYYY-MM-DD HH:mm")}</span> },
         { title: "启用", dataIndex: "status", width: 90, render: (status: AuthUser["status"], user) => <Switch size="small" checked={status === "active"} disabled={user.id === currentUser?.id || statusMutation.isPending} onChange={(checked) => changeStatus(user, checked)} /> },
-        { title: "操作", key: "actions", fixed: "right", width: 185, render: (_, user) => <Space size={0}><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<KeyRound className="size-3.5" />} onClick={() => setResettingUser(user)}>重置密码</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<UserRoundCog className="size-3.5" />} onClick={() => { setRoleUser(user); setRoleValue(user.role); }}>改角色</Button></Space> },
+        { title: "操作", key: "actions", fixed: "right", width: 285, render: (_, user) => <Space size={0}><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<KeyRound className="size-3.5" />} onClick={() => setResettingUser(user)}>重置密码</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<UserRoundCog className="size-3.5" />} onClick={() => { setRoleUser(user); setRoleValue(user.role); }}>改角色</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<ShieldOff className="size-3.5" />} onClick={() => confirmResetMfa(user)}>重置两步验证</Button></Space> },
     ];
 
     return (
@@ -96,7 +108,7 @@ export default function AdminUsersPage() {
                     </div>
                     <span className="text-xs text-stone-500">共 {total} 个账号</span>
                 </div>
-                <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, onChange: setPage }} scroll={{ x: 980 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
+                <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1080 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
             </div>
 
             <Modal title="创建用户" open={createOpen} footer={null} onCancel={() => setCreateOpen(false)} destroyOnHidden>

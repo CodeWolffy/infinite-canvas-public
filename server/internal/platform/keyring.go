@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// rotateBatch 是单批重加密的行数；一个事务里分批处理，避免大表一次性锁住。
+// rotateBatch 是单个事务重加密的行数，避免大表一次性锁住。
 const rotateBatch = 500
 
 // encryptedColumns 列出所有密文列。表名与列名都是代码内常量，不来自外部输入。
@@ -31,15 +31,15 @@ type RotationResult struct {
 	Rows          int64
 }
 
-// RotateKeys 用当前主密钥重新加密所有密文列；旧密文必须能由主密钥或上一把密钥解开，否则整表回滚。
+// RotateKeys 用当前主密钥重新加密所有密文列；解密失败时回滚当前批次，可修复后重新执行。
 func (a *App) RotateKeys(ctx context.Context) ([]RotationResult, error) {
 	results := make([]RotationResult, 0, len(encryptedColumns)+1)
 	for _, item := range encryptedColumns {
 		count, err := a.rotateColumn(ctx, item.Table, item.Column, item.Filter)
+		results = append(results, RotationResult{Table: item.Table, Column: item.Column, Rows: count})
 		if err != nil {
 			return results, fmt.Errorf("%s.%s: %w", item.Table, item.Column, err)
 		}
-		results = append(results, RotationResult{Table: item.Table, Column: item.Column, Rows: count})
 	}
 	count, err := a.rotateMailSettings(ctx)
 	if err != nil {
@@ -48,29 +48,38 @@ func (a *App) RotateKeys(ctx context.Context) ([]RotationResult, error) {
 	return append(results, RotationResult{Table: "app_settings", Column: "value.sealed", Rows: count}), nil
 }
 
-// rotateColumn 按 id 顺序分批重加密一列；id::text 只用于排序游标，不参与业务语义。
+// rotateColumn 按主键顺序逐批重加密，每批独立提交：避免整列长事务锁住热表。
+// id>$1::uuid 走主键索引，不能先转成文本再比较。
 func (a *App) rotateColumn(ctx context.Context, table, column, filter string) (int64, error) {
 	var total int64
-	err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-		cursor := "00000000-0000-0000-0000-000000000000"
-		for {
-			items, err := rows(ctx, tx, fmt.Sprintf("SELECT id::text AS id,%s AS value FROM %s WHERE %s AND id::text>$1 ORDER BY id LIMIT %d", column, table, filter, rotateBatch), cursor)
+	cursor := "00000000-0000-0000-0000-000000000000"
+	selectQuery := fmt.Sprintf("SELECT id::text AS id,%s AS value FROM %s WHERE %s AND id>$1::uuid ORDER BY id LIMIT %d FOR UPDATE", column, table, filter, rotateBatch)
+	updateQuery := fmt.Sprintf("UPDATE %s SET %s=$2 WHERE id=$1", table, column)
+	for {
+		batch := int64(0)
+		next := cursor
+		err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			items, err := rows(ctx, tx, selectQuery, cursor)
 			if err != nil {
 				return err
 			}
-			if len(items) == 0 {
-				return nil
-			}
 			for _, item := range items {
 				id := str(item["id"])
-				if err = a.reseal(ctx, tx, fmt.Sprintf("UPDATE %s SET %s=$2 WHERE id=$1", table, column), id, str(item["value"])); err != nil {
+				if err = a.reseal(ctx, tx, updateQuery, id, str(item["value"])); err != nil {
 					return fmt.Errorf("记录 %s: %w", id, err)
 				}
-				cursor, total = id, total+1
+				next, batch = id, batch+1
 			}
+			return nil
+		})
+		if err != nil {
+			return total, err
 		}
-	})
-	return total, err
+		cursor, total = next, total+batch
+		if batch < rotateBatch {
+			return total, nil
+		}
+	}
 }
 
 // rotateMailSettings 重加密 app_settings 里 key='mail' 的 sealed 字段。
@@ -104,7 +113,10 @@ func (a *App) rotateMailSettings(ctx context.Context) (int64, error) {
 		total = 1
 		return nil
 	})
-	return total, err
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // reseal 解开旧密文并用当前主密钥重新写入。

@@ -354,6 +354,7 @@ export default {
         revoke: "撤销链接",
         revoked: "链接已撤销，旧链接将立即失效",
         readOnly: "只读",
+        expiresAt: "有效期至 {{date}}",
         loading: "正在加载分享内容…",
         unavailable: "分享不可用",
         sharedBy: "由 {{name}} 分享",

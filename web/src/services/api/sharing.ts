@@ -6,6 +6,8 @@ export type ShareLink = {
     token: string;
     url: string;
     createdAt: string;
+    /** 到期后链接失效，需要重新创建。 */
+    expiresAt: string | null;
 };
 
 export type SharedCanvas = {

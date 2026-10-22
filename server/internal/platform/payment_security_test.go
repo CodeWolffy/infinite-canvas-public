@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +26,71 @@ func securityPaymentChannel(t *testing.T, a *App, endpoint string) (string, stri
 	id := uuid.NewString()
 	if _, err := a.DB.Exec(context.Background(), "INSERT INTO payment_channels(id,name,provider,methods,encrypted_config,enabled) VALUES($1,'security','epay',ARRAY['alipay'],$2,true)", id, sealed); err != nil { t.Fatal(err) }
 	return id, sealed
+}
+
+func TestEpayTransportErrorOmitsMerchantKey(t *testing.T) {
+	failure := errors.New("connection refused")
+	previous := publicClient
+	publicClient = &http.Client{Transport: &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, failure
+	}}}
+	defer func() { publicClient = previous }()
+	config := PaymentConfig{BaseURL: "https://payments.example.invalid", PartnerID: "merchant", Key: "secret-with+/%&symbols"}
+	_, err := (&App{}).queryPayment(context.Background(), Row{"id": uuid.NewString(), "provider": "epay", "method": "alipay"}, config)
+	if !errors.Is(err, failure) {
+		t.Fatalf("应保留网络错误原因: %v", err)
+	}
+	for _, secret := range []string{config.Key, url.QueryEscape(config.Key), "key="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatal("查单错误包含商户密钥或敏感 URL")
+		}
+	}
+}
+
+func TestExpiredPaymentRemainsReconcilableAndCreditsOnce(t *testing.T) {
+	a := routingApp(t)
+	ctx := context.Background()
+	user, cookie := testUser(t, a, 0)
+	var paid atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !paid.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(Row{"code": 1, "pid": "security-merchant", "type": "alipay", "out_trade_no": r.URL.Query().Get("out_trade_no"), "trade_no": "recovered-trade", "money": "1.00", "status": 1})
+	}))
+	defer upstream.Close()
+	previous := publicClient
+	publicClient = upstream.Client()
+	defer func() { publicClient = previous }()
+	channel, config := securityPaymentChannel(t, a, upstream.URL)
+	order, err := one(ctx, a.DB, "INSERT INTO payment_orders(user_id,channel_id,method,amount_cents,encrypted_config,provider,request_key,request_hash,expires_at) VALUES($1,$2,'alipay',100,$3,'epay',$4,'expired',now()-interval '1 hour') RETURNING *", user, channel, config, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reconcileExpiredOrders(ctx)
+	var status string
+	if err := a.DB.QueryRow(ctx, "SELECT status FROM payment_orders WHERE id=$1", order["id"]).Scan(&status); err != nil || status != "pending" {
+		t.Fatalf("查单失败后应保留自动对账: %s %v", status, err)
+	}
+	for range 9 {
+		if _, err := a.DB.Exec(ctx, "INSERT INTO payment_orders(user_id,channel_id,method,amount_cents,encrypted_config,provider,request_key,request_hash,expires_at) VALUES($1,$2,'alipay',100,$3,'epay',$4,'active',now()+interval '30 minutes')", user, channel, config, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := testRequest(a.Router(), "POST", "/api/user/payment-orders", Row{"channelId": channel, "method": "alipay", "amount": "1", "requestId": uuid.NewString()}, cookie)
+	if response.Code != 200 {
+		t.Fatalf("过期订单不应占有效待支付额度: %d %s", response.Code, response.Body.String())
+	}
+	paid.Store(true)
+	a.reconcileExpiredOrders(ctx)
+	if err := a.DB.QueryRow(ctx, "SELECT status FROM payment_orders WHERE id=$1", order["id"]).Scan(&status); err != nil || status != "paid" {
+		t.Fatalf("网关恢复后应自动补到账: %s %v", status, err)
+	}
+	if err := a.reconcilePayment(ctx, order); err != nil {
+		t.Fatal(err)
+	}
+	testBalance(t, a, user, moneyScale, 0)
 }
 
 func TestPaymentAccountAndIPRateBoundaries(t *testing.T) {

@@ -147,7 +147,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 		if err = a.generationAdmission(c, settings); err != nil {
 			return nil, err
 		}
-		decision, err := a.checkSensitive(ctx, sensitiveInput(input.Prompt, input.Parameters), u.ID)
+		decision, err := a.checkSensitive(ctx, a.DB, sensitiveInput(input.Prompt, input.Parameters), u.ID)
 		if err != nil {
 			return nil, err
 		} else if decision.Action == "block" {
@@ -345,7 +345,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if err = requireNoDebt(ctx, tx, u.ID); err != nil {
 				return err
 			}
-			decision, err := a.checkSensitive(ctx, sensitiveInput(str(task["prompt"]), object(task["parameters"])), u.ID)
+			decision, err := a.checkSensitive(ctx, tx, sensitiveInput(str(task["prompt"]), object(task["parameters"])), u.ID)
 			if err != nil {
 				return err
 			}
@@ -379,7 +379,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 			if _, err = changeWallet(ctx, tx, u.ID, "hold", id+":"+str(run), -price, price, "重试预冻结"); err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,upstream_submitted_at=NULL,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, effectiveMaxAttempts(settings, model))
+			_, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$8,moderation_id=$7,max_attempts=$9,attempt_count=0,upstream_completed=false,upstream_submitted_at=NULL,attempted_key_ids='{}',failed_channel_ids='{}',slot_token=NULL,run=$2,price_micros=$3,price_per_second=$4,seconds=$5,group_discount=$6,billed_micros=NULL,calculated_micros=NULL,partial_text='',stream_sequence=0,first_token_at=NULL,channel_id=NULL,channel_snapshot=NULL,upstream_task_id=NULL,upstream_model=NULL,worker_token=NULL,error_code=NULL,error_message=NULL,queued_at=now(),available_at=now(),started_at=NULL,finished_at=NULL,deadline=NULL WHERE id=$1", id, run, price, pricing["pricePerSecond"], pricing["seconds"], pricing["groupDiscount"], moderationID, status, effectiveMaxAttempts(settings, model))
 			return err
 		})
 		if err != nil {

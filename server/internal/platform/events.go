@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -91,11 +92,18 @@ func (a *App) batchEvents(c *gin.Context) {
 		fail(c, err)
 		return
 	}
+	if !a.acquireStream(u.ID) {
+		fail(c, problem(429, "too_many_streams", "同时打开的实时连接过多，请稍后重试"))
+		return
+	}
+	defer a.releaseStream(u.ID)
 	changed := a.addSink(id)
 	defer a.removeSink(id, changed)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(c.Writer)
+	arm := func() { _ = controller.SetWriteDeadline(time.Now().Add(streamWriteTimeout)) }
 	ticker := time.NewTicker(queuePoll)
 	defer ticker.Stop()
 	var lastSessionCheck time.Time
@@ -104,8 +112,9 @@ func (a *App) batchEvents(c *gin.Context) {
 	for {
 		if time.Since(lastSessionCheck) >= textSessionInterval {
 			if _, err := a.loadUser(c); err != nil {
+				arm()
 				c.SSEvent("expired", gin.H{})
-				c.Writer.Flush()
+				_ = controller.Flush()
 				return
 			}
 			lastSessionCheck = time.Now()
@@ -115,12 +124,16 @@ func (a *App) batchEvents(c *gin.Context) {
 			refresh = false
 			value, err := a.batchDetail(ctx, id, u.ID)
 			if err != nil {
+				arm()
 				c.SSEvent("unavailable", gin.H{})
-				c.Writer.Flush()
+				_ = controller.Flush()
 				return
 			}
+			arm()
 			c.SSEvent("snapshot", value)
-			c.Writer.Flush()
+			if controller.Flush() != nil {
+				return
+			}
 			done := true
 			for _, task := range value.(gin.H)["tasks"].([]Row) {
 				status := str(task["status"])
@@ -141,8 +154,10 @@ func (a *App) batchEvents(c *gin.Context) {
 		case <-changed:
 			refresh = true
 		case <-ticker.C:
-			_, _ = c.Writer.Write([]byte(": ping\n\n"))
-			c.Writer.Flush()
+			arm()
+			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil || controller.Flush() != nil {
+				return
+			}
 		}
 	}
 }

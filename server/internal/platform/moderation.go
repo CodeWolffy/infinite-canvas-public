@@ -59,9 +59,13 @@ func (a *App) moderationRoutes(admin *gin.RouterGroup) {
 			FROM moderation_reviews r JOIN users u ON u.id=r.user_id LEFT JOIN users reviewer ON reviewer.id=r.reviewed_by
 			WHERE ($1='' OR r.status=$1) ORDER BY r.created_at DESC,r.id LIMIT $2 OFFSET $3`, c.Query("status"), limit, offset)
 		for _, item := range items {
-			for key, value := range object(item["requestSnapshot"]) {
+			snapshot := object(item["requestSnapshot"])
+			item["prompt"], item["capability"], item["modelDisplayName"], item["taskCount"] = "", "", "", 0
+			for key, value := range snapshot {
 				item[key] = value
 			}
+			item["parameters"] = object(item["parameters"])
+			item["snapshotExpired"] = len(snapshot) == 0 || snapshot["snapshotExpired"] == true
 			delete(item, "requestSnapshot")
 			item["frozen"] = money(integer(item["frozenMicros"]))
 			delete(item, "frozenMicros")

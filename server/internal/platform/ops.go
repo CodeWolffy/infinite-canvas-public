@@ -14,7 +14,9 @@ const (
 	checkRetentionDays        = 30
 	notificationRetentionDays = 90
 	auditRetentionDays        = 365
-	lowBalanceMicros          = moneyScale
+	// contentRetentionDays 是不可重试任务输入、中间结果与已完成审核正文的保留期。
+	contentRetentionDays = 90
+	lowBalanceMicros     = moneyScale
 )
 
 func queryTime(c *gin.Context, key string) (*time.Time, error) {
@@ -96,7 +98,7 @@ func (a *App) notifySecurity(ctx context.Context, q querier, userID, key, title,
 
 func (a *App) notifyLogin(ctx context.Context, q querier, userID, token, ip, agent string) error {
 	var known bool
-	if err := q.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=$1 AND token_hash<>$2 AND revoked_at IS NULL AND expires_at>now() AND ip=$3 AND user_agent=$4)", userID, hash(token), ip, agent).Scan(&known); err != nil || known {
+	if err := q.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=$1 AND token_hash<>$2 AND revoked_at IS NULL AND expires_at>now() AND created_at>now()-($5*interval '1 day') AND ip=$3 AND user_agent=$4)", userID, hash(token), ip, agent, sessionAbsoluteDays).Scan(&known); err != nil || known {
 		return err
 	}
 	return a.notifySecurity(ctx, q, userID, "login:"+hash(token), "账号已在新设备登录", "IP："+ip+"\n设备："+agent)

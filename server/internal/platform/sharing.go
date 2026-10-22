@@ -27,8 +27,11 @@ func shareTargetAccess(ctx context.Context, q querier, kind, targetID, userID st
 	return nil
 }
 
+// shareLifetimeDays 是分享链接的有效期；到期后重新生成即可，避免 token 泄露后永久可读。
+const shareLifetimeDays = 90
+
 func shareView(row Row) Row {
-	return Row{"token": row["token"], "url": "/s/" + str(row["token"]), "createdAt": row["createdAt"]}
+	return Row{"token": row["token"], "url": "/s/" + str(row["token"]), "createdAt": row["createdAt"], "expiresAt": row["expiresAt"]}
 }
 
 // publicCanvasSnapshot 只移除画布助手私有对话，不改动源画布的快照。
@@ -48,7 +51,7 @@ func (a *App) activeShare(ctx context.Context, token string) (Row, error) {
 	if len(token) < 32 || len(token) > 128 {
 		return nil, problem(404, "share_not_found", "分享链接不存在或已撤销")
 	}
-	share, err := one(ctx, a.DB, "SELECT kind,target_id FROM share_links WHERE token=$1 AND revoked_at IS NULL", token)
+	share, err := one(ctx, a.DB, "SELECT kind,target_id FROM share_links WHERE token=$1 AND revoked_at IS NULL AND expires_at>now()", token)
 	if err != nil {
 		return nil, problem(404, "share_not_found", "分享链接不存在或已撤销")
 	}
@@ -73,7 +76,7 @@ func (a *App) shareRoutes(api *gin.RouterGroup) {
 			if err := shareTargetAccess(ctx, a.DB, kind, id, currentUser(c).ID); err != nil {
 				return nil, err
 			}
-			share, err := one(ctx, a.DB, "SELECT token,created_at FROM share_links WHERE kind=$1 AND target_id=$2 AND revoked_at IS NULL", kind, id)
+			share, err := one(ctx, a.DB, "SELECT token,created_at,expires_at FROM share_links WHERE kind=$1 AND target_id=$2 AND revoked_at IS NULL AND expires_at>now()", kind, id)
 			if errors.Is(err, notFound) {
 				return gin.H{"share": nil}, nil
 			}
@@ -92,13 +95,17 @@ func (a *App) shareRoutes(api *gin.RouterGroup) {
 			if err := shareTargetAccess(ctx, a.DB, kind, id, u.ID); err != nil {
 				return nil, err
 			}
-			share, err := one(ctx, a.DB, "SELECT token,created_at FROM share_links WHERE kind=$1 AND target_id=$2 AND revoked_at IS NULL", kind, id)
+			// 过期链接先撤销，否则「同一资源只能有一条未撤销分享」的唯一索引会挡住重新生成。
+			if _, err := a.DB.Exec(ctx, "UPDATE share_links SET revoked_at=now() WHERE kind=$1 AND target_id=$2 AND revoked_at IS NULL AND expires_at<=now()", kind, id); err != nil {
+				return nil, err
+			}
+			share, err := one(ctx, a.DB, "SELECT token,created_at,expires_at FROM share_links WHERE kind=$1 AND target_id=$2 AND revoked_at IS NULL AND expires_at>now()", kind, id)
 			if errors.Is(err, notFound) {
 				token, err := randomToken()
 				if err != nil {
 					return nil, err
 				}
-				share, err = one(ctx, a.DB, "INSERT INTO share_links(user_id,kind,target_id,token) VALUES($1,$2,$3,$4) RETURNING token,created_at", u.ID, kind, id, token)
+				share, err = one(ctx, a.DB, "INSERT INTO share_links(user_id,kind,target_id,token,expires_at) VALUES($1,$2,$3,$4,now()+make_interval(days=>$5::int)) RETURNING token,created_at,expires_at", u.ID, kind, id, token, shareLifetimeDays)
 			}
 			if err != nil {
 				return nil, err
@@ -169,8 +176,10 @@ func (a *App) publicShareRoutes(r *gin.Engine) {
 		if str(share["kind"]) == "canvas" {
 			var project Row
 			project, err = one(ctx, a.DB, "SELECT snapshot FROM canvas_projects WHERE id=$1", share["targetId"])
-			if err == nil {
-				allowed = slices.Contains(extractMediaIDs(publicCanvasSnapshot(project["snapshot"])), mediaID)
+			if err == nil && slices.Contains(extractMediaIDs(publicCanvasSnapshot(project["snapshot"])), mediaID) {
+				// 快照内容不作为唯一授权依据：必须同时命中服务端写入的引用表，
+				// 防止客户端夹带字段绕过。
+				err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM media_references WHERE owner_kind='canvas' AND owner_id=$1 AND media_id=$2)", share["targetId"], mediaID).Scan(&allowed)
 			}
 		} else {
 			err = a.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND media_id=$2)", share["targetId"], mediaID).Scan(&allowed)

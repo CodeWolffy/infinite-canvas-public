@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime"
 	"net"
 	"net/mail"
@@ -71,8 +72,13 @@ func (a *App) notification(ctx context.Context, q querier, userID, eventKey, kin
 	if err != nil || result.RowsAffected() == 0 {
 		return err
 	}
+	// 邮件只是站内通知的补充：SMTP 配置或入队失败不能回滚资金、任务等业务事务。
 	config, err := a.mailConfig(ctx, q)
-	if err != nil || !config.Enabled {
+	if err != nil {
+		slog.Warn("读取邮件配置失败，仅保留站内通知", "error", err)
+		return nil
+	}
+	if !config.Enabled {
 		return nil
 	}
 	users, err := rows(ctx, q, "SELECT email FROM users WHERE status='active' AND email_verified_at IS NOT NULL AND (($1='' AND role='admin') OR id::text=$1)", userID)
@@ -81,7 +87,8 @@ func (a *App) notification(ctx context.Context, q querier, userID, eventKey, kin
 	}
 	for _, u := range users {
 		if err = a.queueMail(ctx, q, str(u["email"]), title, content); err != nil {
-			return err
+			slog.Warn("邮件入队失败，仅保留站内通知", "error", err)
+			return nil
 		}
 	}
 	return nil

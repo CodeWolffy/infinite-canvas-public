@@ -68,8 +68,10 @@ func main() {
 		slog.Error("平台启动失败", "error", err)
 		os.Exit(1)
 	}
-	server := &http.Server{Addr: app.Config.Address, Handler: app.Router(), ReadHeaderTimeout: app.Config.HeaderTimeout, IdleTimeout: 120 * time.Second}
+	// ReadHeaderTimeout 只覆盖读取请求头的等待时间；480 秒是任务执行租期，不能复用为 HTTP 头超时。
+	server := &http.Server{Addr: app.Config.Address, Handler: app.Router(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	app.StartWorkers(ctx)
+	drained := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), app.Config.ShutdownGrace)
@@ -77,10 +79,18 @@ func main() {
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("HTTP 服务未能优雅关闭", "error", err)
 		}
+		close(drained)
 	}()
 	slog.Info("Go 创作平台已启动", "address", app.Config.Address)
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("HTTP 服务停止", "error", err)
+	}
+	// 等 HTTP 连接排空后再关闭数据库与 Redis，否则在途请求会撞上已关闭的连接池。
+	if ctx.Err() != nil {
+		select {
+		case <-drained:
+		case <-time.After(app.Config.ShutdownGrace):
+		}
 	}
 	app.Close()
 }

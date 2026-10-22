@@ -262,7 +262,8 @@ func (a *App) authSecurityRoutes(r *gin.Engine) {
 			if err != nil {
 				return err
 			}
-			return a.queueMail(ctx, tx, email, "重置无限画布密码", "请在 30 分钟内打开链接设置新密码。链接仅可使用一次；若非本人操作请忽略。\n\n"+a.Config.PublicURL+"/reset-password?token="+url.QueryEscape(token))
+			// token 放在片段（fragment）里：浏览器不会把它发给服务器，不会进入访问日志或代理日志。
+			return a.queueMail(ctx, tx, email, "重置无限画布密码", "请在 30 分钟内打开链接设置新密码。链接仅可使用一次；若非本人操作请忽略。\n\n"+a.Config.PublicURL+"/reset-password#token="+url.QueryEscape(token))
 		})
 		return gin.H{"message": "如果该邮箱已绑定并验证，你将收到重置链接。"}, err
 	}))
@@ -390,7 +391,7 @@ func (a *App) userSecurityRoutes(api *gin.RouterGroup) {
 			if err != nil {
 				return err
 			}
-			return a.queueMail(ctx, tx, email, "验证无限画布邮箱", "请在 30 分钟内打开链接完成邮箱绑定。链接仅可使用一次。\n\n"+a.Config.PublicURL+"/verify-email?token="+url.QueryEscape(token))
+			return a.queueMail(ctx, tx, email, "验证无限画布邮箱", "请在 30 分钟内打开链接完成邮箱绑定。链接仅可使用一次。\n\n"+a.Config.PublicURL+"/verify-email#token="+url.QueryEscape(token))
 		})
 		return gin.H{"message": "验证邮件已提交发送，请检查邮箱。"}, err
 	}))
@@ -460,7 +461,7 @@ func (a *App) userSecurityRoutes(api *gin.RouterGroup) {
 			if _, err = tx.Exec(ctx, "UPDATE users SET encrypted_totp_secret=encrypted_totp_pending,encrypted_totp_pending=NULL,totp_pending_at=NULL,totp_last_step=$2,mfa_recovery_hash=$3 WHERE id=$1", u.ID, step, hash(recovery)); err != nil {
 				return err
 			}
-			cookie, _ := c.Cookie(a.Config.CookieName)
+			cookie, _ := c.Cookie(a.cookieName())
 			if _, err = tx.Exec(ctx, "UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND token_hash<>$2", u.ID, hash(cookie)); err != nil {
 				return err
 			}
@@ -504,8 +505,8 @@ func (a *App) userSecurityRoutes(api *gin.RouterGroup) {
 		return nil, err
 	}))
 	api.GET("/user/security/sessions", respond(func(c *gin.Context) (any, error) {
-		cookie, _ := c.Cookie(a.Config.CookieName)
-		items, err := rows(c.Request.Context(), a.DB, "SELECT id,ip,user_agent,created_at,expires_at,token_hash=$2 AS current FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC", currentUser(c).ID, hash(cookie))
+		cookie, _ := c.Cookie(a.cookieName())
+		items, err := rows(c.Request.Context(), a.DB, "SELECT id,ip,user_agent,created_at,LEAST(expires_at,created_at+($3*interval '1 day')) AS expires_at,token_hash=$2 AS current FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() AND created_at>now()-($3*interval '1 day') ORDER BY created_at DESC", currentUser(c).ID, hash(cookie), sessionAbsoluteDays)
 		return gin.H{"sessions": items}, err
 	}))
 	api.DELETE("/user/security/sessions/:id", respond(func(c *gin.Context) (any, error) {
@@ -513,7 +514,7 @@ func (a *App) userSecurityRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		cookie, _ := c.Cookie(a.Config.CookieName)
+		cookie, _ := c.Cookie(a.cookieName())
 		ctx, u := c.Request.Context(), currentUser(c)
 		var current bool
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
@@ -528,7 +529,7 @@ func (a *App) userSecurityRoutes(api *gin.RouterGroup) {
 		return gin.H{"current": current}, err
 	}))
 	api.POST("/user/security/sessions/revoke-others", respond(func(c *gin.Context) (any, error) {
-		cookie, _ := c.Cookie(a.Config.CookieName)
+		cookie, _ := c.Cookie(a.cookieName())
 		ctx, u := c.Request.Context(), currentUser(c)
 		err := pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND token_hash<>$2", u.ID, hash(cookie)); err != nil {

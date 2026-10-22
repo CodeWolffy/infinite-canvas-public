@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -57,8 +58,10 @@ func (a *App) creditReferral(ctx context.Context, tx pgx.Tx, userID, orderID str
 		return err
 	}
 	percent, err := boundedDecimal(settings.ReferralPercent, 19, 6)
-	if err != nil || percent.IsNegative() {
-		return problem(503, "invalid_referral_settings", "邀请返利比例配置不正确，请联系管理员")
+	if err != nil || percent.IsNegative() || percent.GreaterThan(decimal.NewFromInt(100)) {
+		// 配置异常不应回滚真实充值入账，只跳过本笔返利并告警。
+		slog.Warn("邀请返利比例配置不正确，已跳过本笔返利", "order", orderID, "error", str(err))
+		return nil
 	}
 	amount, err := roundedMicros(decimal.NewFromInt(paidMicros).Mul(percent).Shift(-2).Truncate(0))
 	if err != nil || amount == 0 {

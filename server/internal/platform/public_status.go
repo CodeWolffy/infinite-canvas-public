@@ -1,11 +1,34 @@
 package platform
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 )
 
+// statusCacheTTL 是模型状态页的缓存时间：聚合查询覆盖 24 小时任务，避免每次请求都重算。
+const statusCacheTTL = 60 * time.Second
+
+func (a *App) cachedStatus() (any, bool) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if a.statusCache == nil || time.Since(a.statusAt) >= statusCacheTTL {
+		return nil, false
+	}
+	return a.statusCache, true
+}
+
+func (a *App) storeStatus(value any) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	a.statusCache, a.statusAt = value, time.Now()
+}
+
 func (a *App) publicStatus(c *gin.Context) (any, error) {
 	c.Header("Cache-Control", "no-store")
+	if cached, ok := a.cachedStatus(); ok {
+		return cached, nil
+	}
 	ctx := c.Request.Context()
 	items, err := rows(ctx, a.DB, `WITH health AS (
 		SELECT b.model_id,b.channel_id,c.capability,
@@ -64,5 +87,7 @@ func (a *App) publicStatus(c *gin.Context) (any, error) {
 			item["taskCount"] = totals[id]
 		}
 	}
-	return gin.H{"models": items}, nil
+	result := gin.H{"models": items}
+	a.storeStatus(result)
+	return result, nil
 }

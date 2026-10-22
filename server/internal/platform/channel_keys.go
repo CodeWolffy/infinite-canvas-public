@@ -74,7 +74,7 @@ func (a *App) selectChannelKey(ctx context.Context, ch *channel, excluded []stri
 			WHERE channel_id=$1 AND (status='active' OR ($3 AND disabled_reason='authentication'))
 			AND NOT (id=ANY(coalesce($2::text[]::uuid[],'{}')))
 			ORDER BY (status='active') DESC,CASE WHEN $4='random' THEN random() ELSE 0 END,last_used_at NULLS FIRST,id
-			LIMIT 1 FOR UPDATE SKIP LOCKED`, ch.ID, excluded, probe, ch.KeyStrategy)
+			LIMIT 1 FOR UPDATE`, ch.ID, excluded, probe, ch.KeyStrategy)
 		if errors.Is(err, notFound) {
 			return &upstreamError{Category: "no_key", Message: "渠道暂无可用密钥"}
 		}

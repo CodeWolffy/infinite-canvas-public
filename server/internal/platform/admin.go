@@ -53,6 +53,10 @@ func publicModelRows(items []Row) []Row {
 }
 func publicChannel(row Row) Row {
 	row["apiKeyConfigured"] = integer(row["keyCount"]) > 0
+	// 监测租约令牌属于内部调度状态，只回「是否检测中」。
+	row["checking"] = row["monitorToken"] != nil
+	delete(row, "monitorToken")
+	delete(row, "monitorDeadline")
 	return row
 }
 
@@ -270,6 +274,43 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		user, err := scanUser(a.DB.QueryRow(ctx, "SELECT "+userColumns+" FROM users u LEFT JOIN user_groups g ON g.id=u.group_id WHERE u.id=$1", id))
 		return gin.H{"user": user}, err
 	}))
+	// 用户丢失验证器与恢复码时的人工出口；与重置密码同级二次验证并撤销全部会话。
+	admin.POST("/users/:id/reset-mfa", respond(func(c *gin.Context) (any, error) {
+		id, err := idParam(c, "id")
+		if err != nil {
+			return nil, err
+		}
+		input, err := body[struct {
+			SecurityProof securityProof `json:"securityProof"`
+		}](c)
+		if err != nil {
+			return nil, err
+		}
+		ctx := c.Request.Context()
+		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
+			result, err := tx.Exec(ctx, "UPDATE users SET encrypted_totp_secret=NULL,encrypted_totp_pending=NULL,mfa_recovery_hash=NULL,totp_last_step=-1,updated_at=now() WHERE id=$1", id)
+			if err != nil {
+				return err
+			}
+			if result.RowsAffected() != 1 {
+				return notFound
+			}
+			if _, err = tx.Exec(ctx, "UPDATE sessions SET revoked_at=now() WHERE user_id=$1", id); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, "DELETE FROM auth_tokens WHERE user_id=$1", id); err != nil {
+				return err
+			}
+			if err = a.audit(ctx, tx, currentUser(c).ID, "user.mfa-reset", id, gin.H{}); err != nil {
+				return err
+			}
+			return a.notifySecurity(ctx, tx, id, "mfa-reset:"+id+":"+fmt.Sprint(time.Now().UnixNano()), "管理员已重置你的两步验证", "请使用密码登录后重新绑定验证器；其他设备会话已退出。")
+		})
+		return nil, err
+	}))
 	admin.GET("/models", respond(func(c *gin.Context) (any, error) {
 		items, err := rows(c.Request.Context(), a.DB, "SELECT * FROM models WHERE deleted_at IS NULL ORDER BY sort_order,created_at DESC")
 		return gin.H{"models": publicModelRows(items)}, err
@@ -440,7 +481,10 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = a.DB.Exec(c.Request.Context(), "UPDATE models SET deleted_at=now(),status='disabled' WHERE id=$1", id)
+		result, err := a.DB.Exec(c.Request.Context(), "UPDATE models SET deleted_at=now(),status='disabled' WHERE id=$1 AND deleted_at IS NULL", id)
+		if err == nil && result.RowsAffected() > 0 {
+			err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "model.delete", id, gin.H{})
+		}
 		return nil, err
 	}))
 	admin.GET("/models/:id/channels", respond(func(c *gin.Context) (any, error) {
@@ -484,7 +528,10 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 			} else {
 				_, err = tx.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, input.UpstreamModel, input.Priority, input.Weight, input.Enabled)
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			return a.audit(ctx, tx, currentUser(c).ID, "model.binding", id, gin.H{"channelId": channelID, "upstreamModel": input.UpstreamModel, "priority": input.Priority, "weight": input.Weight, "enabled": input.Enabled})
 		})
 		return gin.H{"saved": true}, err
 	}))
@@ -520,14 +567,14 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 				if m == "" {
 					continue
 				}
-				if len(m) > 160 {
-					m = m[:160]
+				if runes := []rune(m); len(runes) > 160 {
+					m = string(runes[:160])
 				}
 				if _, err := tx.Exec(ctx, "INSERT INTO model_channels(model_id,channel_id,upstream_model,priority,weight,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(model_id,channel_id,upstream_model) DO UPDATE SET priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,updated_at=now()", id, channelID, m, input.Priority, input.Weight, input.Enabled); err != nil {
 					return err
 				}
 			}
-			return nil
+			return a.audit(ctx, tx, currentUser(c).ID, "model.binding-batch", id, gin.H{"channelId": channelID, "count": len(input.UpstreamModels), "priority": input.Priority, "weight": input.Weight, "enabled": input.Enabled})
 		})
 		return gin.H{"saved": true}, err
 	}))
@@ -540,7 +587,10 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = a.DB.Exec(c.Request.Context(), "DELETE FROM model_channels WHERE model_id=$1 AND id=$2", id, bindingID)
+		result, err := a.DB.Exec(c.Request.Context(), "DELETE FROM model_channels WHERE model_id=$1 AND id=$2", id, bindingID)
+		if err == nil && result.RowsAffected() > 0 {
+			err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "model.binding-delete", id, gin.H{"bindingId": bindingID})
+		}
 		return nil, err
 	}))
 	admin.DELETE("/models/:id/channels/:channelId", respond(func(c *gin.Context) (any, error) {
@@ -552,7 +602,10 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = a.DB.Exec(c.Request.Context(), "DELETE FROM model_channels WHERE model_id=$1 AND channel_id=$2", id, channelID)
+		result, err := a.DB.Exec(c.Request.Context(), "DELETE FROM model_channels WHERE model_id=$1 AND channel_id=$2", id, channelID)
+		if err == nil && result.RowsAffected() > 0 {
+			err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "model.channel-unbind", id, gin.H{"channelId": channelID})
+		}
 		return nil, err
 	}))
 	a.channelRoutes(admin)
@@ -648,7 +701,7 @@ func (a *App) channelRoutes(admin *gin.RouterGroup) {
 			TaskAdapter     string `json:"taskAdapter"`
 			EndpointPath    string `json:"endpointPath" binding:"max=200"`
 			Status          string `json:"status" binding:"required,oneof=active disabled needs_attention"`
-			TimeoutMS       int    `json:"timeoutMs" binding:"required,min=1000"`
+			TimeoutMS       int    `json:"timeoutMs" binding:"required,min=1000,max=600000"`
 			MaxConcurrency  int    `json:"maxConcurrency" binding:"required,min=1"`
 			CooldownSeconds int    `json:"cooldownSeconds" binding:"min=0"`
 			SecurityProof   *securityProof `json:"securityProof"`
@@ -799,7 +852,7 @@ func (a *App) userRoutes(api *gin.RouterGroup) {
 		u, err := scanUser(a.DB.QueryRow(c.Request.Context(), "UPDATE users SET display_name=$2,updated_at=now() WHERE id=$1 RETURNING id,username,display_name,role,status,must_change_password,last_login_at,created_at,password_hash,group_id,(SELECT name FROM user_groups g WHERE g.id=users.group_id) AS group_name", currentUser(c).ID, strings.TrimSpace(input.DisplayName)))
 		return gin.H{"user": u}, err
 	}))
-	api.GET("/user/logs", respond(func(c *gin.Context) (any, error) { return a.listLogs(c, false) }))
+	api.GET("/user/logs", a.rateLimit("logs", 60, time.Minute), respond(func(c *gin.Context) (any, error) { return a.listLogs(c, false) }))
 	api.GET("/user/stats", respond(func(c *gin.Context) (any, error) {
 		ctx := c.Request.Context()
 		id := currentUser(c).ID
@@ -851,21 +904,30 @@ func (a *App) userRoutes(api *gin.RouterGroup) {
 func logFilter(c *gin.Context, admin bool, defaultDays int) (string, []any) {
 	where := "true"
 	args := []any{}
-	add := func(column, value string) {
-		if value != "" {
-			args = append(args, value)
-			where += " AND " + column + "=$" + str(len(args))
+	add := func(column string, uid bool, value string) {
+		if value == "" {
+			return
+		}
+		// 编号列保持 uuid 类型比较才能命中索引；非法编号按「无匹配」处理，不报 500。
+		if uid && !validID(value) {
+			where += " AND false"
+			return
+		}
+		args = append(args, value)
+		where += " AND " + column + "=$" + str(len(args))
+		if uid {
+			where += "::uuid"
 		}
 	}
 	if admin {
-		add("l.user_id::text", c.Query("userId"))
+		add("l.user_id", true, c.Query("userId"))
 	} else {
-		add("l.user_id::text", currentUser(c).ID)
+		add("l.user_id", true, currentUser(c).ID)
 	}
-	add("l.model_id::text", c.Query("modelId"))
-	add("l.channel_id::text", c.Query("channelId"))
-	add("l.type", c.Query("type"))
-	add("l.status", c.Query("status"))
+	add("l.model_id", true, c.Query("modelId"))
+	add("l.channel_id", true, c.Query("channelId"))
+	add("l.type", false, c.Query("type"))
+	add("l.status", false, c.Query("status"))
 	for _, rangeField := range []struct{ key, operator string }{{"from", ">="}, {"to", "<="}} {
 		if raw := c.Query(rangeField.key); raw != "" {
 			if t, err := time.Parse(time.RFC3339, raw); err == nil {
@@ -888,13 +950,22 @@ var fundLogKinds = []string{"recharge", "checkin", "referral", "grant", "adjustm
 const userLogSelect = "SELECT l.id,'request' AS source,l.type,l.task_id,l.status,l.http_status,l.error_category,l.error_message,l.billed_amount,l.first_token_ms,l.output_tokens,l.started_at,l.finished_at,l.duration_ms,l.model_display_name_snapshot AS model_display_name,CASE WHEN l.type='text' THEN l.task_id END AS text_request_id,t.prompt_tokens,t.cached_tokens,t.completion_tokens,NULL AS delta_balance,NULL AS delta_frozen,NULL AS balance_after,NULL AS frozen_after,NULL AS note,NULL AS reference"
 const fundLogSelect = "SELECT e.id,'wallet' AS source,e.kind AS type,NULL AS task_id,NULL AS status,NULL AS http_status,NULL AS error_category,NULL AS error_message,NULL AS billed_amount,NULL AS first_token_ms,NULL AS output_tokens,e.created_at AS started_at,NULL AS finished_at,NULL AS duration_ms,NULL AS model_display_name,NULL AS text_request_id,NULL AS prompt_tokens,NULL AS cached_tokens,NULL AS completion_tokens,e.delta_balance,e.delta_frozen,e.balance_after,e.frozen_after,e.note,e.reference"
 
+// defaultLogDays 给用户端日志加默认时间窗，避免按用户过滤时聚合整段时间线；
+// 管理端需要跨期排查，保持无默认窗口。
+func defaultLogDays(admin bool, logDays int) int {
+	if admin {
+		return 0
+	}
+	return logDays
+}
+
 func (a *App) listLogs(c *gin.Context, admin bool) (any, error) {
 	ctx := c.Request.Context()
 	limit, offset := pagination(c)
 	if !admin && slices.Contains(fundLogKinds, c.Query("type")) {
 		return a.listFundLogs(c, limit, offset)
 	}
-	where, args := logFilter(c, admin, 0)
+	where, args := logFilter(c, admin, defaultLogDays(admin, a.Config.LogDays))
 	totals, err := one(ctx, a.DB, "SELECT count(*)::bigint AS total,count(*) FILTER(WHERE l.status='succeeded')::int AS succeeded,count(*) FILTER(WHERE l.status='failed')::int AS failed,count(*) FILTER(WHERE l.status='running')::int AS running,coalesce(sum(l.billed_amount),0)::text AS billed_amount FROM request_logs l WHERE "+where, args...)
 	if err != nil {
 		return nil, err

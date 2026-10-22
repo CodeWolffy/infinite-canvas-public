@@ -98,10 +98,10 @@ export default function PlatformSettingsPage() {
                             <Form.Item
                                 name="referralPercent"
                                 label="好友充值返利比例（%）"
-                                extra="例如填写 10，好友充值 100 元返利 10 元。注册、兑换码和签到不返利；关闭期间的充值不补发。"
+                                extra="例如填写 10，好友充值 100 元返利 10 元；上限 100%。注册、兑换码和签到不返利；关闭期间的充值不补发。"
                                 rules={[{ required: true }]}
                             >
-                                <InputNumber<string> stringMode min="0" className="!w-full" />
+                                <InputNumber<string> stringMode min="0" max="100" className="!w-full" />
                             </Form.Item>
                         </div>
                     </div>

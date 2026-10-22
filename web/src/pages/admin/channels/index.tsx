@@ -113,7 +113,7 @@ export default function AdminChannelsPage() {
     }, [editing, form, category.value]);
 
     const columns: TableColumnsType<AdminChannel> = [
-        { title: "主动检测", key: "monitoring", width: 116, render: (_, channel) => <div><Button type="link" size="small" onClick={() => setMonitoring(channel)}>{channel.monitorStatus === "healthy" ? "检测正常" : channel.monitorStatus === "failed" ? "检测异常" : "配置检测"}</Button>{channel.monitorToken ? <div className="text-xs text-muted-foreground">检测中</div> : channel.modelChanges ? <div className="text-xs text-muted-foreground">模型列表有变更</div> : null}</div> },
+        { title: "主动检测", key: "monitoring", width: 116, render: (_, channel) => <div><Button type="link" size="small" onClick={() => setMonitoring(channel)}>{channel.monitorStatus === "healthy" ? "检测正常" : channel.monitorStatus === "failed" ? "检测异常" : "配置检测"}</Button>{channel.checking ? <div className="text-xs text-muted-foreground">检测中</div> : channel.modelChanges ? <div className="text-xs text-muted-foreground">模型列表有变更</div> : null}</div> },
         { title: "渠道", key: "channel", width: 120, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
         { title: "接口地址", dataIndex: "baseUrl", width: 130, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
         { title: "密钥", key: "secret", width: 108, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><KeyRound className="size-3.5" />{channel.activeKeyCount} / {channel.keyCount} 可用</span> : <Tag color="orange">未配置</Tag> },
@@ -176,7 +176,7 @@ export default function AdminChannelsPage() {
                     {formCapability === "video" ? <Form.Item name="taskAdapter" label="视频任务适配器" extra="按接口协议选择已接入的视频生成方式。"><Select loading={adaptersQuery.isLoading} options={[{ value: "", label: "按渠道协议自动选择" }, ...(adaptersQuery.data?.adapters || []).filter((adapter) => adapter.capability === "video" && adapter.protocol === protocol).map((adapter) => ({ value: adapter.id, label: adapter.name }))]} /></Form.Item> : null}
                     {formCapability === "video" && adaptersQuery.error ? <Alert className="mb-4" type="error" showIcon title={adaptersQuery.error.message} /> : null}
                     <div className="grid grid-cols-3 gap-4">
-                        <Form.Item name="timeoutSeconds" label="超时（秒）" extra={formCapability === "video" ? "按上游视频生成耗时配置。" : undefined} rules={[{ required: true }]}><InputNumber className="!w-full" min={1} precision={0} /></Form.Item>
+                        <Form.Item name="timeoutSeconds" label="超时（秒）" extra="最长 600 秒，与反向代理读写超时对齐。" rules={[{ required: true }]}><InputNumber className="!w-full" min={1} max={600} precision={0} /></Form.Item>
                         <Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item>
                         <Form.Item name="cooldownSeconds" label="故障冷却（秒）" tooltip="遇到网络超时、5xx 或频控时渠道暂停调度的时长，0 表示不冷却" rules={[{ required: true }]}><InputNumber className="w-full" min={0} max={86400} precision={0} /></Form.Item>
                     </div>

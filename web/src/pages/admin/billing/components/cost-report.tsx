@@ -6,12 +6,14 @@ import { saveAs } from "file-saver";
 
 import { getAdminChannels, getAdminModels } from "@/services/api/admin-platform";
 import { getCosts, reconcileCost, type CostEntry } from "@/services/api/platform-operations";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import { useUserStore } from "@/stores/use-user-store";
 
 const sources = { unknown: "未知", configured: "配置估算", actual: "已核对" };
 type Filters = { range: [Dayjs, Dayjs]; source?: CostEntry["source"]; modelId?: string; channelId?: string };
 export default function CostReport() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const client = useQueryClient();
     const session = useUserStore((state) => state.sessionVersion);
     const [page, setPage] = useState(1);
@@ -24,7 +26,7 @@ export default function CostReport() {
     const query = useQuery({ queryKey: ["admin", "costs", session, page, params], queryFn: () => getCosts((page - 1) * 50, params) });
     const models = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channels = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
-    const save = useMutation({ mutationFn: (values: { amount: string; note: string }) => reconcileCost(editing!.id, { ...values, amount: String(values.amount) }), onSuccess: () => { setEditing(null); void client.invalidateQueries({ queryKey: ["admin", "costs"] }); message.success("成本已核对，已记录操作依据"); }, onError: (error: Error) => message.error(error.message) });
+    const save = useMutation({ mutationFn: async (values: { amount: string; note: string }) => reconcileCost(editing!.id, { ...values, amount: String(values.amount) }, await requestProof()), onSuccess: () => { setEditing(null); void client.invalidateQueries({ queryKey: ["admin", "costs"] }); message.success("成本已核对，已记录操作依据"); }, onError: (error: Error) => message.error(error.message) });
     const totals = query.data?.totals;
     const entries = query.data?.entries || [];
     const exportRows = () => {

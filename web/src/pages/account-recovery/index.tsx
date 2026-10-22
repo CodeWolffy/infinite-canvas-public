@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Button, Form, Input } from "antd";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
@@ -9,7 +9,11 @@ export default function AccountRecoveryPage() {
     const location = useLocation();
     const [search] = useSearchParams();
     const mode = location.pathname === "/verify-email" ? "email" : location.pathname === "/reset-password" ? "reset" : "request";
-    const token = search.get("token") || "";
+    // 邮件链接把 token 放在片段里，不会发给服务器；读取后立刻从地址栏移除，避免留在历史记录。
+    const token = new URLSearchParams(location.hash.replace(/^#/, "")).get("token") || search.get("token") || "";
+    useEffect(() => {
+        if (window.location.hash) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }, []);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [done, setDone] = useState("");

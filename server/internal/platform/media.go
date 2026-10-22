@@ -111,6 +111,19 @@ func makeSafeClient(allowPrivate bool) *http.Client {
 	}}
 }
 
+// 图片只解码头即可校验尺寸：限制单边与总像素，避免超大像素图进入前端处理链路。
+const (
+	maxImageSide   = 16384
+	maxImagePixels = 40_000_000
+)
+
+// uploadConcurrency 限制同时进行的内存型上传数量：单次最多 MAX_UPLOAD_BYTES，
+// 多个大文件叠加会把容器内存打满。
+const uploadConcurrency = 4
+
+// 上传正文沿用用户确认的 5 分钟总时限；不限制后续媒体入库时间。
+const uploadReadTimeout = 5 * time.Minute
+
 var supportedMedia = map[string]string{"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "video/mp4": "mp4", "video/webm": "webm", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav", "audio/ogg": "ogg", "audio/flac": "flac", "audio/x-flac": "flac", "audio/aac": "aac", "audio/mp4": "m4a", "application/ogg": "ogg"}
 
 func (a *App) storeMedia(ctx context.Context, userID string, data []byte, name string) (Row, error) {
@@ -128,6 +141,9 @@ func (a *App) storeMedia(ctx context.Context, userID string, data []byte, name s
 		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			return nil, problem(415, "invalid_image", "无法解码此图片")
+		}
+		if cfg.Width > maxImageSide || cfg.Height > maxImageSide || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+			return nil, problem(415, "image_too_large", "图片尺寸超出平台限制")
 		}
 		width = &cfg.Width
 		height = &cfg.Height
@@ -373,22 +389,58 @@ func (a *App) mediaRoutes(api *gin.RouterGroup) {
 		return row, nil
 	}))
 	api.POST("/media", a.rateLimit("media", 60, time.Minute), respond(func(c *gin.Context) (any, error) {
+		if a.uploads != nil {
+			select {
+			case a.uploads <- struct{}{}:
+				defer func() { <-a.uploads }()
+			default:
+				return nil, problem(429, "upload_busy", "当前上传任务较多，请稍后重试")
+			}
+		}
+		deadline := time.Now().Add(uploadReadTimeout)
+		controller := http.NewResponseController(c.Writer)
+		if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return nil, err
+		}
+		defer func() {
+			_ = c.Request.Body.Close()
+			_ = controller.SetReadDeadline(time.Time{})
+		}()
+		readTimedOut := func(err error) bool {
+			var failure net.Error
+			return !time.Now().Before(deadline) || errors.As(err, &failure) && failure.Timeout()
+		}
 		reader, err := c.Request.MultipartReader()
 		if err != nil {
 			return nil, problem(400, "file_required", "请选择文件")
 		}
 		part, err := reader.NextPart()
+		if readTimedOut(err) {
+			return nil, problem(408, "upload_timeout", "文件上传超时，请重新上传")
+		}
 		if err != nil || part.FileName() == "" {
 			return nil, problem(400, "file_required", "请选择文件")
 		}
 		defer part.Close()
 		data, err := io.ReadAll(io.LimitReader(part, a.Config.MaxUpload+1))
+		if readTimedOut(err) {
+			return nil, problem(408, "upload_timeout", "文件上传超时，请重新上传")
+		}
 		if err != nil {
 			return nil, err
 		}
 		if int64(len(data)) > a.Config.MaxUpload {
 			return nil, problem(413, "file_too_large", "文件超过上传大小限制")
 		}
+		// 剩余 multipart 正文也受同一时限约束，避免响应前排空正文时再次阻塞。
+		_, err = io.Copy(io.Discard, c.Request.Body)
+		if readTimedOut(err) {
+			return nil, problem(408, "upload_timeout", "文件上传超时，请重新上传")
+		}
+		if err != nil {
+			return nil, err
+		}
+		_ = controller.SetReadDeadline(time.Time{})
 		row, err := a.storeMedia(c.Request.Context(), currentUser(c).ID, data, path.Base(part.FileName()))
 		if err != nil {
 			return nil, err

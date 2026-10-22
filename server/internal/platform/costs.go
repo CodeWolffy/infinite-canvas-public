@@ -229,8 +229,9 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 			return nil, err
 		}
 		input, err := body[struct {
-			Amount string `json:"amount" binding:"required"`
-			Note   string `json:"note" binding:"required"`
+			Amount        string        `json:"amount" binding:"required"`
+			Note          string        `json:"note" binding:"required"`
+			SecurityProof securityProof `json:"securityProof"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -244,6 +245,9 @@ func (a *App) costRoutes(admin *gin.RouterGroup) {
 		}
 		ctx := c.Request.Context()
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
+			if err := a.requireSecurityProof(c, tx, input.SecurityProof); err != nil {
+				return err
+			}
 			before, err := one(ctx, tx, "SELECT amount_micros,source FROM upstream_cost_entries WHERE id=$1 FOR UPDATE", id)
 			if err != nil {
 				return err

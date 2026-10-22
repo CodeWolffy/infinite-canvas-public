@@ -7,6 +7,7 @@ import { saveAs } from "file-saver";
 
 import { createInvitation, getInvitations, setInvitationDisabled, type Invitation } from "@/services/api/billing";
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useSecurityProof } from "@/hooks/use-security-proof";
 import ReferralRecords from "./components/referral-records";
 
 type BatchResult = {
@@ -18,6 +19,7 @@ type BatchResult = {
 
 export default function InvitationsPage() {
     const { message } = App.useApp();
+    const { requestProof } = useSecurityProof();
     const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
     const [batchResult, setBatchResult] = useState<BatchResult | null>(null);
@@ -27,7 +29,7 @@ export default function InvitationsPage() {
     const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin-invitations"] });
 
     const create = useMutation({
-        mutationFn: createInvitation,
+        mutationFn: async (values: { note: string; maxUses: number; count: number; expiresAt?: string }) => createInvitation(values, await requestProof()),
         onSuccess: (data, variables) => {
             const secrets = data.codes && data.codes.length > 0 ? data.codes : (data.code ? [data.code] : []);
             setBatchResult({

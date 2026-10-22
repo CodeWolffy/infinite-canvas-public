@@ -55,8 +55,12 @@ func (a *App) validatePaymentConfig(provider string, c PaymentConfig) error {
 		if err := validateGateway(c.BaseURL); err != nil {
 			return err
 		}
-		if c.PartnerID == "" || c.Key == "" {
+		if c.PartnerID == "" {
 			return bad
+		}
+		// 易支付回调真实性完全依赖这个 MD5 密钥，过短可被暴力枚举。
+		if len(c.Key) < 16 {
+			return problem(400, "invalid_payment_config", "易支付商户密钥长度不能少于 16 位")
 		}
 	case "alipay":
 		if c.AppID == "" || c.SellerID == "" {
@@ -153,6 +157,11 @@ func (a *App) queryPayment(ctx context.Context, order Row, config PaymentConfig)
 		}
 		response, err := safeClient(false).Do(req)
 		if err != nil {
+			// url.Error 带完整查单 URL，必须在错误离开渠道边界前移除商户密钥。
+			var requestErr *url.Error
+			if errors.As(err, &requestErr) {
+				return result, requestErr.Err
+			}
 			return result, err
 		}
 		defer response.Body.Close()

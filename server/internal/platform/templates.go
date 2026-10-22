@@ -13,8 +13,13 @@ const templateSummary = "id,title,description,created_at,updated_at,coalesce(jso
 // templateRoutes 挂载模板库接口：用户可浏览模板并一键创建画布；管理员负责维护模板内容。
 func (a *App) templateRoutes(api *gin.RouterGroup, admin *gin.RouterGroup) {
 	list := respond(func(c *gin.Context) (any, error) {
-		items, err := rows(c.Request.Context(), a.DB, "SELECT "+templateSummary+" FROM canvas_templates ORDER BY created_at DESC,id LIMIT 200")
-		return gin.H{"templates": items}, err
+		limit, offset := paginationWith(c, 200, 500)
+		var total int64
+		if err := a.DB.QueryRow(c.Request.Context(), "SELECT count(*) FROM canvas_templates").Scan(&total); err != nil {
+			return nil, err
+		}
+		items, err := rows(c.Request.Context(), a.DB, "SELECT "+templateSummary+" FROM canvas_templates ORDER BY created_at DESC,id LIMIT $1 OFFSET $2", limit, offset)
+		return gin.H{"templates": items, "total": total}, err
 	})
 	api.GET("/canvas-templates", list)
 	admin.GET("/canvas-templates", list)

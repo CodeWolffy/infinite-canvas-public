@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { App, Button, Input, Modal, Space, Typography } from "antd";
 import { Copy, Link2, Trash2 } from "lucide-react";
+import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 
 import { createShareLink, getShareLink, revokeShareLink, sharePageUrl, type ShareKind, type ShareLink } from "@/services/api/sharing";
@@ -66,6 +67,7 @@ export function ShareDialog({ kind, targetId, open, onClose }: { kind: ShareKind
                         <div className="flex items-center justify-between">
                             <Typography.Text type="secondary" className="text-xs">
                                 {t("share.readOnly")}
+                                {share.expiresAt ? ` · ${t("share.expiresAt", { date: dayjs(share.expiresAt).format("YYYY-MM-DD HH:mm") })}` : ""}
                             </Typography.Text>
                             <Button danger size="small" icon={<Trash2 className="size-3.5" />} loading={revoking} onClick={() => void revoke()}>
                                 {t("share.revoke")}

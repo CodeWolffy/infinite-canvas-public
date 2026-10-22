@@ -17,7 +17,35 @@ import (
 const (
 	textFlushInterval   = 500 * time.Millisecond
 	textSessionInterval = 30 * time.Second
+	// streamWriteTimeout 是单次写 SSE 的超时：客户端不读取时写入会一直阻塞，
+	// 必须由写超时断开，否则 goroutine、ticker 与订阅者会被永久占用。
+	streamWriteTimeout = 30 * time.Second
+	maxStreamsPerUser  = 4
 )
+
+// acquireStream/releaseStream 限制单个用户的并发实时连接数。
+func (a *App) acquireStream(userID string) bool {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streamUsers == nil {
+		a.streamUsers = map[string]int{}
+	}
+	if a.streamUsers[userID] >= maxStreamsPerUser {
+		return false
+	}
+	a.streamUsers[userID]++
+	return true
+}
+
+func (a *App) releaseStream(userID string) {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streamUsers[userID] <= 1 {
+		delete(a.streamUsers, userID)
+		return
+	}
+	a.streamUsers[userID]--
+}
 
 func (a *App) wakeText(id string) {
 	a.streamMu.Lock()
@@ -127,11 +155,19 @@ func (a *App) textEvents(c *gin.Context) {
 		fail(c, err)
 		return
 	}
+	u := currentUser(c)
+	if !a.acquireStream(u.ID) {
+		fail(c, problem(429, "too_many_streams", "同时打开的实时连接过多，请稍后重试"))
+		return
+	}
+	defer a.releaseStream(u.ID)
 	changed := a.addSink(id)
 	defer a.removeSink(id, changed)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(c.Writer)
+	arm := func() { _ = controller.SetWriteDeadline(time.Now().Add(streamWriteTimeout)) }
 	ticker := time.NewTicker(queuePoll)
 	defer ticker.Stop()
 	last := ""
@@ -142,8 +178,9 @@ func (a *App) textEvents(c *gin.Context) {
 	for {
 		if time.Since(lastSessionCheck) >= textSessionInterval {
 			if _, err := a.loadUser(c); err != nil {
+				arm()
 				c.SSEvent("expired", gin.H{})
-				c.Writer.Flush()
+				_ = controller.Flush()
 				return
 			}
 			lastSessionCheck = time.Now()
@@ -153,18 +190,22 @@ func (a *App) textEvents(c *gin.Context) {
 			refresh = false
 			value, err := a.textRequestDetail(c)
 			if err != nil {
+				arm()
 				c.SSEvent("unavailable", gin.H{})
-				c.Writer.Flush()
+				_ = controller.Flush()
 				return
 			}
 			detail := value.(gin.H)
 			request := detail["request"].(Row)
 			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"]) + ":" + str(request["canCancel"])
 			if key != last {
+				arm()
 				c.SSEvent("snapshot", value)
 				last = key
 			}
-			c.Writer.Flush()
+			if controller.Flush() != nil {
+				return
+			}
 			if request["status"] != "reviewing" && request["status"] != "running" && request["status"] != "queued" {
 				return
 			}
@@ -177,8 +218,10 @@ func (a *App) textEvents(c *gin.Context) {
 		case <-changed:
 			refresh = true
 		case <-ticker.C:
-			_, _ = c.Writer.Write([]byte(": ping\n\n"))
-			c.Writer.Flush()
+			arm()
+			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil || controller.Flush() != nil {
+				return
+			}
 		}
 	}
 }

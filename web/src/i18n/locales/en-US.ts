@@ -354,6 +354,7 @@ export default {
         revoke: "Revoke link",
         revoked: "Link revoked; the old URL stops working immediately",
         readOnly: "Read-only",
+        expiresAt: "expires {{date}}",
         loading: "Loading shared content…",
         unavailable: "Share unavailable",
         sharedBy: "Shared by {{name}}",

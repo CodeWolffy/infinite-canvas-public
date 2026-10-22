@@ -302,3 +302,27 @@ func TestAssetCRUDIsolatesOwners(t *testing.T) {
 		t.Fatalf("素材未删除: %d %v", assets, err)
 	}
 }
+
+// 视口保存不经过媒体引用同步，多带字段会变成分享媒体的授权依据，必须白名单拒绝。
+func TestCanvasViewportRejectsExtraFields(t *testing.T) {
+	a := testApp(t)
+	_, cookie := testUser(t, a, 0)
+	router := a.Router()
+	created := testRequest(router, "POST", "/api/canvas-projects", map[string]any{"title": "视口画布", "snapshot": canvasTestSnapshot("")}, cookie)
+	if created.Code != 200 {
+		t.Fatalf("创建画布失败: %d %s", created.Code, created.Body.String())
+	}
+	projectID := str(object(responseRow(t, created)["project"])["id"])
+	rejected := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{
+		"viewport": map[string]any{"x": 1.0, "y": 2.0, "k": 1.0, "mediaId": uuid.NewString()}, "expectedRevision": 0,
+	}, cookie)
+	if rejected.Code != 400 {
+		t.Fatalf("视口夹带字段应拒绝: %d %s", rejected.Code, rejected.Body.String())
+	}
+	accepted := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{
+		"viewport": map[string]any{"x": 1.0, "y": 2.0, "k": 1.0}, "expectedRevision": 0,
+	}, cookie)
+	if accepted.Code != 200 {
+		t.Fatalf("合法视口应保存: %d %s", accepted.Code, accepted.Body.String())
+	}
+}
