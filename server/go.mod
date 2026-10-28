@@ -15,7 +15,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/redis/go-redis/v9 v9.12.1
-	github.com/shopspring/decimal v1.4.0
+	github.com/shopspring/decimal v1.6.0
 	github.com/smartwalle/alipay/v3 v3.2.31
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
