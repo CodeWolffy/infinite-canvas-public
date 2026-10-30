@@ -12,17 +12,23 @@ const templateSummary = "id,title,description,created_at,updated_at,coalesce(jso
 
 // templateRoutes 挂载模板库接口：用户可浏览模板并一键创建画布；管理员负责维护模板内容。
 func (a *App) templateRoutes(api *gin.RouterGroup, admin *gin.RouterGroup) {
-	list := respond(func(c *gin.Context) (any, error) {
-		limit, offset := paginationWith(c, 200, 500)
-		var total int64
-		if err := a.DB.QueryRow(c.Request.Context(), "SELECT count(*) FROM canvas_templates").Scan(&total); err != nil {
-			return nil, err
-		}
-		items, err := rows(c.Request.Context(), a.DB, "SELECT "+templateSummary+" FROM canvas_templates ORDER BY created_at DESC,id LIMIT $1 OFFSET $2", limit, offset)
-		return gin.H{"templates": items, "total": total}, err
-	})
-	api.GET("/canvas-templates", list)
-	admin.GET("/canvas-templates", list)
+	list := func(search bool) gin.HandlerFunc {
+		return respond(func(c *gin.Context) (any, error) {
+			limit, offset := paginationWith(c, 200, 500)
+			where, args := "", []any{}
+			if keyword := strings.TrimSpace(c.Query("keyword")); search && keyword != "" {
+				where, args = " WHERE position(lower($1) IN lower(title || ' ' || coalesce(description,'')))>0", []any{keyword}
+			}
+			var total int64
+			if err := a.DB.QueryRow(c.Request.Context(), "SELECT count(*) FROM canvas_templates"+where, args...).Scan(&total); err != nil {
+				return nil, err
+			}
+			items, err := rows(c.Request.Context(), a.DB, "SELECT "+templateSummary+" FROM canvas_templates"+where+" ORDER BY created_at DESC,id LIMIT $"+str(len(args)+1)+" OFFSET $"+str(len(args)+2), append(args, limit, offset)...)
+			return gin.H{"templates": items, "total": total}, err
+		})
+	}
+	api.GET("/canvas-templates", list(true))
+	admin.GET("/canvas-templates", list(false))
 
 	api.POST("/canvas-templates/:id/use", a.rateLimit("template-use", 60, time.Minute), respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "id")

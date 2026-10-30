@@ -15,6 +15,12 @@ export async function listCanvasTemplates() {
     return (await apiRequest<{ templates: CanvasTemplate[] }>("/api/canvas-templates")).templates;
 }
 
+export async function listCanvasTemplatePage(offset = 0, keyword = "") {
+    const params = new URLSearchParams({ offset: String(offset) });
+    if (keyword.trim()) params.set("keyword", keyword.trim());
+    return await apiRequest<{ templates: CanvasTemplate[]; total: number }>(`/api/canvas-templates?${params}`);
+}
+
 export async function applyCanvasTemplate(id: string) {
     return (await apiRequest<{ project: CanvasProjectDetail }>(`/api/canvas-templates/${id}/use`, { method: "POST" })).project;
 }

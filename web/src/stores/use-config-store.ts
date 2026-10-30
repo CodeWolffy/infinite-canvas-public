@@ -14,6 +14,8 @@ export type ChannelModel = ModelPricing & ModelReasoning & {
     name: string;
     capability: ModelCapability;
     displayName?: string;
+    modelName?: string;
+    description?: string | null;
 };
 
 export type AiConfig = {
@@ -134,7 +136,7 @@ function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
     // Platform models are selected by UUID. Their public identifiers may be
     // shared by variants (for example, standard and 4K models routing to the
     // same upstream model), while the display name remains user-facing.
-    const platformModels: ChannelModel[] = models.map((model) => ({ ...model, name: model.id }));
+    const platformModels: ChannelModel[] = models.map((model) => ({ ...model, name: model.id, modelName: model.name }));
     const firstOf = (capability: ModelCapability) => platformModels.find((model) => model.capability === capability);
     const valueOf = (model?: ChannelModel) => (model ? encodeChannelModel(PLATFORM_CHANNEL_ID, model.name) : "");
     const imageModel = config.imageModel || valueOf(firstOf("image"));

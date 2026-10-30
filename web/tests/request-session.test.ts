@@ -155,6 +155,7 @@ test("clipboard preparation cannot upload into a replacement account", async () 
     let finish!: (value: any) => void; let uploads = 0;
     const { run } = load(callback("pages/image/index.tsx", "addReferencesFromClipboard"), {
         ...auth,
+        captureInputScope: () => { const version = auth.state.sessionVersion; return () => auth.assertCurrentSession(version); },
         navigator: { clipboard: { read: async () => [{ types: ["image/png"], getType: () => new Promise((resolve) => { finish = resolve; }) }] } },
         SUPPORTED_IMAGE_TYPES: new Set(["image/png"]),
         uploadGenerationMedia: async () => { uploads++; return { originalName: "clipboard", mimeType: "image/png", url: "/image", id: "media" }; },

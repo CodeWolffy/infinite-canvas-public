@@ -9,7 +9,7 @@ import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
-import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dialog";
+import { PromptDetailDialog } from "@/components/prompts/prompt-detail-dialog";
 import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
 import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
@@ -574,22 +574,12 @@ function AssetCover({ asset }: { asset: Asset }) {
 // ---------------------------------------------------------------------------
 
 const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
-    const { message } = App.useApp();
     const { t } = useTranslation();
     const sources = usePromptSourceStore((state) => state.sources);
     const enabledSources = useMemo(() => sources.filter((source) => source.enabled), [sources]);
     const [keyword, setKeyword] = useState("");
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [detail, setDetail] = useState<Prompt | null>(null);
-
-    const copyPrompt = async (prompt: string) => {
-        try {
-            await navigator.clipboard.writeText(prompt);
-            message.success(t("canvas.sidePanel.promptCopied"));
-        } catch {
-            message.error(t("canvas.sidePanel.copyFailed"));
-        }
-    };
 
     return (
         <div className="flex h-full flex-col">
@@ -613,7 +603,7 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
                     )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("canvas.sidePanel.noPrompts")} className="pt-12" />}
                 </div>
             </div>
-            <PromptDetailDialog prompt={detail} onClose={() => setDetail(null)} onCopy={(prompt) => void copyPrompt(prompt)} />
+            <PromptDetailDialog prompt={detail} onClose={() => setDetail(null)} />
         </div>
     );
 });

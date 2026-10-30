@@ -12,24 +12,27 @@ vi.mock("@/stores/use-user-store", () => ({
 }));
 
 const { ModelPicker } = await import("@/components/model-picker");
+const { initI18n } = await import("@/i18n");
 const { useConfigStore, defaultConfig } = await import("@/stores/use-config-store");
 type AiConfig = import("@/stores/use-config-store").AiConfig;
 
 const platformConfig = (): AiConfig => ({
     ...defaultConfig,
     platformModels: [
-        { name: "img-1", displayName: "图像模型", capability: "image", price: "0.1" },
+        { name: "img-1", modelName: "gpt-image-one", displayName: "图像模型", description: "擅长文字排版和多参考图编辑", capability: "image", price: "0.1" },
         { name: "txt-1", displayName: "文本模型", capability: "text" },
     ],
     models: ["platform::img-1", "platform::txt-1"],
 });
 
-beforeAll(() => {
-    // Radix Select 在 jsdom 下需要 pointer capture 相关 API。
+beforeAll(async () => {
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }) });
     Element.prototype.hasPointerCapture ??= () => false;
     Element.prototype.setPointerCapture ??= () => undefined;
     Element.prototype.releasePointerCapture ??= () => undefined;
     Element.prototype.scrollIntoView ??= () => undefined;
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    await initI18n();
 });
 
 afterEach(cleanup);
@@ -67,4 +70,28 @@ test("没有可用模型时点击会提示配置渠道", async () => {
     render(<ModelPicker config={empty} value="" onChange={() => undefined} onMissingConfig={() => (missing += 1)} />);
     await user.click(screen.getAllByRole("combobox")[0]);
     expect(missing).toBe(1);
+});
+
+test("原始 UUID 可以显示名称并选中对应的编码候选", async () => {
+    const user = userEvent.setup();
+    const config = platformConfig();
+    render(<ModelPicker config={config} value="img-1" onChange={() => undefined} capability="image" />);
+    expect(screen.getByText("图像模型")).toBeInTheDocument();
+    expect(screen.queryByText("已选模型不可用")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox"));
+    const selected = (await screen.findAllByRole("option")).find((option) => option.textContent?.includes("图像模型"))!;
+    expect(selected).toHaveAttribute("aria-selected", "true");
+});
+
+test("模型候选显示服务端简介和单价，并按展示名及原始模型名搜索", async () => {
+    const user = userEvent.setup();
+    render(<ModelPicker config={platformConfig()} value="img-1" onChange={() => undefined} />);
+    await user.click(screen.getByRole("combobox"));
+    expect(await screen.findByText("擅长文字排版和多参考图编辑")).toBeInTheDocument();
+    expect(screen.getByText("¥0.1 / 张")).toBeInTheDocument();
+    await user.type(screen.getByRole("combobox"), "GPT-IMAGE");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining("图像模型")]);
+    await user.clear(screen.getByRole("combobox"));
+    await user.type(screen.getByRole("combobox"), "文本");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining("文本模型")]);
 });

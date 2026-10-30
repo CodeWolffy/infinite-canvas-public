@@ -1,6 +1,6 @@
 import { apiRequest } from "@/services/api/request";
 
-/** 列表接口只下发元数据与规模统计，完整快照要用 getCanvasProject 单独取。 */
+/** 列表只下发元数据、已授权封面与规模统计，完整快照由详情接口读取。 */
 export type CanvasProjectSummary = {
     id: string;
     title: string;
@@ -9,6 +9,8 @@ export type CanvasProjectSummary = {
     revision: number;
     nodeCount: number;
     connectionCount: number;
+    coverUrl?: string | null;
+    previewType?: string | null;
     /** 当前用户的有效角色：owner/editor/viewer；viewer 只能读不能写。 */
     accessRole?: "owner" | "editor" | "viewer" | "";
     workspaceId?: string | null;
@@ -19,8 +21,18 @@ export type CanvasProjectSummary = {
 
 export type CanvasProjectDetail = CanvasProjectSummary & { snapshot: unknown };
 
-export async function listCanvasProjects(offset = 0) {
-    return await apiRequest<{ projects: CanvasProjectSummary[]; total: number }>(`/api/canvas-projects?offset=${offset}`);
+export type CanvasProjectQuery = {
+    keyword?: string;
+    workspaceId?: string;
+    sort?: "updated_desc" | "created_desc" | "created_asc" | "title_asc";
+};
+
+export async function listCanvasProjects(offset = 0, query: CanvasProjectQuery = {}) {
+    const params = new URLSearchParams({ offset: String(offset) });
+    if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+    if (query.workspaceId) params.set("workspaceId", query.workspaceId);
+    if (query.sort) params.set("sort", query.sort);
+    return await apiRequest<{ projects: CanvasProjectSummary[]; total: number }>(`/api/canvas-projects?${params}`);
 }
 
 export async function getCanvasProject(id: string) {

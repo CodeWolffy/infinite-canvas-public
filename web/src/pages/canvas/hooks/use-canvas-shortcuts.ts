@@ -30,7 +30,7 @@ export function useCanvasShortcuts(actions: CanvasShortcutActions) {
         const handleKeyDown = (event: KeyboardEvent) => {
             const current = actionsRef.current;
             const target = event.target instanceof Element ? event.target : null;
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-shortcuts-ignore]")) return;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-shortcuts-ignore],.ant-modal,.ant-drawer,.ant-select-dropdown,.ant-popover,.ant-dropdown")) return;
 
             const key = event.key.toLowerCase();
             const isModifierShortcut = event.metaKey || event.ctrlKey;

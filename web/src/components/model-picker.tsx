@@ -1,11 +1,11 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { Cpu } from "lucide-react";
+import { ChevronDown, Cpu } from "lucide-react";
+import { Select } from "antd";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, modelOptionPrice, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { findChannelModel, modelOptionLabel, modelOptionName, modelOptionPrice, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -15,15 +15,21 @@ type ModelPickerProps = {
     className?: string;
     fullWidth?: boolean;
     placeholder?: string;
+    unavailableLabel?: string;
     onMissingConfig?: () => void;
 };
 
-export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder, onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder, unavailableLabel, onMissingConfig }: ModelPickerProps) {
     const { t } = useTranslation();
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const options = useMemo(() => selectableModelsByCapability(config, capability), [capability, config]);
-    const current = value || "";
+    const options = useMemo(() => selectableModelsByCapability(config, capability).map((value) => {
+        const model = findChannelModel(config, value)?.model;
+        return { value, label: modelOptionLabel(config, value), name: model?.modelName || model?.name || value, description: model?.description, price: modelOptionPrice(config, value) };
+    }), [capability, config]);
+    const selected = options.find((option) => option.value === value || modelOptionName(option.value) === value);
+    const current = selected?.value || value || "";
+    const unavailable = Boolean(current && !selected);
     const currentPrice = current ? modelOptionPrice(config, current) : null;
     const pickerPlaceholder = placeholder || t("settingsPanels.model.select");
     const currentTitle = current ? `${modelOptionLabel(config, current)}${currentPrice ? ` · ${currentPrice}` : ""}` : pickerPlaceholder;
@@ -38,52 +44,31 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
 
     return (
         <Select
+            aria-label={pickerPlaceholder}
+            title={currentTitle}
+            className={cn("canvas-composer-model-picker !h-8 max-w-full text-sm", fullWidth ? "w-full min-w-0" : "min-w-[9rem]", className)}
             open={open}
-            value={current}
+            value={current || undefined}
             onOpenChange={(nextOpen) => {
                 if (nextOpen && !options.length) onMissingConfig?.();
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
-            onValueChange={onChange}
-        >
-            <SelectTrigger
-                className={cn(
-                    "canvas-composer-model-picker h-8 w-fit max-w-full gap-2 rounded-full border border-input bg-transparent px-3 text-sm font-normal shadow-sm transition-colors",
-                    fullWidth ? "w-full min-w-0 justify-start" : "min-w-[9rem] justify-start",
-                    "data-[state=open]:border-ring data-[state=open]:ring-2 data-[state=open]:ring-ring/20",
-                    className,
-                )}
-                onMouseDown={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-                title={currentTitle}
-            >
-                <ModelIcon config={config} model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : pickerPlaceholder}</span>
-            </SelectTrigger>
-            <SelectContent
-                data-canvas-no-zoom
-                className="z-[1200] min-w-[20rem] max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
-                position="popper"
-                align="start"
-                side="bottom"
-                sideOffset={6}
-                onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
-            >
-                {options.length ? (
-                    options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
-                            <ModelLabel config={config} model={model} />
-                        </SelectItem>
-                    ))
-                ) : (
-                    <SelectItem value="__empty__" disabled>
-                        {emptyModelLabel(config, capability)}
-                    </SelectItem>
-                )}
-            </SelectContent>
-        </Select>
+            onChange={onChange}
+            onMouseDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            prefix={<ModelIcon config={config} model={current} />}
+            suffixIcon={<ChevronDown className="canvas-select-chevron size-3" />}
+            placeholder={pickerPlaceholder}
+            status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
+            showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }}
+            popupMatchSelectWidth={false}
+            styles={{ popup: { root: { zIndex: 1200, minWidth: "20rem", maxWidth: "calc(100vw - 24px)" } } }}
+            options={options}
+            notFoundContent={options.length ? "没有匹配的模型" : emptyModelLabel(config, capability)}
+            labelRender={(option) => <span className="canvas-model-picker-text min-w-0 truncate">{unavailable ? unavailableLabel || "已选模型不可用" : option.label}</span>}
+            optionRender={(option) => <div className="max-w-96 space-y-1 py-1"><div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2"><ModelIcon config={config} model={option.data.value} /><span className="truncate">{option.data.label}</span></span>{option.data.price ? <span className="text-xs tabular-nums text-muted-foreground">{option.data.price}</span> : null}</div>{option.data.description ? <p className="whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>}
+        />
     );
 }
 
@@ -93,25 +78,8 @@ function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
     return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : i18n.t("settingsPanels.model.addFirst");
 }
 
-function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
-    const price = modelOptionPrice(config, model);
-    return (
-        <span className="flex w-full min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-            <span className="flex min-w-0 items-center gap-2">
-                <ModelIcon config={config} model={model} />
-                <span className="truncate">{modelOptionLabel(config, model)}</span>
-            </span>
-            {price ? (
-                <span className="max-w-full whitespace-normal break-words font-mono text-[11px] text-muted-foreground">
-                    {price}
-                </span>
-            ) : null}
-        </span>
-    );
-}
-
 function ModelIcon({ config, model }: { config: AiConfig; model: string }) {
-    const icon = resolveModelIcon(`${modelOptionName(model)} ${modelOptionLabel(config, model)}`);
+    const icon = resolveModelIcon(`${findChannelModel(config, model)?.model.modelName || modelOptionName(model)} ${modelOptionLabel(config, model)}`);
     return icon ? <img src={icon} alt="" className="size-4 shrink-0 dark:invert" /> : <Cpu className="size-4 shrink-0 opacity-70" />;
 }
 

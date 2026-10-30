@@ -16,6 +16,8 @@ export type CanvasProject = {
     /** 列表接口只下发规模统计；快照要等 loadProject 拉取详情后才可用。 */
     nodeCount: number;
     connectionCount: number;
+    coverUrl?: string | null;
+    previewType?: string | null;
     /** 当前用户对画布的有效角色；viewer 只读，不会向服务端写回。 */
     accessRole: "owner" | "editor" | "viewer" | "";
     workspaceId: string | null;
@@ -42,11 +44,17 @@ type CanvasStore = {
     hydrated: boolean;
     hydratedUserId: string;
     projects: CanvasProject[];
+    /** 浏览列表独立于快照缓存，筛选不能丢弃尚未保存的画布。 */
+    projectListIds: string[];
+    projectQuery: canvasApi.CanvasProjectQuery;
+    projectListLoading: boolean;
+    projectListError: string;
     projectTotal: number;
     deletedProjects: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
     reloadVersion: number;
     hydrateProjects: (userId: string) => Promise<void>;
+    refreshProjectList: (query?: canvasApi.CanvasProjectQuery) => Promise<void>;
     loadMoreProjects: () => Promise<void>;
     createProject: (title?: string, workspaceId?: string) => Promise<string>;
     importProject: (project: Partial<CanvasProject>) => Promise<string>;
@@ -80,6 +88,7 @@ const saveAttempts = new Map<string, number>();
 const blockedProjects = new Set<string>();
 const CANVAS_SAVE_DEBOUNCE_MS = 1000;
 const MAX_SAVE_ATTEMPTS = 5;
+let projectListRequestVersion = 0;
 
 function retryDelay(attempt: number) {
     return Math.min(2000 * 2 ** (attempt - 1), 30000);
@@ -114,6 +123,8 @@ function listProject(record: canvasApi.CanvasProjectSummary): CanvasProject {
         revision: record.revision,
         nodeCount: record.nodeCount,
         connectionCount: record.connectionCount,
+        coverUrl: record.coverUrl || null,
+        previewType: record.previewType || null,
         ...accessFields(record),
         snapshotLoaded: false,
         ...emptySnapshot(),
@@ -123,6 +134,7 @@ function listProject(record: canvasApi.CanvasProjectSummary): CanvasProject {
 function detailProject(record: canvasApi.CanvasProjectDetail): CanvasProject {
     const snapshot = record.snapshot && typeof record.snapshot === "object" ? (record.snapshot as Partial<CanvasSnapshot>) : {};
     const merged = { ...emptySnapshot(), ...snapshot };
+    const cached = useCanvasStore.getState().projects.find((project) => project.id === record.id);
     return {
         id: record.id,
         title: record.title,
@@ -131,10 +143,26 @@ function detailProject(record: canvasApi.CanvasProjectDetail): CanvasProject {
         revision: record.revision,
         nodeCount: merged.nodes.length,
         connectionCount: merged.connections.length,
+        coverUrl: record.coverUrl ?? cached?.coverUrl ?? null,
+        previewType: record.previewType ?? merged.nodes.find((node) => node.type !== "group")?.type ?? null,
         ...accessFields(record),
         snapshotLoaded: true,
         ...merged,
     };
+}
+
+function mergeProjectSummaries(records: canvasApi.CanvasProjectSummary[], projects: CanvasProject[]) {
+    const remaining = new Map(records.map((record) => [record.id, record]));
+    const cached = projects.map((project) => {
+        const record = remaining.get(project.id);
+        if (!record) return project;
+        remaining.delete(project.id);
+        if (pendingUpdates.has(project.id) || savingProjects.has(project.id) || blockedProjects.has(project.id)) return project;
+        if (!project.snapshotLoaded) return listProject(record);
+        // 元数据刷新不能把未重新加载的快照标记为远端新版本。
+        return { ...project, title: record.title, updatedAt: record.updatedAt, coverUrl: record.coverUrl || null, previewType: record.previewType || null, ...accessFields(record) };
+    });
+    return [...cached, ...Array.from(remaining.values(), listProject)];
 }
 
 function mergeProject(project: CanvasProject, preserveLocal = true) {
@@ -296,6 +324,10 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             hydrated: false,
             hydratedUserId: "",
             projects: [],
+            projectListIds: [],
+            projectQuery: {},
+            projectListLoading: false,
+            projectListError: "",
             projectTotal: 0,
             deletedProjects: [],
             saveError: null,
@@ -308,7 +340,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 let request = hydratePromises.get(userId);
                 if (!request) {
                     request = canvasApi.listCanvasProjects().then((records) => {
-                        if (useUserStore.getState().sessionVersion === sessionVersion) set({ projects: records.projects.map(listProject), projectTotal: records.total, hydrated: true });
+                        if (useUserStore.getState().sessionVersion === sessionVersion) set({ projects: records.projects.map(listProject), projectListIds: records.projects.map((project) => project.id), projectTotal: records.total, hydrated: true });
                     }).finally(() => {
                         if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
                     });
@@ -316,14 +348,38 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 }
                 await request;
             },
+            refreshProjectList: async (query = {}) => {
+                const { sessionVersion, user } = useUserStore.getState();
+                if (!user) return;
+                const requestVersion = ++projectListRequestVersion;
+                set({ projectQuery: query, projectListLoading: true, projectListError: "", projectListIds: [], projectTotal: 0 });
+                try {
+                    const records = await canvasApi.listCanvasProjects(0, query);
+                    assertCurrentSession(sessionVersion);
+                    if (requestVersion !== projectListRequestVersion) return;
+                    set((state) => ({ projects: mergeProjectSummaries(records.projects, state.projects), projectListIds: records.projects.map((project) => project.id), projectTotal: records.total }));
+                } catch (error) {
+                    if (useUserStore.getState().sessionVersion === sessionVersion && requestVersion === projectListRequestVersion) set({ projectListError: error instanceof Error ? error.message : "画布加载失败" });
+                    throw error;
+                } finally {
+                    if (useUserStore.getState().sessionVersion === sessionVersion && requestVersion === projectListRequestVersion) set({ projectListLoading: false });
+                }
+            },
             // 画布列表默认只取前 200 个，超出部分由页面上的「加载更多」按需追加。
             loadMoreProjects: async () => {
                 const { sessionVersion, user } = useUserStore.getState();
-                if (!user) return;
-                const offset = get().projects.length;
-                const records = await canvasApi.listCanvasProjects(offset);
-                assertCurrentSession(sessionVersion);
-                set((state) => ({ projects: [...state.projects, ...records.projects.map(listProject).filter((item) => !state.projects.some((existing) => existing.id === item.id))], projectTotal: records.total }));
+                if (!user || get().projectListLoading) return;
+                const requestVersion = projectListRequestVersion;
+                const { projectListIds, projectQuery } = get();
+                set({ projectListLoading: true });
+                try {
+                    const records = await canvasApi.listCanvasProjects(projectListIds.length, projectQuery);
+                    assertCurrentSession(sessionVersion);
+                    if (requestVersion !== projectListRequestVersion) return;
+                    set((state) => ({ projects: mergeProjectSummaries(records.projects, state.projects), projectListIds: [...new Set([...state.projectListIds, ...records.projects.map((project) => project.id)])], projectTotal: records.total }));
+                } finally {
+                    if (useUserStore.getState().sessionVersion === sessionVersion && requestVersion === projectListRequestVersion) set({ projectListLoading: false });
+                }
             },
             createProject: async (title = i18n.t("canvas.project.untitled"), workspaceId) => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
@@ -362,7 +418,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                         .catch((error: unknown) => {
                             if (useUserStore.getState().sessionVersion !== sessionVersion) return null;
                             if (error instanceof ApiError && error.status === 404) {
-                                set((state) => ({ projects: state.projects.filter((item) => item.id !== id) }));
+                                set((state) => ({ projects: state.projects.filter((item) => item.id !== id), projectListIds: state.projectListIds.filter((item) => item !== id), projectTotal: Math.max(0, state.projectTotal - Number(state.projectListIds.includes(id))) }));
                                 return null;
                             }
                             throw error;
@@ -403,9 +459,12 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     const removing = new Set(ids);
                     set((state) => ({
                         projects: state.projects.filter((project) => !removing.has(project.id)),
+                        projectListIds: state.projectListIds.filter((id) => !removing.has(id)),
+                        projectTotal: Math.max(0, state.projectTotal - state.projectListIds.filter((id) => removing.has(id)).length),
                         deletedProjects: [...state.deletedProjects.filter((item) => !removing.has(item.id)), ...ids.map((id) => ({ id, deletedAt: now }))],
                         saveError: state.saveError && ids.includes(state.saveError.projectId) ? null : state.saveError,
                     }));
+                    void get().refreshProjectList(get().projectQuery).catch(() => undefined);
                 } finally {
                     if (useUserStore.getState().sessionVersion === sessionVersion) ids.forEach((id) => deletingProjects.delete(id));
                 }
@@ -476,6 +535,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
 
 useUserStore.subscribe((state, previous) => {
     if (state.sessionVersion === previous.sessionVersion) return;
+    projectListRequestVersion += 1;
     saveTimers.forEach(clearTimeout);
     saveTimers.clear();
     pendingUpdates.clear();
@@ -486,5 +546,5 @@ useUserStore.subscribe((state, previous) => {
     snapshotCaptures.clear();
     saveAttempts.clear();
     blockedProjects.clear();
-    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], deletedProjects: [], saveError: null });
+    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null });
 });

@@ -111,6 +111,7 @@ func (a *App) batchDetail(ctx context.Context, id, userID string) (any, error) {
 }
 
 func (a *App) generationRoutes(api *gin.RouterGroup) {
+	a.userTaskRoutes(api)
 	api.POST("/generation-batches", respond(func(c *gin.Context) (any, error) {
 		input, err := body[batchInput](c)
 		if err != nil {

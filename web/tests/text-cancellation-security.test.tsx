@@ -10,10 +10,10 @@ const api = vi.hoisted(() => ({ cancel: vi.fn(), watch: vi.fn(), conversation: v
 vi.mock("@/services/api/generation", () => ({ getPublicModels: async () => [{ id: "model", name: "model", displayName: "文本模型", capability: "text", price: "0.1" }] }));
 vi.mock("@/services/api/billing", () => ({ getWallet: async () => ({ wallet: { balance: "10" } }) }));
 vi.mock("@/services/api/platform-operations", () => ({ quoteGeneration: vi.fn() }));
-vi.mock("@/services/api/tasks", () => ({ cancelGenerationTask: api.cancel }));
+vi.mock("@/services/api/tasks", () => ({ cancelGenerationTask: api.cancel, ensurePlatformMedia: vi.fn() }));
 vi.mock("@/services/api/text", () => ({ getTextConversation: api.conversation, listTextConversations: async () => [], queueTextRequest: vi.fn(), watchTextRequest: api.watch, deleteTextConversation: vi.fn() }));
 vi.mock("@/stores/use-user-store", () => ({
-    useUserStore: Object.assign((select: (value: { sessionVersion: number }) => unknown) => select({ sessionVersion: 1 }), { getState: () => ({ sessionVersion: 1 }) }),
+    useUserStore: Object.assign((select: (value: { sessionVersion: number }) => unknown) => select({ sessionVersion: 1 }), { getState: () => ({ sessionVersion: 1 }), subscribe: () => () => undefined }),
     assertCurrentSession: vi.fn(),
 }));
 vi.mock("@/components/layout/app-providers", () => ({ queryClient: {} }));
