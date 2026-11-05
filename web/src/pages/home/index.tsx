@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Empty, Input, Skeleton } from "antd";
 import { ArrowRight, Bot, ImagePlus, MessageSquare, Plus, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -16,6 +16,7 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { modelOptionName, resolveModelForCapability, useConfigStore } from "@/stores/use-config-store";
 import { useCreationDraftStore, type CreationDraftInput } from "@/stores/use-creation-draft-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
+import { getWorkbenchDraft, saveWorkbenchDraft, clearWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import { CreationScenes } from "./components/creation-scenes";
 
 const creationModes = [
@@ -36,8 +37,8 @@ export default function IndexPage() {
     const refreshProjectList = useCanvasStore((state) => state.refreshProjectList);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
-    const [capability, setCapability] = useState<CreationDraftInput["capability"]>("image");
-    const [prompt, setPrompt] = useState("");
+    const [capability, setCapability] = useState<CreationDraftInput["capability"]>(() => getWorkbenchDraft<CreationDraftInput>("home")?.capability || "image");
+    const [prompt, setPrompt] = useState(() => getWorkbenchDraft<CreationDraftInput>("home")?.prompt || "");
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
     const [showcaseLoading, setShowcaseLoading] = useState(true);
     const [showcaseError, setShowcaseError] = useState("");
@@ -55,7 +56,11 @@ export default function IndexPage() {
         return projectListIds.slice(0, 3).flatMap((id) => byId.get(id) || []);
     }, [projectListIds, projects]);
 
-    useEffect(() => { setPrompt(""); setCreatingCanvas(false); }, [sessionVersion]);
+    const previousSession = useRef(sessionVersion);
+    useEffect(() => {
+        if (previousSession.current !== sessionVersion) { previousSession.current = sessionVersion; setPrompt(""); setCreatingCanvas(false); return; }
+        saveWorkbenchDraft("home", { capability, prompt }, sessionVersion);
+    }, [sessionVersion, capability, prompt]);
     useEffect(() => {
         if (!hydrated) return;
         let active = true;
@@ -83,6 +88,7 @@ export default function IndexPage() {
         if (!prompt.trim()) return;
         const settings = capability === "image" ? { size: config.size, quality: config.quality, count: config.count, background: config.background } : capability === "video" ? { videoSeconds: config.videoSeconds, vquality: config.vquality, videoMode: config.videoMode } : undefined;
         useCreationDraftStore.getState().setDraft({ capability, prompt: prompt.trim(), modelId: model ? modelOptionName(model) : undefined, settings, sourceTitle: "首页创作" });
+        clearWorkbenchDraft("home");
         navigate(`/${capability}`);
     };
     const newCanvas = async () => {

@@ -1,11 +1,10 @@
 import { lazy, Suspense, useState, type CSSProperties } from "react";
-import { Dropdown, Tooltip } from "antd";
-import { Activity, BookOpen, CircleUserRound, Keyboard, ListTodo, LogOut, Puzzle, Settings2, ShieldCheck } from "lucide-react";
+import { Dropdown } from "antd";
+import { Activity, BookOpen, CircleUserRound, Ellipsis, Keyboard, ListTodo, LogOut, Puzzle, Settings2, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
-import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { NotificationCenter } from "@/components/layout/notification-center";
 import { DOCS_URL } from "@/constant/env";
@@ -34,13 +33,12 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const logout = useUserStore((state) => state.logout);
     const sessionVersion = useUserStore((state) => state.sessionVersion);
     const [preferencesOpen, setPreferencesOpen] = useState(false);
+    const [moreOpen, setMoreOpen] = useState(false);
     const [tasksSession, setTasksSession] = useState<number | null>(null);
     const [pluginsSession, setPluginsSession] = useState<number | null>(null);
     const naturalIconClass = "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
     const versionStyle = iconStyle;
-    const gitHubClassName = "size-7 text-base";
-    const gitHubStyle = iconStyle;
     const locale = i18n.resolvedLanguage as AppLocale;
     const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
     const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
@@ -63,22 +61,18 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
                 </button>
             ) : null}
             {variant === "canvas" && pluginsSession === sessionVersion ? <Suspense fallback={null}><CanvasPluginManagerModal key={sessionVersion} open onClose={() => setPluginsSession(null)} /></Suspense> : null}
-            <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.docs")} title={t("topNav.docs")}>
-                <BookOpen className="size-4" />
-            </a>
-            <Tooltip title={languageLabel} mouseEnterDelay={0.2}>
-                <button type="button" className={`${naturalIconClass} text-[11px] font-semibold tracking-tight`} style={iconStyle} onClick={() => void changeAppLocale(nextLocale)} aria-label={languageLabel}>
-                    {locale === "zh-CN" ? "中" : "EN"}
-                </button>
-            </Tooltip>
             <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} title={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} />
-            <VersionReleaseModal style={versionStyle} />
             <NotificationCenter />
-            <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => setPreferencesOpen(true)} aria-label={t("config.preferences.generation")} title={t("config.preferences.generation")}>
-                <Settings2 className="size-4" />
-            </button>
+            <VersionReleaseModal style={versionStyle} />
+            <Dropdown trigger={["click"]} open={moreOpen} onOpenChange={setMoreOpen} placement="bottomRight" menu={{ items: [
+                { key: "preferences", icon: <Settings2 className="size-4" />, label: t("config.preferences.generation"), onClick: () => setPreferencesOpen(true) },
+                { key: "docs", icon: <BookOpen className="size-4" />, label: <a href={DOCS_URL} target="_blank" rel="noopener noreferrer">{t("topNav.docs")}</a> },
+                { key: "language", label: languageLabel, onClick: () => void changeAppLocale(nextLocale) },
+                { key: "github", label: <a href="https://github.com/basketikun/infinite-canvas" target="_blank" rel="noopener noreferrer">GitHub</a> },
+            ] }}>
+                <button type="button" className={naturalIconClass} style={iconStyle} aria-label="更多工具" title="更多工具"><Ellipsis className="size-4" /></button>
+            </Dropdown>
             {preferencesOpen ? <Suspense fallback={null}><GenerationPreferencesModal key={sessionVersion} onClose={() => setPreferencesOpen(false)} /></Suspense> : null}
-            <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
             <Dropdown
                 trigger={["click"]}
                 placement="bottomRight"

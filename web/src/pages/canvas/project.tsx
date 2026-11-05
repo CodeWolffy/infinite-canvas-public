@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, SetStateAction } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
@@ -37,6 +37,8 @@ import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "@/components
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/components/canvas/canvas-node-upscale-dialog";
 import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
+import { arrangementRoots, arrangeCanvasNodes, type ArrangeAction } from "@/lib/canvas/canvas-arrange";
+import { prepareCanvasHandoff } from "@/lib/canvas/canvas-handoff";
 import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-toolbar";
 import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
 import { Minimap } from "@/components/canvas/canvas-mini-map";
@@ -48,6 +50,7 @@ import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { useCanvasHandoffStore } from "@/stores/canvas/use-canvas-handoff-store";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { isSupportedCanvasImage, useCanvasClipboard, type CanvasClipboard } from "@/pages/canvas/hooks/use-canvas-clipboard";
@@ -169,6 +172,7 @@ function InfiniteCanvasPage() {
     // Subscribe to the registry version so plugin registration changes rerender the canvas.
     const nodeRegistryVersion = useNodeRegistryVersion((state) => state.version);
     const params = useParams<{ id: string }>();
+    const location = useLocation();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const projectId = params.id || "";
@@ -833,6 +837,7 @@ function InfiniteCanvasPage() {
     const previewContent = previewImageId ? previewNode?.metadata?.images?.find((image) => image.id === previewImageId)?.content : previewNode?.metadata?.content;
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
     const selectedNodes = useMemo(() => nodes.filter((node) => selectedNodeIds.has(node.id)), [nodes, selectedNodeIds]);
+    const arrangementCount = useMemo(() => arrangementRoots(nodes, selectedNodeIds).length, [nodes, selectedNodeIds]);
     const canGroupSelection = canGroupSelectedNodes(selectedNodeIds, nodes);
     const canUngroupSelection = canUngroupSelectedNodes(selectedNodeIds, nodes);
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
@@ -1000,6 +1005,12 @@ function InfiniteCanvasPage() {
         setDialogNodeId(null);
         setContextMenu(null);
     }, []);
+
+    const arrangeSelection = useCallback((action: ArrangeAction) => {
+        setNodes((previous) => arrangeCanvasNodes(previous, selectedNodeIdsRef.current, action));
+        setContextMenu(null);
+        setDialogNodeId(null);
+    }, [setNodes]);
 
     const ungroupSelection = useCallback((ids?: Set<string>) => {
         const result = applyUngroupSelection(ids || selectedNodeIdsRef.current, nodesRef.current, connectionsRef.current);
@@ -3080,6 +3091,36 @@ function InfiniteCanvasPage() {
         [insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
     );
 
+    // 全部素材准备完成后一次性插入，失败或离开页面不会留下半批节点。
+    useEffect(() => {
+        if (!projectReady) return;
+        const handoffId = (location.state as { canvasHandoffId?: string } | null)?.canvasHandoffId;
+        const handoff = useCanvasHandoffStore.getState().request;
+        if (!handoffId || handoff?.id !== handoffId || handoff.projectId !== projectId) return;
+        if (!canEditRef.current) { useCanvasHandoffStore.getState().cancel(handoffId); message.warning("此画布没有编辑权限，内容未加入"); return; }
+        let disposed = false;
+        const assertCurrent = () => {
+            assertCurrentSession(sessionVersion);
+            if (disposed || !canEditRef.current || !useCanvasHandoffStore.getState().isCurrent(handoffId)) throw new DOMException("画布已切换", "AbortError");
+        };
+        const rect = containerRef.current?.getBoundingClientRect();
+        const center = screenToCanvas((rect?.left || 0) + (rect?.width || size.width) / 2, (rect?.top || 0) + (rect?.height || size.height) / 2);
+        void prepareCanvasHandoff(handoff.items, center, assertCurrent).then((inserted) => {
+            assertCurrent();
+            if (!useCanvasHandoffStore.getState().consume(handoffId, projectId)) return;
+            setNodes((previous) => [...previous, ...inserted]);
+            setSelectedNodeIds(new Set(inserted.map((node) => node.id)));
+            setSelectedConnectionId(null);
+            message.success(`已加入 ${inserted.length} 项内容`);
+            navigate(location.pathname, { replace: true, state: null });
+        }).catch((error: unknown) => {
+            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion || error instanceof DOMException && error.name === "AbortError") return;
+            useCanvasHandoffStore.getState().cancel(handoffId);
+            message.error(error instanceof Error ? error.message : "素材未能加入画布，请从来源重试");
+        });
+        return () => { disposed = true; };
+    }, [location.pathname, location.state, projectId, projectReady, sessionVersion]);
+
     // Memoize every callback and render function passed to CanvasNode.
     // CanvasNode uses React.memo, but new prop references would invalidate it on every render and rerender every node
     // during click, hover, or viewport changes, which is especially expensive for Markdown. These useCallback values
@@ -3400,6 +3441,8 @@ function InfiniteCanvasPage() {
                         canUngroup={canUngroupSelection}
                         onGroup={groupSelection}
                         onUngroup={ungroupSelection}
+                        onArrange={arrangeSelection}
+                        arrangeDisabled={{ distributeHorizontal: arrangementCount < 3, distributeVertical: arrangementCount < 3 }}
                     />
                 ) : null}
 

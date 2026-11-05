@@ -6,6 +6,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import dayjs from "dayjs";
 
+import { useConfirmInputReplace } from "@/hooks/use-confirm-input-replace";
+import { clearWorkbenchDraft, getWorkbenchDraft, saveWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { usePublicModels } from "@/hooks/use-public-models";
 import { getWallet } from "@/services/api/billing";
@@ -24,12 +26,22 @@ import type { ReferenceImage } from "@/types/image";
 type Conversation = Awaited<ReturnType<typeof getTextConversation>>;
 type ConversationItem = Awaited<ReturnType<typeof listTextConversations>>[number];
 type PendingFile = { file: File; url: string; reference?: never } | { file?: never; url: string; reference: ReferenceImage };
+type TextInputDraft = { prompt: string; modelId: string; systemPrompt: string; reasoningEffort: ReasoningEffort; files: PendingFile[] };
 const activeStates = ["reviewing", "queued", "running"];
 const maxAttachments = 20;
 
 export default function TextPage() {
+    const [search] = useSearchParams();
+    const session = useUserStore((state) => state.sessionVersion);
+    return <TextConversationPage key={`${session}:${search.get("conversation") || ""}`} />;
+}
+
+function TextConversationPage() {
     const { message, modal } = App.useApp();
     const client = useQueryClient();
+    const confirmReplace = useConfirmInputReplace();
+    const mounted = useRef(false);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const session = useUserStore((state) => state.sessionVersion);
     const draft = useCreationDraftStore((state) => state.draft);
     const clearDraft = useCreationDraftStore((state) => state.clearDraft);
@@ -37,15 +49,17 @@ export default function TextPage() {
     const copy = useCopyText();
     const [search, setSearch] = useSearchParams();
     const conversationId = search.get("conversation") || "";
-    const [modelId, setModelId] = useState("");
+    const draftKey = `text:${conversationId}`;
+    const savedInput = useRef(getWorkbenchDraft<TextInputDraft>(draftKey)).current;
+    const [modelId, setModelId] = useState(savedInput?.modelId || "");
     const [ambiguousDraftModel, setAmbiguousDraftModel] = useState(false);
-    const [prompt, setPrompt] = useState("");
-    const [systemPrompt, setSystemPrompt] = useState("");
-    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("auto");
+    const [prompt, setPrompt] = useState(savedInput?.prompt || "");
+    const [systemPrompt, setSystemPrompt] = useState(savedInput?.systemPrompt || "");
+    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(savedInput?.reasoningEffort || "auto");
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [historyKeyword, setHistoryKeyword] = useState("");
-    const [files, setFiles] = useState<PendingFile[]>([]);
+    const [files, setFiles] = useState<PendingFile[]>(() => (savedInput?.files || []).map((item) => item.file ? { file: item.file, url: URL.createObjectURL(item.file) } : item));
     const [sending, setSending] = useState(false);
     const [canceling, setCanceling] = useState(false);
     const [streamError, setStreamError] = useState("");
@@ -54,7 +68,14 @@ export default function TextPage() {
     const fileInput = useRef<HTMLInputElement>(null);
     const follow = useRef(true);
     const previousSession = useRef(session);
-    const restoredConversation = useRef("");
+    const restoredConversation = useRef(savedInput ? conversationId : "");
+    const currentInput = useRef<TextInputDraft>({ prompt, modelId, systemPrompt, reasoningEffort, files });
+    currentInput.current = { prompt, modelId, systemPrompt, reasoningEffort, files };
+    useEffect(() => () => {
+        if (useUserStore.getState().sessionVersion !== session) return;
+        if (currentInput.current.prompt || currentInput.current.files.length) saveWorkbenchDraft(draftKey, currentInput.current, session);
+        else clearWorkbenchDraft(draftKey);
+    }, [draftKey, session]);
     const models = usePublicModels();
     const available = useMemo(() => (models.data || []).filter((model) => model.capability === "text"), [models.data]);
     const model = available.find((item) => item.id === modelId);
@@ -153,6 +174,7 @@ export default function TextPage() {
     const send = async () => {
         if (!canSend || !model) return;
         const version = useUserStore.getState().sessionVersion;
+        const submittedInput = currentInput.current;
         const content = prompt.trim();
         const input = { modelId: model.id, conversationId: conversationId || undefined, content, title: (content || "图片对话").slice(0, 100), systemPrompt, parameters };
         const fingerprint = JSON.stringify({ ...input, files: files.map((item) => item.file ? [item.file.name, item.file.size, item.file.lastModified] : item.reference) });
@@ -161,9 +183,15 @@ export default function TextPage() {
         try {
             const mediaIds = pending.current.mediaIds || await Promise.all(files.map((item) => item.file ? uploadMedia(item.file, item.file.name).then((media) => media.id) : ensurePlatformMedia(item.reference)));
             assertCurrentSession(version);
+            if (!mounted.current) return;
             pending.current.mediaIds = mediaIds;
             const accepted = await queueTextRequest({ ...input, requestId: pending.current.id, attachmentMediaIds: mediaIds.length ? mediaIds : undefined });
             assertCurrentSession(version);
+            const saved = getWorkbenchDraft<TextInputDraft>(draftKey);
+            if (saved?.prompt === submittedInput.prompt && saved?.files === submittedInput.files && saved?.modelId === submittedInput.modelId) clearWorkbenchDraft(draftKey);
+            if (!mounted.current) return;
+            currentInput.current = { ...submittedInput, prompt: "", files: [] };
+            clearWorkbenchDraft(draftKey);
             pending.current = null;
             const uploaded = mediaIds.length ? mediaIds.map((id, index) => ({ id, url: `/api/media/${id}`, originalName: files[index]?.file?.name || files[index]?.reference?.name || "图片" }) as MediaRecord) : undefined;
             const optimistic: TextMessage = { id: `local:${accepted.requestId}`, role: "user", content, createdAt: new Date().toISOString(), attachments: uploaded };
@@ -172,9 +200,9 @@ export default function TextPage() {
             setSearch({ conversation: accepted.conversationId }, { replace: true });
             await Promise.all([client.invalidateQueries({ queryKey: ["text-conversation", version, accepted.conversationId] }), client.invalidateQueries({ queryKey: ["text-conversations", version] }), client.invalidateQueries({ queryKey: ["wallet", version] })]);
         } catch (error) {
-            if (useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") message.error(error.message);
+            if (mounted.current && useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") message.error(error.message);
         } finally {
-            if (useUserStore.getState().sessionVersion === version) setSending(false);
+            if (mounted.current && useUserStore.getState().sessionVersion === version) setSending(false);
         }
     };
     const cancel = async () => {
@@ -186,39 +214,51 @@ export default function TextPage() {
             assertCurrentSession(version);
             await Promise.all([conversation.refetch(), client.invalidateQueries({ queryKey: ["wallet", version] })]);
         } catch (error) {
-            if (useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") message.error(error.message);
+            if (mounted.current && useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") message.error(error.message);
         } finally {
             if (useUserStore.getState().sessionVersion === version) setCanceling(false);
         }
     };
-    const selectConversation = (id: string) => { setSearch(id ? { conversation: id } : {}); setStreamError(""); setPrompt(""); setAmbiguousDraftModel(false); setHistoryOpen(false); if (!id) { setModelId(available[0]?.id || ""); setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
+    const resetConversation = (id: string) => { clearWorkbenchDraft(draftKey); currentInput.current = { ...currentInput.current, prompt: "", files: [] }; setSearch(id ? { conversation: id } : {}); setStreamError(""); setPrompt(""); setAmbiguousDraftModel(false); setHistoryOpen(false); if (!id) { setModelId(available[0]?.id || ""); setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
+    const selectConversation = (id: string) => {
+        if (id === conversationId && id) return;
+        if (id !== conversationId) { setSearch(id ? { conversation: id } : {}); return; }
+        confirmReplace(Boolean(prompt || files.length), () => resetConversation(id));
+    };
     const changeModel = (id: string) => {
         const next = available.find((item) => item.id === id);
-        if (files.length && next && !next.imageInput) { clearFiles(); message.info("该模型不支持图片输入，已移除图片附件"); }
-        setModelId(id);
-        setAmbiguousDraftModel(false);
+        if (files.length && next && !next.imageInput) { message.info("该模型不支持图片输入，请先移除附件后再切换"); return; }
+        confirmReplace(false, () => {
+            if (files.length && next && !next.imageInput) clearFiles();
+            setModelId(id);
+            setAmbiguousDraftModel(false);
+        });
     };
     useEffect(() => {
         if (!draft || draft.capability !== "text" || draft.sessionVersion !== session || models.isPending || models.isError || sending || appliedDraftRef.current === draft.id) return;
+        if (conversationId) { setSearch({}); return; }
         appliedDraftRef.current = draft.id;
-        selectConversation("");
-        const resolved = resolveCreationDraftModel(available, draft);
-        const selected = draft.modelId || draft.modelName ? resolved.model : available[0];
-        setAmbiguousDraftModel(resolved.ambiguous);
-        setModelId(selected?.id || draft.modelId || draft.modelName || "");
-        setPrompt(draft.prompt);
-        if ((draft.modelId || draft.modelName) && !selected) message.warning(resolved.ambiguous ? `草稿名称「${draft.modelName}」对应多个模型配置，请明确选择` : `草稿指定的模型「${draft.modelName || draft.modelId}」当前不可用，请重新选择`);
-        const references = draft.references || [];
-        if (references.length) {
-            if (!selected?.imageInput) message.warning("当前文本模型不支持图片输入，未带入草稿附件");
-            else {
-                const images = references.filter((item) => item.type.startsWith("image"));
-                setFiles(images.slice(0, maxAttachments).map((reference) => ({ reference, url: reference.dataUrl || reference.url || `/api/media/${mediaId(reference.storageKey || "")}` })));
-                if (images.length !== references.length) message.warning("文本对话只支持图片附件，其他素材未带入");
-                if (images.length > maxAttachments) message.warning(`草稿图片超过当前上限，仅带入前 ${maxAttachments} 张`);
+        confirmReplace(Boolean(prompt || files.length), () => {
+            if (useCreationDraftStore.getState().draft?.id !== draft.id) return;
+            resetConversation("");
+            const resolved = resolveCreationDraftModel(available, draft);
+            const selected = draft.modelId || draft.modelName ? resolved.model : available[0];
+            setAmbiguousDraftModel(resolved.ambiguous);
+            setModelId(selected?.id || draft.modelId || draft.modelName || "");
+            setPrompt(draft.prompt);
+            if ((draft.modelId || draft.modelName) && !selected) message.warning(resolved.ambiguous ? `草稿名称「${draft.modelName}」对应多个模型配置，请明确选择` : `草稿指定的模型「${draft.modelName || draft.modelId}」当前不可用，请重新选择`);
+            const references = draft.references || [];
+            if (references.length) {
+                if (!selected?.imageInput) message.warning("当前文本模型不支持图片输入，未带入草稿附件");
+                else {
+                    const images = references.filter((item) => item.type.startsWith("image"));
+                    setFiles(images.slice(0, maxAttachments).map((reference) => ({ reference, url: reference.dataUrl || reference.url || `/api/media/${mediaId(reference.storageKey || "")}` })));
+                    if (images.length !== references.length) message.warning("文本对话只支持图片附件，其他素材未带入");
+                    if (images.length > maxAttachments) message.warning(`草稿图片超过当前上限，仅带入前 ${maxAttachments} 张`);
+                }
             }
-        }
-        clearDraft(draft.id);
+            clearDraft(draft.id);
+        }, () => clearDraft(draft.id));
     }, [draft, session, models.isPending, models.isError, sending, available, clearDraft, message, selectConversation]);
     const removeConversation = (item: ConversationItem) => {
         modal.confirm({
@@ -231,7 +271,7 @@ export default function TextPage() {
                 const version = useUserStore.getState().sessionVersion;
                 await deleteTextConversation(item.id);
                 assertCurrentSession(version);
-                if (item.id === conversationId) selectConversation("");
+                if (item.id === conversationId) resetConversation("");
                 await client.invalidateQueries({ queryKey: ["text-conversations", version] });
             },
         });
@@ -265,7 +305,7 @@ export default function TextPage() {
                         <div key={item.id} className={cn("group relative rounded-lg transition", item.id === conversationId ? "bg-muted" : "hover:bg-muted/70")}>
                             <button type="button" disabled={sending} onClick={() => selectConversation(item.id)} className={cn("w-full truncate rounded-lg px-3 py-2 pr-8 text-left text-sm leading-6", item.id === conversationId ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}>{item.title}</button>
                             <Dropdown trigger={["click"]} menu={{ items: [{ key: "delete", label: "删除", danger: true, icon: <Trash2 className="size-3.5" /> }], onClick: ({ domEvent }) => { domEvent.stopPropagation(); removeConversation(item); } }}>
-                                <button type="button" aria-label="更多操作" title="更多操作" className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded-md p-1 text-muted-foreground transition hover:bg-background hover:text-foreground group-hover:block"><Ellipsis className="size-4" /></button>
+                                <button type="button" aria-label="更多操作" title="更多操作" className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition hover:bg-background hover:text-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"><Ellipsis className="size-4" /></button>
                             </Dropdown>
                         </div>
                     ))}
@@ -277,7 +317,7 @@ export default function TextPage() {
 
     return <div className="flex h-full min-h-0">
         <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-muted/40 px-2 py-4 md:flex">{sidebarBody}</aside>
-        <Drawer placement="left" width={300} open={historyOpen} onClose={() => setHistoryOpen(false)} styles={{ body: { display: "flex", flexDirection: "column", padding: "16px 8px" } }} closable={false}>{sidebarBody}</Drawer>
+        <Drawer placement="left" size={300} open={historyOpen} onClose={() => setHistoryOpen(false)} styles={{ body: { display: "flex", flexDirection: "column", padding: "16px 8px" } }} closable={false}>{sidebarBody}</Drawer>
         <section className="flex min-w-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4 sm:px-6">
                 <div className="flex min-w-0 items-center gap-1">
@@ -343,7 +383,7 @@ export default function TextPage() {
                             <div className="flex min-w-0 items-center justify-end gap-1 sm:gap-2">
                                 <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? ambiguousDraftModel ? "请明确选择模型" : "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }} placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, name: item.name, description: item.description, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">{option.data.price}</div>{option.data.description ? <p className="mt-1 whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>} />
                                 <Select<ReasoningEffort> aria-label="思考强度" title="思考强度" variant="borderless" className="!w-24 shrink-0" prefix={<Brain className="size-4" />} suffixIcon={<ChevronDown className="size-3" />} value={effort} onChange={setReasoningEffort} disabled={!model?.reasoningEfforts?.length || sending || active} placement="topRight" options={modelReasoningOptions(model)} />
-                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" title="发送消息" icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
+                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" title={!model ? "请选择可用模型" : !prompt.trim() && !files.length ? "输入消息或添加图片" : !quoteReady ? "等待费用报价" : "发送消息"} icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
                             </div>
                         </div>
                     </div>

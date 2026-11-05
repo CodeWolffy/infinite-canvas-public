@@ -54,7 +54,7 @@ export type GenerationTask = {
     image?: { mediaId: string; url: string; mimeType?: string; bytes?: number; width?: number | null; height?: number | null; isSaved?: boolean };
 };
 
-export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[] };
+export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[]; referenceMedia: { mediaId: string; mimeType: string; originalName: string }[] };
 
 export type GenerationBatchSummary = {
     totalCount: number;

@@ -1,7 +1,7 @@
-import { Copy, Download, PencilLine, Search, Share2, Trash2, Upload, Users } from "lucide-react";
+import { ArrowUpRight, Copy, Download, Ellipsis, PencilLine, Search, Share2, Trash2, Upload, Users } from "lucide-react";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Drawer, Dropdown, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
@@ -16,6 +16,7 @@ import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 import { ShareDialog } from "@/components/share-dialog";
 import { WorkspaceMoveButton } from "@/components/workspace-move-button";
+import { useAssetCreation } from "./use-asset-creation";
 
 type AssetFormValues = {
     kind: AssetKind;
@@ -337,7 +338,7 @@ export default function AssetsPage() {
                         ))}
                     </div>
 
-                    {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
+                    {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={keyword || kindFilter !== "all" ? "没有符合条件的素材" : "把常用图片、文案和生成结果保存在这里，随时带入创作。"} className="py-20"><Button type="text" onClick={keyword || kindFilter !== "all" ? () => { setKeyword(""); setKindFilter("all"); setPage(1); } : openCreate}>{keyword || kindFilter !== "all" ? "清空筛选" : "添加第一份素材"}</Button></Empty> : null}
 
                     <div className="flex justify-center">
                         <Pagination
@@ -481,6 +482,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMove
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const currentUserId = useUserStore((state) => state.user?.id);
     const mine = Boolean(asset.ownerId && asset.ownerId === currentUserId);
+    const creationItems = useAssetCreation(asset);
     const cover = assetCoverUrl(asset);
     const summary = assetSummary(asset);
     return (
@@ -529,34 +531,22 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMove
                     </div>
                 </div>
             </button>
-            <div className="flex items-center gap-2 px-4 pb-4">
-                <Button size="small" onClick={onOpen}>
-                    {t("common.view")}
-                </Button>
-                {asset.kind !== "video" && asset.kind !== "audio" && asset.editable !== false ? (
-                    <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
-                        {t("common.edit")}
-                    </Button>
-                ) : null}
-                {asset.kind === "text" ? (
-                    <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => void onCopy(asset)}>
-                        {t("common.copy")}
-                    </Button>
-                ) : null}
-                {asset.kind !== "text" ? (
-                    <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(asset)}>
-                        {t("common.download")}
-                    </Button>
-                ) : null}
-                {mine ? (
-                    <>
-                        <Button size="small" icon={<Share2 className="size-3.5" />} onClick={() => setShareOpen(true)}>
-                            {t("share.action")}
-                        </Button>
-                        <WorkspaceMoveButton target={{ kind: "asset", id: asset.id, workspaceId: asset.workspaceId }} onMoved={() => onMoved()} />
-                    </>
-                ) : null}
-                {asset.deletable !== false ? <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>{t("common.delete")}</Button> : null}
+            <div className="flex items-center gap-1 px-3 pb-3">
+                <Button type="text" size="small" onClick={onOpen}>{t("common.view")}</Button>
+                <Dropdown trigger={["click"]} menu={{ items: creationItems }}>
+                    <Button type="text" size="small" icon={<ArrowUpRight className="size-3.5" />}>使用素材</Button>
+                </Dropdown>
+                <div className="ml-auto flex items-center gap-1">
+                    {mine ? <WorkspaceMoveButton target={{ kind: "asset", id: asset.id, workspaceId: asset.workspaceId }} onMoved={() => onMoved()} /> : null}
+                    <Dropdown trigger={["click"]} menu={{ items: [
+                        ...(asset.kind !== "video" && asset.kind !== "audio" && asset.editable !== false ? [{ key: "edit", label: t("common.edit"), icon: <PencilLine className="size-4" />, onClick: onEdit }] : []),
+                        asset.kind === "text" ? { key: "copy", label: t("common.copy"), icon: <Copy className="size-4" />, onClick: () => onCopy(asset) } : { key: "download", label: t("common.download"), icon: <Download className="size-4" />, onClick: () => onDownload(asset) },
+                        ...(mine ? [{ key: "share", label: t("share.action"), icon: <Share2 className="size-4" />, onClick: () => setShareOpen(true) }] : []),
+                        ...(asset.deletable !== false ? [{ key: "delete", label: t("common.delete"), danger: true, icon: <Trash2 className="size-4" />, onClick: onDelete }] : []),
+                    ] }}>
+                        <Button type="text" size="small" aria-label={`${asset.title}的更多操作`} icon={<Ellipsis className="size-4" />} />
+                    </Dropdown>
+                </div>
             </div>
             {shareOpen ? <ShareDialog kind="asset" targetId={asset.id} open={shareOpen} onClose={() => setShareOpen(false)} /> : null}
         </Card>
@@ -566,6 +556,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMove
 function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | null; onClose: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
+    const creationItems = useAssetCreation(asset);
     const cover = asset ? asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "") : "";
     return (
         <Drawer title={t("assets.details")} open={Boolean(asset)} size="large" onClose={onClose}>
@@ -607,14 +598,17 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                             <Typography.Paragraph className="mt-1">{asset.note}</Typography.Paragraph>
                         </div>
                     ) : null}
-                    <Space>
+                    <Space wrap>
+                        <Dropdown trigger={["click"]} menu={{ items: creationItems }}>
+                            <Button type="primary" icon={<ArrowUpRight className="size-4" />}>使用素材</Button>
+                        </Dropdown>
                         {asset.kind === "text" ? (
-                            <Button type="primary" icon={<Copy className="size-4" />} onClick={() => onCopy(asset)}>
+                            <Button icon={<Copy className="size-4" />} onClick={() => onCopy(asset)}>
                                 {t("assets.copyText")}
                             </Button>
                         ) : null}
                         {asset.kind !== "text" ? (
-                            <Button type="primary" icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
+                            <Button icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
                                 {asset.kind === "audio" ? "下载音频" : asset.kind === "video" ? t("assets.downloadVideo") : t("assets.downloadImage")}
                             </Button>
                         ) : null}

@@ -24,6 +24,7 @@ vi.mock("@/stores/use-user-store", () => ({
 vi.mock("@/components/layout/app-providers", () => ({ queryClient: {} }));
 vi.mock("@/hooks/use-copy-text", () => ({ useCopyText: () => vi.fn() }));
 vi.mock("streamdown", () => ({ Streamdown: ({ children }: { children: string }) => <div>{children}</div> }));
+import { clearWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import TextPage from "@/pages/text";
 import { useCreationDraftStore } from "@/stores/use-creation-draft-store";
 
@@ -39,6 +40,7 @@ function mount(entry = "/text") {
 }
 
 beforeEach(() => {
+    clearWorkbenchDraft("text:"); clearWorkbenchDraft("text:history");
     useCreationDraftStore.getState().clearDraft();
     api.models.mockReset().mockResolvedValue([replacement]);
     api.conversation.mockReset().mockResolvedValue(saved("retired"));
@@ -146,4 +148,33 @@ test("多个配置共用原始模型名称时不替用户选择，明确选择�
     await user.click(await screen.findByText("增强文本模型"));
     await waitFor(() => expect(screen.getByRole("button", { name: "发送消息" })).toBeEnabled());
     expect(api.quote.mock.calls.at(-1)![0]).toMatchObject({ modelId: "first" });
+});
+
+
+test("文本输入离开页面后恢复，取消示例替换保留输入", async () => {
+    const user = userEvent.setup();
+    const view = mount();
+    await user.type(screen.getByRole("textbox", { name: "消息内容" }), "保留我的草稿");
+    view.unmount();
+    mount();
+    expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue("保留我的草稿");
+    act(() => useCreationDraftStore.getState().setDraft({ capability: "text", prompt: "新示例" }));
+    await user.click(await screen.findByRole("button", { name: "保留当前输入" }));
+    expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue("保留我的草稿");
+    expect(useCreationDraftStore.getState().draft).toBeNull();
+    expect(api.send).not.toHaveBeenCalled();
+});
+
+test("文本草稿按对话隔离，返回原对话恢复未提交内容", async () => {
+    const user = userEvent.setup();
+    api.conversation.mockResolvedValue(saved("replacement"));
+    const firstView = mount("/text?conversation=history");
+    await user.type(screen.getByRole("textbox", { name: "消息内容" }), "这个问题属于原对话");
+    firstView.unmount();
+    const secondView = mount();
+    expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue("");
+    secondView.unmount();
+    mount("/text?conversation=history");
+    expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue("这个问题属于原对话");
+    expect(api.send).not.toHaveBeenCalled();
 });

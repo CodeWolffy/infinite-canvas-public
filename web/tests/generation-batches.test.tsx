@@ -25,7 +25,7 @@ class TestEventSource extends EventTarget {
     constructor(public url: string) { super(); TestEventSource.all.push(this); }
     snapshot(detail: GenerationBatchDetail) { this.dispatchEvent(new MessageEvent("snapshot", { data: JSON.stringify(detail) })); }
 }
-const detail = (id: string, status = "running") => ({ batch: { id, prompt: "test", createdAt: "2026-01-01" }, tasks: [{ id: `${id}-task`, status }], referenceMediaIds: [] }) as unknown as GenerationBatchDetail;
+const detail = (id: string, status = "running") => ({ batch: { id, prompt: "test", createdAt: "2026-01-01" }, tasks: [{ id: `${id}-task`, status }], referenceMediaIds: [], referenceMedia: [] }) as unknown as GenerationBatchDetail;
 const options = { toLog: (value: GenerationBatchDetail) => ({ log: { id: value.batch.id, createdAt: 1, status: value.tasks.some((task) => ["queued", "running", "reviewing"].includes(task.status)) ? "pending" as const : "success" as const }, results: [] }), notifyKeys: { success: "success", title: "title" } };
 
 beforeEach(() => { state.sessionVersion = 1; TestEventSource.all = []; state.message.success.mockClear(); vi.stubGlobal("EventSource", TestEventSource); });

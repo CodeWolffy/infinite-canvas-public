@@ -29,6 +29,10 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { useGenerationBatches, useWorkbenchBootstrap, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { useGenerationQuote } from "@/hooks/use-generation-quote";
+import { useConfirmInputReplace } from "@/hooks/use-confirm-input-replace";
+import { useAddToCanvas } from "@/hooks/use-add-to-canvas";
+import { useWorkbenchInput, type WorkbenchInput } from "@/hooks/use-workbench-input";
+import { getWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import { useCreationDraftStore } from "@/stores/use-creation-draft-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -60,11 +64,15 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
 
 export default function ImagePage() {
     const { message, modal } = App.useApp();
+    const confirmReplace = useConfirmInputReplace();
+    const savedInput = useRef(getWorkbenchDraft<WorkbenchInput>("image")).current;
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const { t } = useTranslation();
     const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
     const targetBatchId = searchParams.get("batch") || "";
+    const reuseBatch = searchParams.get("reuse") === "1";
+    const handledReuse = useRef("");
     const targetBatchRef = useRef(targetBatchId);
     targetBatchRef.current = targetBatchId;
     const initialBatchRef = useRef<string | null>(null);
@@ -98,10 +106,10 @@ export default function ImagePage() {
         },
         notifyKeys: { success: "imageWorkbench.generated", title: "imageWorkbench.notificationTitle" },
     });
-    const [modelId, setModelId] = useState(remixState?.modelId || "");
+    const [modelId, setModelId] = useState(savedInput?.model || remixState?.modelId || "");
     const [ambiguousDraftModel, setAmbiguousDraftModel] = useState(false);
-    const [prompt, setPrompt] = useState(remixState?.prompt || "");
-    const [references, setReferences] = useState<ReferenceImage[]>([]);
+    const [prompt, setPrompt] = useState(savedInput?.prompt || remixState?.prompt || "");
+    const [references, setReferences] = useState<ReferenceImage[]>(savedInput?.references || []);
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -125,11 +133,12 @@ export default function ImagePage() {
         toLog: (batch, models) => summaryToLog(batch, models),
         applyPreferences: (preferences, models) => {
             const preferredModelId = typeof preferences.imageModelId === "string" && preferences.imageModelId ? preferences.imageModelId : models[0]?.id || "";
-            const initialModel = remixState?.modelId || preferredModelId;
+            const initialModel = savedInput?.model || remixState?.modelId || preferredModelId;
             setModelId(initialModel);
             if (initialModel) updateConfig("imageModel", initialModel);
             for (const key of ["quality", "size", "count", "background"] as const) {
-                if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
+                const value = savedInput?.settings[key] ?? preferences[key];
+                if (typeof value === "string") updateConfig(key, value);
             }
         },
         resolveInitialBatchId: (batches) => {
@@ -151,6 +160,8 @@ export default function ImagePage() {
     const failedResultIndexes = results.flatMap((item, index) => (item.status === "failed" ? [index] : []));
     const successImages = results.flatMap((item) => (item.status === "success" && item.image ? [item.image] : []));
 
+    const inputDraft = useWorkbenchInput("image", { prompt, references, model, config: effectiveConfig }, initialized, sessionVersion);
+
     const loadBatchRef = useRef<(id: string, restoreInput: boolean) => Promise<void>>(async () => undefined);
     loadBatchRef.current = async (id, restoreInput) => {
         const request = ++batchRequestRef.current;
@@ -163,15 +174,20 @@ export default function ImagePage() {
             setPreviewLog(applied.log);
             setResults(applied.results);
             if (!restoreInput) return;
-            setPrompt(applied.log.prompt);
-            setReferences(applied.log.references);
-            setModelId(detail.batch.modelId);
-            setAmbiguousDraftModel(false);
-            updateConfig("imageModel", detail.batch.modelId);
-            updateConfig("quality", applied.log.config.quality);
-            updateConfig("size", applied.log.config.size);
-            updateConfig("count", applied.log.config.count);
-            updateConfig("background", applied.log.config.background);
+            handledReuse.current = id;
+            confirmReplace(inputDraft.dirty, () => {
+                if (!mountedRef.current || request !== batchRequestRef.current || useUserStore.getState().sessionVersion !== version) return;
+                ++batchRequestRef.current;
+                setPrompt(applied.log.prompt);
+                setReferences(applied.log.references);
+                setModelId(detail.batch.modelId);
+                setAmbiguousDraftModel(false);
+                updateConfig("imageModel", detail.batch.modelId);
+                updateConfig("quality", applied.log.config.quality);
+                updateConfig("size", applied.log.config.size);
+                updateConfig("count", applied.log.config.count);
+                updateConfig("background", applied.log.config.background);
+            });
         } catch (error) {
             if (request === batchRequestRef.current && useUserStore.getState().sessionVersion === version) message.error(error instanceof Error ? error.message : "生成记录读取失败");
         }
@@ -180,39 +196,46 @@ export default function ImagePage() {
     useEffect(() => {
         if (!initialized || generating || !draft || draft.capability !== "image" || draft.sessionVersion !== sessionVersion || appliedDraftRef.current === draft.id) return;
         appliedDraftRef.current = draft.id;
-        const previousBatch = targetBatchRef.current;
-        dismissedBatchRef.current = previousBatch || null;
-        targetBatchRef.current = "";
-        ++batchRequestRef.current;
-        initialBatchRef.current = null;
-        setPrompt(draft.prompt);
-        setReferences(draft.references || []);
-        setResults([]);
-        setPreviewLog(null);
-        if (draft.modelId || draft.modelName) {
-            const { model: selected, ambiguous } = resolveCreationDraftModel(modelsRef.current, draft);
-            setAmbiguousDraftModel(ambiguous);
-            const value = selected?.id || draft.modelId || draft.modelName || "";
-            setModelId(value);
-            updateConfig("imageModel", value);
-            if (!selected) message.warning(ambiguous ? `草稿名称「${draft.modelName}」对应多个模型配置，请明确选择` : `草稿指定的模型「${draft.modelName || draft.modelId}」当前不可用，请重新选择`);
-        }
-        const applied = readImageDraftSettings(draft.settings, useConfigStore.getState().config);
-        for (const [key, value] of Object.entries(applied.settings)) updateConfig(key as "size" | "quality" | "count" | "background", value);
-        if (applied.warnings.length) message.warning(`草稿中的${applied.warnings.join("、")}无法使用，已保留当前设置`);
-        if (previousBatch) {
-            setSearchParams((current) => { current.delete("batch"); return current; }, { replace: true });
-        }
-        clearDraft(draft.id);
+        confirmReplace(inputDraft.dirty, () => {
+            if (useCreationDraftStore.getState().draft?.id !== draft.id) return;
+            const previousBatch = targetBatchRef.current;
+            dismissedBatchRef.current = previousBatch || null;
+            targetBatchRef.current = "";
+            ++batchRequestRef.current;
+            initialBatchRef.current = null;
+            setPrompt(draft.prompt);
+            setReferences(draft.references || []);
+            setResults([]);
+            setPreviewLog(null);
+            if (draft.modelId || draft.modelName) {
+                const { model: selected, ambiguous } = resolveCreationDraftModel(modelsRef.current, draft);
+                setAmbiguousDraftModel(ambiguous);
+                const value = selected?.id || draft.modelId || draft.modelName || "";
+                setModelId(value);
+                updateConfig("imageModel", value);
+                if (!selected) message.warning(ambiguous ? `草稿名称「${draft.modelName}」对应多个模型配置，请明确选择` : `草稿指定的模型「${draft.modelName || draft.modelId}」当前不可用，请重新选择`);
+            }
+            const applied = readImageDraftSettings(draft.settings, useConfigStore.getState().config);
+            for (const [key, value] of Object.entries(applied.settings)) updateConfig(key as "size" | "quality" | "count" | "background", value);
+            if (applied.warnings.length) message.warning(`草稿中的${applied.warnings.join("、")}无法使用，已保留当前设置`);
+            if (previousBatch) {
+                setSearchParams((current) => { current.delete("batch"); current.delete("reuse"); return current; }, { replace: true });
+            }
+            clearDraft(draft.id);
+        }, () => clearDraft(draft.id));
     }, [initialized, generating, draft, sessionVersion, updateConfig, clearDraft, message, setSearchParams]);
 
     useEffect(() => {
         if (!initialized || pendingDraft || targetBatchId !== targetBatchRef.current || targetBatchId && targetBatchId === dismissedBatchRef.current) return;
         dismissedBatchRef.current = null;
+        if (!reuseBatch) handledReuse.current = "";
         const id = targetBatchId || initialBatchRef.current;
-        if (id) void loadBatchRef.current(id, Boolean(targetBatchId));
+        if (id) {
+            const shouldReuse = reuseBatch && handledReuse.current !== id;
+            void loadBatchRef.current(id, shouldReuse);
+        }
         return () => { ++batchRequestRef.current; };
-    }, [initialized, targetBatchId, sessionVersion, pendingDraft]);
+    }, [initialized, targetBatchId, sessionVersion, pendingDraft, reuseBatch]);
 
     const captureInputScope = () => {
         const version = useUserStore.getState().sessionVersion;
@@ -288,6 +311,7 @@ export default function ImagePage() {
         const viewRequest = ++batchRequestRef.current;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
+        const submittedFingerprint = inputDraft.fingerprint;
         const text = prompt.trim();
         if (!text) {
             generatingRef.current = false;
@@ -309,13 +333,15 @@ export default function ImagePage() {
             const referenceMediaIds = await Promise.all(references.map((item) => ensurePlatformMedia(item)));
             const targetModelId = selectedPlatformModel(modelsRef.current, currentModel, "image");
             assertCurrentSession(sessionVersion);
+            if (!mountedRef.current || viewRequest !== batchRequestRef.current || targetBatchRef.current !== sourceBatchId) return;
             const created = await createGenerationBatch({ modelId: targetModelId, prompt: text, count: generationCount, parameters: platformImageParameters(effectiveConfig), referenceMediaIds });
             assertCurrentSession(sessionVersion);
+            inputDraft.submitted(submittedFingerprint);
             const applied = applyDetail({ ...created, referenceMediaIds });
             if (mountedRef.current && viewRequest === batchRequestRef.current && targetBatchRef.current === sourceBatchId) {
                 setPreviewLog(applied.log);
                 setResults(applied.results);
-                setSearchParams((current) => { current.set("batch", created.batch.id); return current; }, { replace: true });
+                setSearchParams((current) => { current.set("batch", created.batch.id); current.delete("reuse"); return current; }, { replace: true });
             }
             if (agentTaskId) {
                 registerAgentTask(created.batch.id, agentTaskId);
@@ -393,7 +419,7 @@ export default function ImagePage() {
                 tags: [],
                 source: t("imageWorkbench.source"),
                 data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
-                metadata: { source: "image-page", prompt },
+                metadata: { source: "image-page", prompt: previewLog?.prompt || prompt },
             });
             assertCurrentSession(sessionVersion);
             message.success(t("common.addedToAssets"));
@@ -409,7 +435,7 @@ export default function ImagePage() {
         try {
             assertInput();
             if (payload.kind === "text") {
-                setPrompt(payload.content);
+                confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; setPrompt(payload.content); });
             } else if (payload.kind === "image") {
                 const existingId = payload.storageKey ? mediaId(payload.storageKey) : "";
                 if (existingId) {
@@ -431,19 +457,23 @@ export default function ImagePage() {
         }
     };
 
-    const createSession = () => {
+    const clearViewedBatch = () => {
         const previousBatch = targetBatchRef.current;
         dismissedBatchRef.current = previousBatch || null;
         targetBatchRef.current = "";
         ++batchRequestRef.current;
         initialBatchRef.current = null;
-        if (previousBatch) setSearchParams((current) => { current.delete("batch"); return current; }, { replace: true });
-        setPrompt("");
-        setReferences([]);
+        if (previousBatch) setSearchParams((current) => { current.delete("batch"); current.delete("reuse"); return current; }, { replace: true });
         setResults([]);
         setSelectedLogIds([]);
         setPreviewLog(null);
     };
+
+    const createSession = () => confirmReplace(inputDraft.dirty, () => {
+        clearViewedBatch();
+        setPrompt("");
+        setReferences([]);
+    });
 
     const deleteSelectedLogs = () => {
         const selected = logs.filter((log) => selectedLogIds.includes(log.id));
@@ -462,7 +492,7 @@ export default function ImagePage() {
                 const deletedIds = await deleteBatches(selected.map((log) => log.id));
                 if (deletedIds.length) {
                     setSelectedLogIds((current) => current.filter((id) => !deletedIds.includes(id)));
-                    if (previewLog && deletedIds.includes(previewLog.id)) createSession();
+                    if (previewLog && deletedIds.includes(previewLog.id)) clearViewedBatch();
                 }
             },
         });
@@ -471,8 +501,8 @@ export default function ImagePage() {
     const previewGenerationLog = (log: GenerationLog) => {
         dismissedBatchRef.current = null;
         setLogsOpen(false);
-        if (targetBatchId === log.id) void loadBatchRef.current(log.id, true);
-        else setSearchParams((current) => { current.set("batch", log.id); return current; });
+        if (targetBatchId === log.id) void loadBatchRef.current(log.id, false);
+        else setSearchParams((current) => { current.set("batch", log.id); current.delete("reuse"); handledReuse.current = ""; return current; });
     };
 
     const retryResults = async (indexes: number[]) => {
@@ -594,7 +624,7 @@ export default function ImagePage() {
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button
                                                 type="button"
-                                                className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex"
+                                                className="absolute right-1 top-1 flex size-6 items-center justify-center rounded bg-black/60 text-white [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
                                                 onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
                                                 aria-label={t("imageWorkbench.removeReference")}
                                             >
@@ -617,7 +647,7 @@ export default function ImagePage() {
                         <div className="mt-auto pt-6">
                             <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0 text-xs leading-5 text-muted-foreground" aria-live="polite">{quote.quote ? <>预计冻结 <span className="font-semibold tabular-nums text-foreground">¥{quote.quote.estimatedHold}</span></> : quote.isFetching ? "正在获取本次费用…" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : "输入提示词后查看费用"}</div>
-                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} onClick={() => void generate()}>{t("workbench.generate")}</Button>
+                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} title={!prompt.trim() ? "请先填写提示词" : !quoteModelId ? "请选择可用模型" : !quote.ready ? "等待费用报价或处理提示的问题" : "开始生成"} onClick={() => void generate()}>{t("workbench.generate")}</Button>
                             </div>
                             {parameterError || quote.error ? <p className="mt-2 text-xs leading-5 text-destructive" role="alert">{parameterError || quote.error?.message}</p> : null}
                         </div>
@@ -627,6 +657,7 @@ export default function ImagePage() {
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
+                                {previewLog ? <Button type="text" size="small" disabled={generating} onClick={() => void loadBatchRef.current(previewLog.id, true)}>用此批次再创作</Button> : null}
                             </div>
                             <div className="flex items-center gap-2">
                                 {failedResultIndexes.length > 1 ? (
@@ -691,7 +722,7 @@ export default function ImagePage() {
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} />
                 </div>
             </Drawer>
-            <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
+            <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={(value) => confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; setPrompt(value); })} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
         </div>
     );
@@ -727,6 +758,7 @@ function ResultImageCard({
     onSaveAsset: (image: GeneratedImage, index: number) => void;
 }) {
     const { t } = useTranslation();
+    const addToCanvas = useAddToCanvas();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
@@ -737,7 +769,8 @@ function ResultImageCard({
                     {image.bytes ? <span>{formatBytes(image.bytes)}</span> : null}
                     <span>{formatDuration(image.durationMs)}</span>
                 </div>
-                <div className="grid min-w-0 grid-cols-3 gap-2">
+                <div className="grid min-w-0 grid-cols-2 gap-2">
+                    <Button type="text" className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<ImagePlus className="size-3.5" />} onClick={() => addToCanvas([{ kind: "image", dataUrl: image.dataUrl, storageKey: image.storageKey, title: `生成图片 ${index + 1}` }])}>加入画布</Button>
                     <Tooltip title={t("common.addToAssets")}>
                         <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)}>
                             {t("common.addToAssets")}
@@ -820,7 +853,7 @@ function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): Ge
 
 function taskToResult(task: GenerationTask): GenerationResult {
     if (task.status === "succeeded" && task.image) {
-        return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: generationTaskDuration(task), width: 0, height: 0, bytes: 0 } };
+        return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: generationTaskDuration(task), width: task.image.width || 0, height: task.image.height || 0, bytes: task.image.bytes || 0, mimeType: task.image.mimeType } };
     }
     if (task.status === "failed" || task.status === "canceled") return { id: task.id, status: "failed", error: task.errorMessage || task.errorCode || i18n.t("workbench.generationFailed") };
     return { id: task.id, status: task.status === "reviewing" ? "reviewing" : task.status === "running" ? "running" : "queued" };
@@ -843,7 +876,7 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
         model: detail.tasks[0]?.modelDisplayName || detail.tasks[0]?.modelName || model?.displayName || model?.name || detail.batch.modelId,
         modelId: detail.batch.modelId,
         config: { model: detail.batch.modelId, imageModel: detail.batch.modelId, quality: String(parameters.quality || "auto"), size: String(parameters.size || "auto"), count: String(detail.batch.requestedCount), background: String(parameters.background || "") },
-        references: detail.referenceMediaIds.map((mediaId, index) => ({ id: mediaId, name: `reference-${index + 1}`, type: "image", dataUrl: `/api/media/${mediaId}`, storageKey: mediaId })),
+        references: detail.referenceMedia.map((media, index) => ({ id: media.mediaId, name: media.originalName || `reference-${index + 1}`, type: media.mimeType, dataUrl: `/api/media/${media.mediaId}`, storageKey: media.mediaId })),
         referenceMediaIds: detail.referenceMediaIds,
         durationMs: Math.max(0, ...detail.tasks.map(generationTaskDuration)),
         successCount,

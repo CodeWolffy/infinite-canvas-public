@@ -3,6 +3,7 @@ import { Spin } from "antd";
 import { createBrowserRouter, Navigate, Outlet, useParams } from "react-router-dom";
 
 import { AdminGuard, AuthGuard } from "@/components/auth/auth-guard";
+import { useUserStore } from "@/stores/use-user-store";
 import { AppErrorFallback } from "@/components/layout/app-error-boundary";
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import AdminLayout from "@/layouts/admin-layout";
@@ -36,6 +37,10 @@ function CanvasProjectRoute() {
 }
 const ImagePage = lazy(() => import("@/pages/image"));
 const VideoPage = lazy(() => import("@/pages/video"));
+function WorkbenchRoute({ capability }: { capability: "image" | "video" }) {
+    const session = useUserStore((state) => state.sessionVersion);
+    return capability === "image" ? <ImagePage key={session} /> : <VideoPage key={session} />;
+}
 const WalletPage = lazy(() => import("@/pages/user/wallet"));
 const AdminInvitationsPage = lazy(() => import("@/pages/admin/invitations"));
 const AdminBillingPage = lazy(() => import("@/pages/admin/billing"));
@@ -92,8 +97,8 @@ export const router = createBrowserRouter([
                 ),
                 children: [
                     { path: "/", element: <HomePage /> },
-                    { path: "/image", element: <ImagePage /> },
-                    { path: "/video", element: <VideoPage /> },
+                    { path: "/image", element: <WorkbenchRoute capability="image" /> },
+                    { path: "/video", element: <WorkbenchRoute capability="video" /> },
                     { path: "/studio", element: <Navigate to="/video" replace /> },
                     { path: "/audio", element: <Navigate to="/video" replace /> },
                     { path: "/config", element: <Navigate to="/video" replace /> },

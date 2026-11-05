@@ -99,7 +99,7 @@ func (a *App) batchDetail(ctx context.Context, id, userID string) (any, error) {
 	for _, task := range tasks {
 		taskView(task)
 	}
-	refs, err := rows(ctx, a.DB, "SELECT media_id FROM media_references WHERE owner_kind='batch' AND owner_id=$1 ORDER BY position", id)
+	refs, err := rows(ctx, a.DB, "SELECT r.media_id,m.mime_type,m.original_name FROM media_references r JOIN media_objects m ON m.id=r.media_id WHERE r.owner_kind='batch' AND r.owner_id=$1 ORDER BY r.position", id)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (a *App) batchDetail(ctx context.Context, id, userID string) (any, error) {
 	for _, ref := range refs {
 		ids = append(ids, str(ref["mediaId"]))
 	}
-	return gin.H{"batch": batch, "tasks": tasks, "referenceMediaIds": ids}, nil
+	return gin.H{"batch": batch, "tasks": tasks, "referenceMediaIds": ids, "referenceMedia": refs}, nil
 }
 
 func (a *App) generationRoutes(api *gin.RouterGroup) {

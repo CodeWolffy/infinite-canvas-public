@@ -1,7 +1,9 @@
 import { lazy, Suspense, useLayoutEffect, useState, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 
 import { AppTopNav } from "@/components/layout/app-top-nav";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { useCanvasHandoffStore } from "@/stores/canvas/use-canvas-handoff-store";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore } from "@/stores/use-config-store";
@@ -9,12 +11,15 @@ import { useUserStore } from "@/stores/use-user-store";
 
 // Agent 面板只在用户真正使用本地 Agent 时才需要，独立 chunk 避免它的 Markdown 渲染链进入首屏。
 const AgentPanel = lazy(() => import("@/components/agent/agent-panel").then((module) => ({ default: module.AgentPanel })));
+const AddToCanvasModal = lazy(() => import("@/components/canvas/add-to-canvas-modal").then((module) => ({ default: module.AddToCanvasModal })));
 
 function hasAgentBootstrapInHash() {
     return typeof window !== "undefined" && window.location.hash.includes("agent=");
 }
 
 export default function UserLayout({ children }: { children: ReactNode }) {
+    const location = useLocation();
+    const canvasHandoff = useCanvasHandoffStore((state) => state.request);
     const hydrateProjects = useCanvasStore((state) => state.hydrateProjects);
     const hydrateAssets = useAssetStore((state) => state.hydrateAssets);
     const hydratePlatformModels = useConfigStore((state) => state.hydratePlatformModels);
@@ -25,6 +30,15 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     const agentToken = useAgentStore((state) => state.token);
     // SSE 连接由面板内部持有，因此已配置过 Agent 的用户和带 agent 参数的链接必须保持原有挂载时机。
     const [agentPanelUsed, setAgentPanelUsed] = useState(hasAgentBootstrapInHash);
+
+    useLayoutEffect(() => {
+        const { request, cancel } = useCanvasHandoffStore.getState();
+        if (!request) return;
+        const expected = request.projectId ? location.pathname === `/canvas/${request.projectId}` && location.state?.canvasHandoffId === request.id : location.key === request.sourceLocationKey;
+        if (!expected) cancel(request.id);
+    }, [location]);
+
+    useLayoutEffect(() => () => useCanvasHandoffStore.getState().cancel(), []);
 
     useLayoutEffect(() => {
         if (userId) void Promise.all([hydrateProjects(userId), hydrateAssets(userId), hydratePlatformModels(), hydratePreferences()]).catch(() => undefined);
@@ -54,6 +68,7 @@ export default function UserLayout({ children }: { children: ReactNode }) {
                     <AgentPanel />
                 </Suspense>
             ) : null}
+            {canvasHandoff && !canvasHandoff.projectId ? <Suspense fallback={null}><AddToCanvasModal key={canvasHandoff.id} /></Suspense> : null}
         </div>
     );
 }

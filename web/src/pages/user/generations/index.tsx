@@ -285,7 +285,7 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                                     type="text"
                                     className="text-purple-600 hover:text-purple-700 dark:text-purple-400"
                                     icon={<Wand2 className="size-3.5" />}
-                                    onClick={() => navigate("/image", { state: { prompt: batch.prompt, modelId: batch.modelId } })}
+                                    onClick={() => navigate(`/image?${new URLSearchParams({ batch: batch.id, reuse: "1" })}`)}
                                 />
                             </Tooltip>
                             <Tooltip title={t("common.copyPrompt")}>
