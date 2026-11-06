@@ -131,6 +131,19 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+test.each(["image", "video"] as const)("%s 提交批次后立即展示结果，不因缺少参考详情报错", async (capability) => {
+    api.getBatch.mockResolvedValue(detail(capability, "a"));
+    api.ensure.mockResolvedValue("uploaded-reference");
+    const created = detail(capability, "created");
+    api.create.mockResolvedValue({ batch: created.batch, tasks: created.tasks });
+    mount(capability);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
+    fireEvent.click(screen.getByRole("button", { name: "workbench.generate" }));
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/${capability}?batch=created`));
+    expect(api.error).not.toHaveBeenCalled();
+});
+
 test.each(["image", "video"] as const)("%s 同页切换批次恢复输入、模型、参数和参考，迟到旧结果不反写", async (capability) => {
     let old!: (value: GenerationBatchDetail) => void;
     let next!: (value: GenerationBatchDetail) => void;

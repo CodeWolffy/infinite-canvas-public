@@ -107,35 +107,32 @@ export default function IndexPage() {
 
     return (
         <main className="h-full overflow-y-auto bg-background text-foreground">
-            <div className="mx-auto flex max-w-6xl flex-col gap-10 px-5 py-8 sm:px-8 sm:py-10">
-                <section aria-labelledby="home-creation-title">
-                    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-                        <div><h1 id="home-creation-title" className="text-3xl font-semibold tracking-tight">从一个想法开始</h1><p className="mt-2 text-sm text-muted-foreground">写下内容，选择创作方式。</p></div>
-                        <div className="flex items-center gap-1">
-                            <Button type="text" disabled={!hydrated} loading={creatingCanvas} icon={<Plus className="size-4" />} onClick={() => void newCanvas()}>新建画布</Button>
-                            <Button type="text" icon={<Bot className="size-4" />} onClick={() => useAgentStore.getState().openPanel()}>本地 Agent</Button>
-                        </div>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-card px-4 pb-4 sm:px-5">
-                        <div className="flex gap-5 border-b border-border/70">
-                            {creationModes.map((item) => <button key={item.value} type="button" aria-pressed={capability === item.value} onClick={() => setCapability(item.value)} className={cn("inline-flex cursor-pointer items-center gap-2 border-b-2 py-3.5 text-sm transition", capability === item.value ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}><item.icon className="size-4" />{item.label}</button>)}
-                        </div>
-                        <Input.TextArea aria-label={`${mode.label}创作内容`} variant="borderless" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={mode.placeholder} autoSize={{ minRows: 3, maxRows: 7 }} className="!px-0 !py-4 !text-base" />
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                <ModelPicker config={config} value={model} onChange={(value) => updateConfig(modelKey, value)} capability={capability} className="!rounded-lg !border-0 !px-1 !shadow-none" placeholder="在工作台选择模型" />
-                                {capability === "image" ? <CanvasSizePicker value={config.size} onChange={(value) => updateConfig("size", value)} className="h-8 w-24" /> : null}
+            <div className="mx-auto flex max-w-6xl flex-col gap-8 px-5 py-8 sm:px-8 sm:py-10">
+                <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:gap-10">
+                    <section aria-labelledby="home-creation-title" className="min-w-0">
+                        <div className="mb-5"><h1 id="home-creation-title" className="text-3xl font-semibold tracking-tight">从一个想法开始</h1><p className="mt-2 text-sm text-muted-foreground">写下内容，选择创作方式。</p></div>
+                        <div className="overflow-hidden rounded-2xl border border-border bg-card px-4 pb-4 transition-colors focus-within:border-ring/60 sm:px-5">
+                            <div className="flex gap-6" role="group" aria-label="创作方式">
+                                {creationModes.map((item) => <button key={item.value} type="button" aria-pressed={capability === item.value} onClick={() => setCapability(item.value)} className={cn("inline-flex cursor-pointer items-center gap-2 border-b-2 py-3.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", capability === item.value ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}><item.icon className="size-4" />{item.label}</button>)}
                             </div>
-                            <Button type="primary" disabled={!prompt.trim()} icon={<ArrowRight className="size-4" />} iconPlacement="end" onClick={startCreation}>带入{mode.label}工作台</Button>
+                            <Input.TextArea aria-label={`${mode.label}创作内容`} variant="borderless" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={mode.placeholder} autoSize={{ minRows: 3, maxRows: 7 }} className="!px-0 !py-5 !text-base" />
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+                                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
+                                    <ModelPicker config={config} value={model} onChange={(value) => updateConfig(modelKey, value)} capability={capability} className="!max-w-full !rounded-lg !border-0 !bg-transparent !px-1 !shadow-none sm:!max-w-64" placeholder="在工作台选择模型" />
+                                    {capability === "image" ? <CanvasSizePicker value={config.size} onChange={(value) => updateConfig("size", value)} className="h-8 w-28 shrink-0" /> : null}
+                                </div>
+                                <Button type="primary" className="!ml-auto !shadow-none" disabled={!prompt.trim()} icon={<ArrowRight className="size-4" />} iconPlacement="end" onClick={startCreation}>进入{mode.label}工作台</Button>
+                            </div>
                         </div>
-                    </div>
-                    <p className="mt-3 text-xs leading-5 text-muted-foreground">进入工作台后可继续编辑、添加参考素材，并确认模型、参数与费用后生成。</p>
-                </section>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><p className="text-xs leading-5 text-muted-foreground">进入工作台后，确认参数与费用。</p><Button type="text" size="small" className="!text-xs !text-muted-foreground" icon={<Bot className="size-3.5" />} onClick={() => useAgentStore.getState().openPanel()}>本地 Agent</Button></div>
+                    </section>
 
-                <section aria-labelledby="home-recent-title">
-                    <div className="mb-4 flex items-center justify-between gap-3"><h2 id="home-recent-title" className="text-xl font-semibold tracking-tight">最近的画布</h2><Button type="text" icon={<ArrowRight className="size-4" />} iconPlacement="end" onClick={() => navigate("/canvas")}>全部画布</Button></div>
-                    {!hydrated || !recentReady ? <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((key) => <Skeleton key={key} active className="rounded-xl border border-border p-5" />)}</div> : recentError ? <div className="flex items-center justify-between gap-3 rounded-xl border border-border p-5"><p className="text-sm text-muted-foreground">{recentError}</p><Button onClick={() => setRecentRequest((value) => value + 1)}>重新加载</Button></div> : recentProjects.length ? <div className="grid gap-4 sm:grid-cols-3">{recentProjects.map((project) => <CanvasProjectCard key={project.id} project={project} compact />)}</div> : <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border p-6"><p className="text-sm text-muted-foreground">把灵感、素材和生成结果放进同一张画布。</p><Button type="text" loading={creatingCanvas} icon={<Plus className="size-4" />} onClick={() => void newCanvas()}>创建第一张画布</Button></div>}
-                </section>
+                    <section aria-labelledby="home-recent-title" className="min-w-0 lg:border-l lg:border-border/70 lg:pl-8">
+                        <div className="mb-3 flex items-center justify-between gap-2"><h2 id="home-recent-title" className="text-lg font-semibold tracking-tight">继续创作</h2><Button type="text" size="small" className="!text-muted-foreground" icon={<ArrowRight className="size-3.5" />} iconPlacement="end" onClick={() => navigate("/canvas")}>全部画布</Button></div>
+                        {!hydrated || !recentReady ? <div className="space-y-2 py-1">{[0, 1, 2].map((key) => <div key={key} className="flex items-center gap-3 py-2"><Skeleton.Button active style={{ width: 64, height: 48 }} /><Skeleton active title={{ width: "65%" }} paragraph={{ rows: 1, width: "45%" }} /></div>)}</div> : recentError ? <div className="py-5"><p className="break-words text-sm leading-6 text-muted-foreground">{recentError}</p><Button type="text" className="mt-2" onClick={() => setRecentRequest((value) => value + 1)}>重新加载</Button></div> : recentProjects.length ? <div className="-mx-2 space-y-1">{recentProjects.map((project) => <CanvasProjectCard key={project.id} project={project} compact />)}</div> : <div className="py-6"><p className="text-sm">还没有画布</p><p className="mt-2 text-xs leading-6 text-muted-foreground">把灵感、素材和生成结果，放进同一张画布。</p></div>}
+                        <Button type="text" className="!mt-3 !px-0" disabled={!hydrated} loading={creatingCanvas} icon={<Plus className="size-4" />} onClick={() => void newCanvas()}>新建画布</Button>
+                    </section>
+                </div>
 
                 <CreationScenes />
 

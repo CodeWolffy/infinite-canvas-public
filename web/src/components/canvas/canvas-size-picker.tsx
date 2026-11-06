@@ -18,7 +18,7 @@ export function CanvasSizePicker({ value, className, onChange }: CanvasSizePicke
     const [open, setOpen] = useState(false);
     const [search, setSearch] = useState("");
     const extraOptions = [value, search.trim()].filter((item) => item && !sizeOptions.includes(item));
-    const options = [...sizeOptions, ...Array.from(new Set(extraOptions))].map((size) => ({ value: size, label: size }));
+    const options = [...sizeOptions, ...Array.from(new Set(extraOptions))].map((size) => ({ value: size, label: size === "auto" ? "自动比例" : size }));
     const selectSize = (next: string) => {
         onChange(next.trim());
         setSearch("");
@@ -39,11 +39,12 @@ export function CanvasSizePicker({ value, className, onChange }: CanvasSizePicke
     return (
         <div ref={rootRef} className={className}>
             <Select
-                showSearch
+                aria-label={t("canvas.controls.ratio")}
+                showSearch={{ searchValue: search, onSearch: setSearch, optionFilterProp: ["label", "value"] }}
+                variant="borderless"
                 open={open}
-                className={cn("canvas-compact-control canvas-control-select h-full w-full")}
+                className={cn("canvas-compact-control canvas-control-select h-full w-full !bg-transparent !shadow-none")}
                 value={value || undefined}
-                searchValue={search}
                 placeholder={t("canvas.controls.ratio")}
                 options={options}
                 popupMatchSelectWidth={false}
@@ -53,7 +54,6 @@ export function CanvasSizePicker({ value, className, onChange }: CanvasSizePicke
                     </div>
                 )}
                 onOpenChange={setOpen}
-                onSearch={setSearch}
                 onChange={selectSize}
                 onBlur={() => {
                     if (search.trim()) selectSize(search);

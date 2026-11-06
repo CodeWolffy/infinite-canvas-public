@@ -11,7 +11,7 @@ const userTaskScope = ` WHERE t.user_id=$1
 	AND (t.batch_id IS NULL OR (b.id IS NOT NULL AND b.deleted_at IS NULL))
 	AND ($2='' OR t.capability=$2)`
 
-const userTaskStatusFilter = `($3='' OR t.status=$3)`
+const userTaskStatusFilter = `($3='' OR t.status=$3 OR ($3='active' AND t.status IN ('reviewing','queued','running')))`
 
 func userTaskView(row Row) Row {
 	if str(row["sourceUnavailable"]) != "" {
@@ -32,7 +32,7 @@ func (a *App) userTaskRoutes(api *gin.RouterGroup) {
 			return nil, problem(400, "invalid_capability", "任务类型不正确")
 		}
 		switch status {
-		case "", "reviewing", "queued", "running", "succeeded", "failed", "canceled":
+		case "", "active", "reviewing", "queued", "running", "succeeded", "failed", "canceled":
 		default:
 			return nil, problem(400, "invalid_status", "任务状态不正确")
 		}

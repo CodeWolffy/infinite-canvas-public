@@ -64,6 +64,19 @@ export function CanvasProjectCard({ project, compact = false }: { project: Canva
     const isOwner = project.accessRole === "owner";
     const updated = t("canvas.project.updated", { date: new Date(project.updatedAt).toLocaleString(i18n.resolvedLanguage, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) });
 
+    if (compact) return (
+        <button type="button" aria-label={`打开画布：${project.title}`} onClick={open} className="group flex w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-ring dark:hover:bg-white/10" style={{ color: theme.node.text }}>
+            <span className="flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md" style={{ color: theme.node.placeholder }}>
+                {project.coverUrl && failedCover !== project.coverUrl ? <img key={project.coverUrl} src={project.coverUrl} alt="" loading="lazy" className="h-full w-full object-contain" onError={() => { if (useUserStore.getState().sessionVersion === sessionVersion) setFailedCover(project.coverUrl || ""); }} /> : <PreviewIcon className="size-6" strokeWidth={1.25} aria-label={project.nodeCount ? preview.label : "空白画布"} />}
+            </span>
+            <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium" title={project.title}>{project.title}</span>
+                {project.workspaceName ? <span className="mt-0.5 flex items-center gap-1 text-xs" style={{ color: theme.node.muted }}><Users className="size-3 shrink-0" /><span className="truncate">{project.workspaceName}{!writable ? ` · ${t("workspace.roles.viewer")}` : ""}</span></span> : null}
+                <span className="mt-1 block text-xs" style={{ color: theme.node.placeholder }}>{updated}</span>
+            </span>
+        </button>
+    );
+
     return (
         <article className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border transition" style={{ background: theme.node.panel, borderColor: selected ? theme.node.activeStroke : theme.node.stroke, color: theme.node.text }} onClick={() => !editing && open()}>
             <div className="relative">

@@ -73,14 +73,14 @@ func TestUserTasksOwnershipFiltersAndPagination(t *testing.T) {
 	if _, err := a.DB.Exec(ctx, "INSERT INTO media_objects(id,owner_id,object_key,original_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,'result.mp3','audio/mpeg',1,'fixture')", media, user, uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
-	userTasksTask(t, a, user, models["image"], "image", "reviewing", imageBatch, "", "")
+	reviewing := userTasksTask(t, a, user, models["image"], "image", "reviewing", imageBatch, "", "")
 	queued := userTasksTask(t, a, user, models["video"], "video", "queued", videoBatch, "", "")
 	audio := userTasksTask(t, a, user, models["audio"], "audio", "succeeded", "", "", media)
 	text := userTasksTask(t, a, user, models["text"], "text", "running", "", conversation, "")
 	failed := userTasksTask(t, a, user, models["image"], "image", "failed", imageBatch, "", "")
 	userTasksTask(t, a, user, models["image"], "image", "canceled", imageBatch, "", "")
-	deleted := userTasksTask(t, a, user, models["image"], "image", "succeeded", deletedBatch, "", "")
-	otherTask := userTasksTask(t, a, other, models["image"], "image", "failed", "", "", "")
+	deleted := userTasksTask(t, a, user, models["image"], "image", "running", deletedBatch, "", "")
+	otherTask := userTasksTask(t, a, other, models["image"], "image", "queued", "", "", "")
 	if _, err := a.DB.Exec(ctx, "UPDATE generation_batches SET deleted_at=now() WHERE id=$1", deletedBatch); err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +100,8 @@ func TestUserTasksOwnershipFiltersAndPagination(t *testing.T) {
 		id    string
 	}{
 		{"?capability=image&status=failed", failed},
+		{"?capability=image&status=active", reviewing},
+		{"?capability=text&status=active", text},
 		{"?status=queued", queued},
 		{"?capability=text", text},
 	} {
@@ -109,9 +111,32 @@ func TestUserTasksOwnershipFiltersAndPagination(t *testing.T) {
 		}
 		if summary := object(filtered["summary"]); filter.query == "?status=queued" && (integer(summary["reviewing"]) != 1 || integer(summary["queued"]) != 1 || integer(summary["running"]) != 1) {
 			t.Fatalf("status filter must not hide other active states: %v", summary)
-		} else if filter.query == "?capability=image&status=failed" && (integer(summary["reviewing"]) != 1 || integer(summary["queued"]) != 0 || integer(summary["running"]) != 0) {
+		} else if (filter.query == "?capability=image&status=failed" || filter.query == "?capability=image&status=active") && (integer(summary["reviewing"]) != 1 || integer(summary["queued"]) != 0 || integer(summary["running"]) != 0) {
 			t.Fatalf("active summary must follow modality filter: %v", summary)
 		}
+	}
+	activeTasks := map[string]Row{}
+	for i, query := range []string{"?status=active&limit=2", "?status=active&limit=2&offset=2"} {
+		active := userTasksPage(t, a, cookie, query)
+		pageTasks := userTasksByID(active)
+		if integer(active["total"]) != 3 || len(pageTasks) != 2-i {
+			t.Fatalf("active pagination must count all matching states: %v", active)
+		}
+		if summary := object(active["summary"]); integer(summary["reviewing"]) != 1 || integer(summary["queued"]) != 1 || integer(summary["running"]) != 1 {
+			t.Fatalf("active summary must ignore pagination: %v", summary)
+		}
+		for id, task := range pageTasks {
+			if activeTasks[id] != nil {
+				t.Fatalf("active pagination repeated task: %s", id)
+			}
+			activeTasks[id] = task
+		}
+	}
+	if len(activeTasks) != 3 || activeTasks[reviewing]["status"] != "reviewing" || activeTasks[queued]["status"] != "queued" || activeTasks[text]["status"] != "running" {
+		t.Fatalf("active must retain each real status and exclude completed, deleted and foreign tasks: %v", activeTasks)
+	}
+	if empty := userTasksPage(t, a, cookie, "?status=active&limit=2&offset=4"); integer(empty["total"]) != 3 || len(userTasksByID(empty)) != 0 {
+		t.Fatalf("empty active page must preserve total: %v", empty)
 	}
 	paged := userTasksPage(t, a, cookie, "?limit=2&offset=1")
 	if integer(paged["total"]) != 6 || len(userTasksByID(paged)) != 2 || integer(paged["offset"]) != 1 {
@@ -126,7 +151,7 @@ func TestUserTasksOwnershipFiltersAndPagination(t *testing.T) {
 	if capped := userTasksPage(t, a, cookie, "?limit=999&offset=-1"); integer(capped["limit"]) != 200 || integer(capped["offset"]) != 0 {
 		t.Fatalf("existing pagination bounds: %v", capped)
 	}
-	if own := userTasksPage(t, a, otherCookie, ""); integer(own["total"]) != 1 || userTasksByID(own)[otherTask] == nil {
+	if own := userTasksPage(t, a, otherCookie, "?status=active"); integer(own["total"]) != 1 || userTasksByID(own)[otherTask] == nil {
 		t.Fatalf("other account must receive only its own task: %v", own)
 	}
 	for _, query := range []string{"?capability=unknown", "?status=paused"} {
@@ -199,5 +224,10 @@ func TestUserTasksRedactRevokedAndForeignSources(t *testing.T) {
 	}
 	if after[image]["sourceUnavailable"] != "canvas" || after[text]["sourceUnavailable"] != "canvas" || after[deletedConversation]["sourceUnavailable"] != "conversation" {
 		t.Fatalf("source failure reason: %v", after)
+	}
+	active := userTasksPage(t, a, cookie, "?status=active")
+	activeText := userTasksByID(active)[text]
+	if integer(active["total"]) != 1 || activeText["status"] != "queued" || activeText["sourceUnavailable"] != "canvas" || activeText["prompt"] != nil || activeText["conversationId"] != nil {
+		t.Fatalf("active task must retain status and redact revoked source: %v", active)
 	}
 }

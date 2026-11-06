@@ -3,6 +3,7 @@ import { apiRequest, serializeApiParams } from "./request";
 
 export type UserTaskCapability = NonNullable<GenerationTask["capability"]>;
 export type UserTaskStatus = GenerationTask["status"];
+export type UserTaskFilterStatus = UserTaskStatus | "active";
 export type UserGenerationTask = Omit<GenerationTask, "batchId" | "capability"> & {
     capability: UserTaskCapability;
     batchId: string | null;
@@ -15,7 +16,7 @@ export type UserGenerationTask = Omit<GenerationTask, "batchId" | "capability"> 
 
 export type UserGenerationTaskPage = { tasks: UserGenerationTask[]; total: number; limit: number; offset: number; summary: { reviewing: number; queued: number; running: number } };
 
-export function getUserGenerationTasks({ capability = "", status = "", offset = 0, limit = GENERATION_PAGE_SIZE }: { capability?: UserTaskCapability | ""; status?: UserTaskStatus | ""; offset?: number; limit?: number } = {}, signal?: AbortSignal) {
+export function getUserGenerationTasks({ capability = "", status = "", offset = 0, limit = GENERATION_PAGE_SIZE }: { capability?: UserTaskCapability | ""; status?: UserTaskFilterStatus | ""; offset?: number; limit?: number } = {}, signal?: AbortSignal) {
     return apiRequest<UserGenerationTaskPage>(`/api/generation-tasks?${serializeApiParams({ capability, status, limit, offset })}`, { signal });
 }
 

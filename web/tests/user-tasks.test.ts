@@ -35,6 +35,16 @@ test("画布优先返回项目，文本使用会话参数，图片与视频使�
     expect(getUserTaskSourcePath(task({ capability: "video" }))).toBe("/video?batch=batch");
 });
 
+test("进行中筛选交由服务端聚合并沿用完整分页参数", async () => {
+    vi.mocked(apiRequest).mockResolvedValue({ tasks: [], total: 0, limit: 50, offset: 50, summary: { reviewing: 0, queued: 0, running: 0 } });
+    await getUserGenerationTasks({ status: "active", capability: "image", offset: 50 });
+    const request = new URL(vi.mocked(apiRequest).mock.calls[0][0], "http://localhost");
+    expect(request.searchParams.get("status")).toBe("active");
+    expect(request.searchParams.get("capability")).toBe("image");
+    expect(request.searchParams.get("offset")).toBe("50");
+    expect(request.searchParams.get("limit")).toBe("50");
+});
+
 test("音频及无来源任务不会生成不存在的页面，已撤权来源不能通过保留ID跳转", () => {
     expect(getUserTaskSourcePath(task({ capability: "audio", batchId: null }))).toBeNull();
     expect(getUserTaskSourcePath(task({ capability: "audio" }))).toBeNull();

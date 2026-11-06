@@ -43,32 +43,33 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     }, [pickerId]);
 
     return (
-        <Select
-            aria-label={pickerPlaceholder}
-            title={currentTitle}
-            className={cn("canvas-composer-model-picker !h-8 max-w-full text-sm", fullWidth ? "w-full min-w-0" : "min-w-[9rem]", className)}
-            open={open}
-            value={current || undefined}
-            onOpenChange={(nextOpen) => {
-                if (nextOpen && !options.length) onMissingConfig?.();
-                if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
-                setOpen(nextOpen);
-            }}
-            onChange={onChange}
-            onMouseDown={(event) => event.stopPropagation()}
-            onPointerDown={(event) => event.stopPropagation()}
-            prefix={<ModelIcon config={config} model={current} />}
-            suffixIcon={<ChevronDown className="canvas-select-chevron size-3" />}
-            placeholder={pickerPlaceholder}
-            status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
-            showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }}
-            popupMatchSelectWidth={false}
-            styles={{ popup: { root: { zIndex: 1200, minWidth: "20rem", maxWidth: "calc(100vw - 24px)" } } }}
-            options={options}
-            notFoundContent={options.length ? "没有匹配的模型" : emptyModelLabel(config, capability)}
-            labelRender={(option) => <span className="canvas-model-picker-text min-w-0 truncate">{unavailable ? unavailableLabel || "已选模型不可用" : option.label}</span>}
-            optionRender={(option) => <div className="max-w-96 space-y-1 py-1"><div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2"><ModelIcon config={config} model={option.data.value} /><span className="truncate">{option.data.label}</span></span>{option.data.price ? <span className="text-xs tabular-nums text-muted-foreground">{option.data.price}</span> : null}</div>{option.data.description ? <p className="whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>}
-        />
+        <div className="contents" onPointerDown={(event) => event.stopPropagation()}>
+            <Select
+                aria-label={pickerPlaceholder}
+                title={currentTitle}
+                className={cn("canvas-composer-model-picker !h-8 max-w-full text-sm", fullWidth ? "w-full min-w-0" : "min-w-[9rem]", className)}
+                open={open}
+                value={current || undefined}
+                onOpenChange={(nextOpen) => {
+                    if (nextOpen && !options.length) onMissingConfig?.();
+                    if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
+                    setOpen(nextOpen);
+                }}
+                onChange={onChange}
+                onMouseDown={(event) => event.stopPropagation()}
+                prefix={<ModelIcon config={config} model={current} />}
+                suffixIcon={<ChevronDown className="canvas-select-chevron size-3" />}
+                placeholder={pickerPlaceholder}
+                status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
+                showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }}
+                popupMatchSelectWidth={false}
+                styles={{ popup: { root: { zIndex: 1200, minWidth: "20rem", maxWidth: "calc(100vw - 24px)" } } }}
+                options={options}
+                notFoundContent={options.length ? "没有匹配的模型" : emptyModelLabel(config, capability)}
+                labelRender={(option) => <span className="canvas-model-picker-text min-w-0 truncate">{unavailable ? unavailableLabel || "已选模型不可用" : option.label}</span>}
+                optionRender={(option) => <div className="max-w-96 space-y-1 py-1"><div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2"><ModelIcon config={config} model={option.data.value} /><span className="truncate">{option.data.label}</span></span>{option.data.price ? <span className="text-xs tabular-nums text-muted-foreground">{option.data.price}</span> : null}</div>{option.data.description ? <p className="whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>}
+            />
+        </div>
     );
 }
 

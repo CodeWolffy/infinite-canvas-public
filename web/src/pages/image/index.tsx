@@ -337,7 +337,7 @@ export default function ImagePage() {
             const created = await createGenerationBatch({ modelId: targetModelId, prompt: text, count: generationCount, parameters: platformImageParameters(effectiveConfig), referenceMediaIds });
             assertCurrentSession(sessionVersion);
             inputDraft.submitted(submittedFingerprint);
-            const applied = applyDetail({ ...created, referenceMediaIds });
+            const applied = applyDetail({ ...created, referenceMediaIds, referenceMedia: references.map((item, index) => ({ mediaId: referenceMediaIds[index], mimeType: item.type, originalName: item.name })) });
             if (mountedRef.current && viewRequest === batchRequestRef.current && targetBatchRef.current === sourceBatchId) {
                 setPreviewLog(applied.log);
                 setResults(applied.results);

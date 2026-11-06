@@ -235,7 +235,7 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
         parameters: platformImageParameters(config),
     });
     assertCurrentSession(sessionVersion);
-    options?.onBatchCreated?.({ ...created, referenceMediaIds });
+    options?.onBatchCreated?.({ ...created, referenceMediaIds, referenceMedia: references.map((item, index) => ({ mediaId: referenceMediaIds[index], mimeType: item.type, originalName: item.name })) });
     const pollStartedAt = Date.now();
     let pollInterval = BATCH_POLL_BASE_MS;
     let consecutiveNetworkErrors = 0;
