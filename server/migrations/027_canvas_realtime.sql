@@ -53,12 +53,19 @@ CREATE FUNCTION pg_temp.canvas_media_ids(document jsonb) RETURNS TABLE(media_id 
     ), strings AS (
         SELECT key,value #>> '{}' AS value FROM fields WHERE jsonb_typeof(value)='string'
     ), candidates AS (
-        SELECT CASE WHEN key='storageKey' THEN regexp_replace(value,'^(image:|media:)','') ELSE value END AS value
+        SELECT CASE WHEN key='storageKey' THEN regexp_replace(regexp_replace(value,'^image:',''),'^media:','') ELSE value END AS value
         FROM strings WHERE key IN ('mediaId','fileId','mediaIds','fileIds','storageKey')
         UNION ALL
         SELECT matches.parts[1] FROM strings CROSS JOIN LATERAL regexp_matches(value,'/api/media/([0-9a-fA-F-]{36})','g') AS matches(parts)
+    ), normalized AS (
+        -- 对齐 google/uuid.Parse：URN 必须为 45 字节，38 字节形式只检查中间 36 字节。
+        SELECT CASE
+            WHEN octet_length(value)=45 AND left(value,9) ~* '^urn:uuid:$' THEN substr(value,10)
+            WHEN octet_length(value)=38 AND length(value)=38 THEN substr(value,2,36)
+            ELSE value END AS value
+        FROM candidates
     )
-    SELECT DISTINCT value::uuid FROM candidates
+    SELECT DISTINCT value::uuid FROM normalized
     WHERE value ~* '^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$';
 $$;
 

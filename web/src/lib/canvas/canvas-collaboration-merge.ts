@@ -3,13 +3,14 @@ import stringify from "fast-json-stable-stringify";
 import type { CanvasConnection, CanvasNodeData } from "@/types/canvas";
 
 export type SharedCanvasSnapshot = { nodes: CanvasNodeData[]; connections: CanvasConnection[]; backgroundMode: string; showImageInfo: boolean };
+type KeyedCanvasSnapshot = Omit<SharedCanvasSnapshot, "nodes" | "connections"> & { nodes: Record<string, CanvasNodeData>; connections: Record<string, CanvasConnection> };
 
 function keyedSnapshot(snapshot: SharedCanvasSnapshot) {
     const snapshotValue = JSON.parse(JSON.stringify({ nodes: Object.fromEntries(snapshot.nodes.map((node) => [node.id, node])), connections: Object.fromEntries(snapshot.connections.map((connection) => [connection.id, connection])), backgroundMode: snapshot.backgroundMode, showImageInfo: snapshot.showImageInfo }));
-    return mapLeaves(snapshotValue, stringify);
+    return mapLeaves(snapshotValue, stringify) as Record<string, unknown>;
 }
 
-function mapLeaves(value: unknown, convert: (value: unknown) => unknown): any {
+function mapLeaves(value: unknown, convert: (value: unknown) => unknown): unknown {
     return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapLeaves(item, convert)])) : convert(value);
 }
 
@@ -34,7 +35,7 @@ export function mergeCanvasSnapshots(base: SharedCanvasSnapshot, local: SharedCa
             applyPatch(merged, [operation as Operation], true, true, true);
         }
     }
-    const decoded = mapLeaves(merged, (value) => JSON.parse(value as string));
+    const decoded = mapLeaves(merged, (value) => JSON.parse(value as string)) as KeyedCanvasSnapshot;
     const ordered = <T extends { id: string }>(values: Record<string, T>, original: T[], mine: T[], theirs: T[]) => {
         const ids = (items: T[]) => items.map((item) => item.id);
         const mineIds = new Set(ids(mine)), theirIds = new Set(ids(theirs));

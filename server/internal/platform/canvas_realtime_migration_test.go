@@ -50,6 +50,48 @@ func TestCanvasRealtimeMigrationPreservesPrivateHistoryAndQuota(t *testing.T) {
 	snapshot["chatSessions"] = []any{map[string]any{"id": "private-chat", "mediaId": privateID, "content": "private old history"}}
 	// 普通文本中的 UUID 不构成共享媒体引用。
 	snapshot["nodes"].([]any)[0].(map[string]any)["title"] = privateID
+	references := []struct{ name, sharedID, privateID string }{{"canonical", sharedID, privateID}}
+	for _, format := range []struct {
+		name, key string
+		encode    func(string) any
+	}{
+		{"urn_lower", "mediaId", func(id string) any { return "urn:uuid:" + id }},
+		{"urn_upper", "fileId", func(id string) any { return "URN:UUID:" + strings.ToUpper(id) }},
+		{"braces", "mediaIds", func(id string) any { return []any{"{" + id + "}"} }},
+		{"ascii_wrapper", "mediaId", func(id string) any { return "[" + id + "]" }},
+		{"compact", "fileIds", func(id string) any { return []any{strings.ReplaceAll(id, "-", "")} }},
+		{"storage_double_prefix", "storageKey", func(id string) any { return "image:media:" + id }},
+		{"media_url", "content", func(id string) any { return "/api/media/" + id }},
+	} {
+		sharedID, privateID := uuid.NewString(), uuid.NewString()
+		references = append(references, struct{ name, sharedID, privateID string }{format.name, sharedID, privateID})
+		// 对侧媒体只以裸 UUID 出现在普通正文中，不能获得这一侧的引用。
+		snapshot["nodes"] = append(snapshot["nodes"].([]any), map[string]any{
+			"id": format.name, "title": privateID, "metadata": map[string]any{format.key: format.encode(sharedID)},
+		})
+		snapshot["chatSessions"] = append(snapshot["chatSessions"].([]any), map[string]any{
+			"id": format.name, "title": sharedID, "messages": []any{map[string]any{format.key: format.encode(privateID)}},
+		})
+	}
+	// 不扩大既有解析范围；这些无效字符串指向私人媒体，误认会保留共享授权。
+	invalidMedia := map[string]any{
+		"mediaIds": []any{
+			"bad:uuid:" + privateID,
+			"urn:uuid:" + strings.ReplaceAll(privateID, "-", ""),
+			"{" + strings.ReplaceAll(privateID, "-", "") + "}",
+			"é" + privateID,
+			"z" + privateID[1:],
+		},
+		"storageKey": []any{"media:image:" + privateID, "image:image:" + privateID},
+	}
+	if ids := extractMediaIDs(invalidMedia); len(ids) != 0 {
+		t.Fatal("invalid fixture must not be accepted by the legacy extractor")
+	}
+	snapshot["nodes"] = append(snapshot["nodes"].([]any), map[string]any{"id": "invalid-media", "metadata": invalidMedia})
+	mediaIDs := extractMediaIDs(snapshot)
+	if len(mediaIDs) != 2*len(references) {
+		t.Fatalf("legacy extractor must recognize all fixture media: got %d, want %d", len(mediaIDs), 2*len(references))
+	}
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -62,7 +104,8 @@ func TestCanvasRealtimeMigrationPreservesPrivateHistoryAndQuota(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, mediaID := range []string{sharedID, privateID} {
+	// 按旧保存流程提取媒体编号并建立引用，再由实际 SQL 迁移重新分配。
+	for _, mediaID := range mediaIDs {
 		if _, err := db.Exec(ctx, "INSERT INTO media_objects(id,owner_id,object_key,original_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,'image.png','image/png',1,'hash')", mediaID, userID, uuid.NewString()); err != nil {
 			t.Fatal(err)
 		}
@@ -99,9 +142,18 @@ func TestCanvasRealtimeMigrationPreservesPrivateHistoryAndQuota(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(object(history["snapshot"])["chatSessions"], snapshot["chatSessions"]) {
 		t.Fatalf("private history lost: %v %v", history, err)
 	}
-	var publicRefs, personalRefs int
-	if err := db.QueryRow(ctx, "SELECT count(*) FILTER(WHERE owner_kind IN ('canvas','history')),count(*) FILTER(WHERE owner_kind IN ('canvas_personal','canvas_history_personal')) FROM media_references WHERE media_id=$1", privateID).Scan(&publicRefs, &personalRefs); err != nil || publicRefs != 0 || personalRefs != 2 {
-		t.Fatalf("private media authorization was not separated: public=%d private=%d %v", publicRefs, personalRefs, err)
+	for _, reference := range references {
+		t.Run(reference.name, func(t *testing.T) {
+			for _, side := range []struct {
+				name, mediaID     string
+				public, personal int
+			}{{"shared", reference.sharedID, 2, 0}, {"private", reference.privateID, 0, 2}} {
+				var publicRefs, personalRefs int
+				if err := db.QueryRow(ctx, "SELECT count(*) FILTER(WHERE owner_kind IN ('canvas','history')),count(*) FILTER(WHERE owner_kind IN ('canvas_personal','canvas_history_personal')) FROM media_references WHERE media_id=$1", side.mediaID).Scan(&publicRefs, &personalRefs); err != nil || publicRefs != side.public || personalRefs != side.personal {
+					t.Errorf("%s media authorization differs: public=%d private=%d, want public=%d private=%d: %v", side.name, publicRefs, personalRefs, side.public, side.personal, err)
+				}
+			}
+		})
 	}
 	var actual, expected int64
 	if err := db.QueryRow(ctx, `SELECT (SELECT byte_size FROM user_content_usage WHERE user_id=$1),

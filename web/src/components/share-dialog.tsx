@@ -148,7 +148,7 @@ export function ShareDialog({ kind, targetId, open, onClose }: { kind: ShareKind
                                                 </Typography.Text>
                                             </div>
                                             <div className="flex shrink-0 items-center gap-1">
-                                                {canManage && member.source === "direct" ? (
+                                                {canManage && member.source === "direct" && member.role !== "owner" ? (
                                                     <>
                                                         <Select aria-label={`${displayUser(member)}的权限`} size="small" variant="borderless" value={member.role} options={ROLE_OPTIONS} className="w-24" disabled={!!busy} onChange={(value: CanvasMemberRole) => void changeMember(`role:${member.userId}`, () => updateCanvasMember(targetId, member.userId, value))} />
                                                         <Popconfirm title={member.status === "pending" ? "撤销这条邀请？" : "移除这项单独邀请权限？"} description="工作区继承的访问权限仍由工作区管理。" okText="移除" cancelText="取消" onConfirm={() => changeMember(`remove:${member.userId}`, () => removeCanvasMember(targetId, member.userId))}>
