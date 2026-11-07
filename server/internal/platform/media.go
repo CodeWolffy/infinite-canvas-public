@@ -206,16 +206,19 @@ func publicMedia(row Row) Row {
 }
 
 // mediaVisibility 按引用对象的当前归属校验权限，不信任创建引用时记录的 user_id。
-const mediaVisibility = `(m.owner_id=$2::uuid OR $3::boolean
+var mediaVisibility = `(m.owner_id=$2::uuid OR $3::boolean
 	OR EXISTS(SELECT 1 FROM assets a WHERE a.media_id=m.id AND (a.scope='public' OR a.owner_id=$2::uuid
 		OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=a.workspace_id AND wm.user_id=$2::uuid)))
 	OR EXISTS(SELECT 1 FROM media_references mr WHERE mr.media_id=m.id AND (
 		(mr.owner_kind='canvas' AND EXISTS(SELECT 1 FROM canvas_projects p WHERE p.id=mr.owner_id AND
-			(p.user_id=$2::uuid OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=p.workspace_id AND wm.user_id=$2::uuid))))
+			(` + projectRoleExpression("p", "$2::uuid") + `)<>''))
 		OR (mr.owner_kind='history' AND EXISTS(SELECT 1 FROM canvas_project_history h JOIN canvas_projects p ON p.id=h.project_id WHERE h.id=mr.owner_id AND
-			(p.user_id=$2::uuid OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=p.workspace_id AND wm.user_id=$2::uuid))))
+			(` + projectRoleExpression("p", "$2::uuid") + `)<>''))
+		OR (mr.owner_kind='canvas_personal' AND EXISTS(SELECT 1 FROM canvas_user_views v JOIN canvas_projects p ON p.id=v.project_id
+			WHERE v.id=mr.owner_id AND v.user_id=$2::uuid AND (` + projectRoleExpression("p", "$2::uuid") + `)<>''))
 		OR (mr.owner_kind='asset' AND EXISTS(SELECT 1 FROM assets a WHERE a.id=mr.owner_id AND a.media_id=m.id AND
 			(a.scope='public' OR a.owner_id=$2::uuid OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=a.workspace_id AND wm.user_id=$2::uuid))))
+		OR (mr.owner_kind='canvas_history_personal' AND EXISTS(SELECT 1 FROM canvas_history_personal hp JOIN canvas_project_history h ON h.id=hp.history_id JOIN canvas_projects p ON p.id=h.project_id WHERE hp.history_id=mr.owner_id AND hp.user_id=$2::uuid AND (` + projectRoleExpression("p", "$2::uuid") + `)<>''))
 		OR (mr.owner_kind='batch' AND EXISTS(SELECT 1 FROM generation_batches b WHERE b.id=mr.owner_id AND b.user_id=$2::uuid))
 		OR (mr.owner_kind='message' AND EXISTS(SELECT 1 FROM messages msg JOIN conversations c ON c.id=msg.conversation_id WHERE msg.id=mr.owner_id AND c.user_id=$2::uuid))
 		OR (mr.owner_kind='task' AND EXISTS(SELECT 1 FROM generation_tasks t WHERE t.id=mr.owner_id AND t.user_id=$2::uuid))

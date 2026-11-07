@@ -52,7 +52,7 @@ func (a *App) userTaskRoutes(api *gin.RouterGroup) {
 				WHEN coalesce(b.canvas_project_id,cv.canvas_project_id) IS NOT NULL AND p.id IS NULL THEN 'canvas'
 				ELSE NULL END AS source_unavailable`+userTaskRelations+`
 			LEFT JOIN canvas_projects p ON p.id=coalesce(b.canvas_project_id,cv.canvas_project_id)
-				AND (p.user_id=$1 OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=p.workspace_id AND wm.user_id=$1))
+				AND (`+projectRoleExpression("p", "$1")+`)<>''
 			LEFT JOIN media_objects m ON m.id=t.output_media_id AND m.owner_id=t.user_id AND m.status='ready'`+userTaskScope+` AND `+userTaskStatusFilter+`
 			ORDER BY t.queued_at DESC,t.id DESC LIMIT $4 OFFSET $5`, userID, capability, status, limit, offset)
 		if err != nil {

@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
+import stringify from "fast-json-stable-stringify";
 import { expect, test, vi } from "vitest";
+import { mergeCanvasSnapshots } from "@/lib/canvas/canvas-collaboration-merge";
 import { loadModule, readSource } from "./support/source-loader";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -16,9 +18,11 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
     const api = { __esModule: true, onCanvasWorkspaceMove: () => {}, listCanvasProjects: vi.fn(), getCanvasProject: vi.fn() };
     const module = loadModule(readSource("stores/canvas/use-canvas-store.ts"), { DOMException, setTimeout, clearTimeout }, {
         zustand,
+        "fast-json-stable-stringify": { __esModule: true, default: stringify },
         "@/i18n": { __esModule: true, default: { t: (key: string) => key } },
         "@/services/api/canvas-projects": api,
         "@/services/api/request": { ApiError: class extends Error {} },
+        "@/lib/canvas/canvas-collaboration-merge": { mergeCanvasSnapshots },
         "@/stores/use-user-store": { useUserStore: user, assertCurrentSession: (version: number) => { if (version !== user.getState().sessionVersion) throw new DOMException("登录会话已变更", "AbortError"); } },
     });
     const canvas = module.useCanvasStore;

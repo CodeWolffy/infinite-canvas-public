@@ -1,4 +1,5 @@
 import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 import i18n from "@/i18n";
 import { ensureImagePreview, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
@@ -129,6 +130,10 @@ export function hasResumableVideoTask(node: CanvasNodeData) {
     return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
 
+export function canRecoverCanvasGeneration(node: CanvasNodeData) {
+    return !node.metadata?.generationUserId || node.metadata.generationUserId === useUserStore.getState().user?.id;
+}
+
 export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[] = []) {
     const recoverableConfigIds = new Set(
         connections.flatMap((connection) => {
@@ -141,7 +146,7 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections:
         }),
     );
     return nodes.map((node) => {
-        if (node.metadata?.status !== "loading") return node;
+        if (!canRecoverCanvasGeneration(node) || node.metadata?.status !== "loading") return node;
         if (hasResumableVideoTask(node) || node.type === CanvasNodeType.Audio && node.metadata?.audioTaskId && !node.metadata.content) return node;
         if (node.type === CanvasNodeType.Config) {
             return recoverableConfigIds.has(node.id)

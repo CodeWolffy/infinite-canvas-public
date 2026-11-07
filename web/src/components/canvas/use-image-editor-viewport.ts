@@ -7,7 +7,7 @@ const maxZoom = 4;
 const zoomStep = 1.2;
 const viewportPadding = 16;
 
-export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
+export function useImageEditorViewport(image: ImageSize | null, open: boolean, mode: "edit" | "preview" = "edit") {
     const viewportNodeRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const panRef = useRef<{ pointerId: number; x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
@@ -30,7 +30,7 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
     }, [open, image?.width, image?.height]);
 
     useEffect(() => {
-        if (!open) return;
+        if (!open || mode === "preview") return;
         const releaseSpace = () => {
             spacePressedRef.current = false;
             setSpacePressed(false);
@@ -62,7 +62,7 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
             window.removeEventListener("blur", releaseSpace);
             spacePressedRef.current = false;
         };
-    }, [open]);
+    }, [mode, open]);
 
     useEffect(() => {
         if (!open || !viewportElement) return;
@@ -78,6 +78,8 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
     }, [open, viewportElement]);
 
     const baseSize = fitImage(image, viewportSize);
+    const originalZoom = image && baseSize.width ? image.width / baseSize.width : minZoom;
+    const zoomLimit = mode === "preview" ? Math.max(maxZoom, originalZoom) : maxZoom;
     const stageSize = { width: baseSize.width * zoom, height: baseSize.height * zoom };
     const contentSize = {
         width: Math.max(viewportSize.width, stageSize.width),
@@ -107,7 +109,7 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
             const stage = stageRef.current;
             if (!viewport || !stage || !baseSize.width || !baseSize.height) return;
 
-            const boundedZoom = clamp(nextZoom, minZoom, maxZoom);
+            const boundedZoom = clamp(nextZoom, minZoom, zoomLimit);
             if (Math.abs(boundedZoom - zoom) < 0.001) return;
 
             const viewportRect = viewport.getBoundingClientRect();
@@ -122,7 +124,7 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
             zoomAnchorRef.current = { zoom: boundedZoom, ratioX, ratioY, viewportX, viewportY };
             setZoom(boundedZoom);
         },
-        [baseSize.height, baseSize.width, zoom],
+        [baseSize.height, baseSize.width, zoom, zoomLimit],
     );
 
     useEffect(() => {
@@ -130,6 +132,7 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
         const handleWheel = (event: WheelEvent) => {
             event.preventDefault();
             event.stopPropagation();
+            if (!event.deltaY) return;
             setZoomAround(event.deltaY < 0 ? zoom * zoomStep : zoom / zoomStep, event.clientX, event.clientY);
         };
         viewportElement.addEventListener("wheel", handleWheel, { passive: false });
@@ -137,14 +140,15 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
     }, [open, setZoomAround, viewportElement, zoom]);
 
     const startPan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-        if (event.button !== 1 && !(event.button === 0 && spacePressedRef.current)) return;
+        if (mode === "preview" && event.target instanceof Element && event.target.closest("button")) return;
+        if (event.button !== 1 && !(event.button === 0 && (mode === "preview" || spacePressedRef.current))) return;
         event.preventDefault();
         event.stopPropagation();
         const viewport = event.currentTarget;
         panRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
         viewport.setPointerCapture(event.pointerId);
         setIsPanning(true);
-    }, []);
+    }, [mode]);
     const movePan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
         const pan = panRef.current;
         if (!pan || event.pointerId !== pan.pointerId) return;
@@ -174,20 +178,22 @@ export function useImageEditorViewport(image: ImageSize | null, open: boolean) {
         zoom,
         isPanning,
         spacePressed,
-        scrollClassName: zoom > minZoom + 0.001 ? "overflow-scroll" : "overflow-hidden",
+        scrollClassName: mode === "edit" && zoom > minZoom + 0.001 ? "overflow-scroll" : "overflow-hidden",
         panHandlers: {
             onPointerDownCapture: startPan,
             onPointerMoveCapture: movePan,
             onPointerUpCapture: stopPan,
             onPointerCancelCapture: stopPan,
+            onLostPointerCapture: () => { panRef.current = null; setIsPanning(false); },
             onAuxClick: preventAuxClick,
         },
-        canZoomIn: zoom < maxZoom,
+        canZoomIn: zoom < zoomLimit,
         canZoomOut: zoom > minZoom,
         imageScale: image ? stageSize.width / image.width : 0,
         zoomIn: () => setZoomAround(zoom * zoomStep),
         zoomOut: () => setZoomAround(zoom / zoomStep),
         resetZoom: () => setZoomAround(minZoom),
+        showOriginal: (clientX?: number, clientY?: number) => setZoomAround(originalZoom, clientX, clientY),
         contentStyle: { width: contentSize.width, height: contentSize.height } satisfies CSSProperties,
         stageStyle: {
             left: stageOffset.left,
@@ -209,7 +215,7 @@ function fitImage(image: ImageSize | null, viewport: ImageSize): ImageSize {
     const availableWidth = Math.max(1, viewport.width - viewportPadding * 2);
     const availableHeight = Math.max(1, viewport.height - viewportPadding * 2);
     const scale = Math.min(availableWidth / image.width, availableHeight / image.height, 1);
-    return { width: Math.max(1, Math.floor(image.width * scale)), height: Math.max(1, Math.floor(image.height * scale)) };
+    return { width: image.width * scale, height: image.height * scale };
 }
 
 function clamp(value: number, min: number, max: number) {

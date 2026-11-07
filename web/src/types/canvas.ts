@@ -51,6 +51,8 @@ export type CanvasNodeText = {
 };
 
 export type CanvasNodeMetadata = {
+    /** 生成任务属于发起账号，其他协作者只接收画布中的共享结果。 */
+    generationUserId?: string;
     content?: string;
     composerContent?: string;
     prompt?: string;

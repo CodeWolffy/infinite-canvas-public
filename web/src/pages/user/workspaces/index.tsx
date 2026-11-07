@@ -8,6 +8,7 @@ import { addWorkspaceMember, createWorkspace, deleteWorkspace, getWorkspace, lis
 import { createCanvasProject } from "@/services/api/canvas-projects";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { CanvasInvitations } from "@/components/canvas/canvas-invitations";
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = { owner: "workspace.roles.owner", editor: "workspace.roles.editor", viewer: "workspace.roles.viewer" };
 
@@ -217,6 +218,8 @@ export default function WorkspacesPage() {
                     </Button>
                 </div>
             </header>
+
+            <CanvasInvitations />
 
             {loading ? (
                 <div className="flex min-h-40 items-center justify-center">

@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import stringify from "fast-json-stable-stringify";
+import { mergeCanvasSnapshots } from "@/lib/canvas/canvas-collaboration-merge";
 import { expect, test } from "vitest";
 import { loadModule, readSource } from "./support/source-loader";
 
@@ -22,6 +24,8 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
     const profile: any = {};
     const imports: Record<string, any> = {
         zustand: nodeRequire("zustand"),
+        "fast-json-stable-stringify": { default: stringify, __esModule: true },
+        "@/lib/canvas/canvas-collaboration-merge": { mergeCanvasSnapshots },
         "@/i18n": { default: { t: (key: string) => key }, __esModule: true },
         "@/services/api/auth": auth,
         "@/services/api/user-center": profile,

@@ -60,7 +60,7 @@ export function CanvasProjectCard({ project, compact = false }: { project: Canva
         assertCurrentSession(sessionVersion);
         await exportCanvasProjects(loaded, project.title || t("canvas.title"));
     };
-    const writable = project.accessRole !== "viewer";
+    const writable = project.accessRole === "owner" || project.accessRole === "editor";
     const isOwner = project.accessRole === "owner";
     const updated = t("canvas.project.updated", { date: new Date(project.updatedAt).toLocaleString(i18n.resolvedLanguage, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) });
 
@@ -96,7 +96,7 @@ export function CanvasProjectCard({ project, compact = false }: { project: Canva
                             <Button type="text" size="small" shape="circle" icon={<X className="size-4" />} onClick={stopEditing} aria-label={t("canvas.project.cancelRename")} />
                         </> : <>
                             <Button type="text" size="small" shape="circle" icon={<Download className="size-4" />} onClick={() => void exportProject()} aria-label={t("canvas.project.export")} />
-                            {isOwner ? <Button type="text" size="small" shape="circle" icon={<Share2 className="size-4" />} onClick={() => setShareOpen(true)} aria-label={t("share.title")} /> : null}
+                            {project.accessRole ? <Button type="text" size="small" shape="circle" icon={<Share2 className="size-4" />} onClick={() => setShareOpen(true)} aria-label="分享与协作" /> : null}
                             {isOwner ? <WorkspaceMoveButton target={{ kind: "canvas", id: project.id, workspaceId: project.workspaceId }} onMoved={(workspaceId, workspaceName) => {
                                 useCanvasStore.setState((state) => ({ projects: state.projects.map((item) => item.id === project.id ? { ...item, workspaceId, workspaceName } : item) }));
                                 const state = useCanvasStore.getState();

@@ -689,6 +689,8 @@ func (a *App) Router() *gin.Engine {
 	a.contentRoutes(api)
 	a.workspaceRoutes(api)
 	a.shareRoutes(api)
+	a.canvasMemberRoutes(api)
+	a.canvasRealtimeRoutes(api)
 	a.generationRoutes(api)
 	a.walletRoutes(api)
 	a.groupRoutes(api)

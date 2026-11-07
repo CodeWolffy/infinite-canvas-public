@@ -32,6 +32,11 @@ func (a *App) workspaceOwner(ctx context.Context, workspaceID, userID string) (R
 	return workspace, nil
 }
 
+func (a *App) publishWorkspaceCanvases(ctx context.Context, id string) {
+	projects, err := rows(ctx, a.DB, "SELECT id FROM canvas_projects WHERE workspace_id=$1", id)
+	if err == nil { for _, project := range projects { a.publishCanvasChange(ctx, str(project["id"])) } }
+}
+
 func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 	api.GET("/workspaces", respond(func(c *gin.Context) (any, error) {
 		items, err := rows(c.Request.Context(), a.DB, `SELECT w.id,w.name,w.owner_id,wm.role AS my_role,w.created_at,
@@ -135,7 +140,10 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 			return nil, err
 		}
 		// 项目与素材的 workspace_id 走 ON DELETE SET NULL，成员行随工作区级联删除。
+		projects, err := rows(ctx, a.DB, "SELECT id FROM canvas_projects WHERE workspace_id=$1", id)
+		if err != nil { return nil, err }
 		_, err = a.DB.Exec(ctx, "DELETE FROM workspaces WHERE id=$1", id)
+		if err == nil { for _, project := range projects { a.publishCanvasChange(ctx, str(project["id"])) } }
 		return nil, err
 	}))
 	api.POST("/workspaces/:id/members", a.rateLimit("workspace-member", 30, time.Minute), respond(func(c *gin.Context) (any, error) {
@@ -177,6 +185,7 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 		if err == nil {
 			member["displayName"] = name["displayName"]
 		}
+		a.publishWorkspaceCanvases(ctx, id)
 		return gin.H{"member": member}, nil
 	}))
 	api.PATCH("/workspaces/:id/members/:userId", respond(func(c *gin.Context) (any, error) {
@@ -200,6 +209,7 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 		}
 		// 所有者行不可降级，工作区必须始终保留一位 owner。
 		member, err := one(ctx, a.DB, "UPDATE workspace_members SET role=$3 WHERE workspace_id=$1 AND user_id=$2 AND role<>'owner' RETURNING user_id,role,created_at", id, userID, input.Role)
+		if err == nil { a.publishWorkspaceCanvases(ctx, id) }
 		return gin.H{"member": member}, err
 	}))
 	api.DELETE("/workspaces/:id/members/:userId", respond(func(c *gin.Context) (any, error) {
@@ -226,6 +236,7 @@ func (a *App) workspaceRoutes(api *gin.RouterGroup) {
 		if result.RowsAffected() == 0 {
 			return nil, notFound
 		}
+		a.publishWorkspaceCanvases(ctx, id)
 		return nil, nil
 	}))
 }

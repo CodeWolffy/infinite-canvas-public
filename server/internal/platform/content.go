@@ -41,14 +41,7 @@ func canvasViewport(value map[string]any) error {
 }
 // projectRole 返回用户对画布的有效角色：项目所有者 > 工作区成员角色，无权限返回空串。
 func projectRole(ctx context.Context, q querier, id, userID string) (string, error) {
-	var role string
-	err := q.QueryRow(ctx, `SELECT coalesce(CASE WHEN p.user_id=$2 THEN 'owner' END,wm.role,'')
-		FROM canvas_projects p LEFT JOIN workspace_members wm ON wm.workspace_id=p.workspace_id AND wm.user_id=$2
-		WHERE p.id=$1`, id, userID).Scan(&role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	return role, err
+	return canvasMemberRole(ctx, q, id, userID)
 }
 func projectAccess(ctx context.Context, q querier, id, userID string) error {
 	if id == "" {
@@ -139,9 +132,9 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 	}))
 	// accessColumns 追加当前用户对每行的有效角色与删除权限，前端据此控制只读/删除入口。
 	accessColumns := `,workspace_id,(SELECT name FROM workspaces WHERE id=canvas_projects.workspace_id) AS workspace_name,
-		CASE WHEN user_id=$1 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=canvas_projects.workspace_id AND wm.user_id=$1),'') END AS access_role,
+		` + projectRoleExpression("canvas_projects", "$1") + ` AS access_role,(user_id=$1) AS can_manage_sharing,
 		(user_id=$1 OR EXISTS(SELECT 1 FROM workspaces w WHERE w.id=canvas_projects.workspace_id AND w.owner_id=$1)) AS can_delete`
-	visible := "user_id=$1 OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=canvas_projects.workspace_id AND wm.user_id=$1)"
+	visible := "(" + projectRoleExpression("canvas_projects", "$1") + ")<>''"
 	api.GET("/canvas-projects", respond(func(c *gin.Context) (any, error) {
 		limit, offset := paginationWith(c, 200, 500)
 		ctx, userID := c.Request.Context(), currentUser(c).ID
@@ -162,13 +155,18 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		project, err := one(c.Request.Context(), a.DB, "SELECT "+canvasSummary+",snapshot"+accessColumns+" FROM canvas_projects WHERE id=$2 AND ("+visible+")", currentUser(c).ID, id)
+		project, err := canvasProjectDetail(c.Request.Context(), a.DB, id, currentUser(c).ID, true)
+		if err == nil {
+			err = recordCanvasAccess(c.Request.Context(), a.DB, id, currentUser(c).ID, "view")
+		}
 		return gin.H{"project": project}, err
 	}))
 	saveProject := respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
 			Title            *string        `json:"title"`
 			Snapshot         map[string]any `json:"snapshot"`
+			BaseSnapshot     map[string]any `json:"baseSnapshot"`
+			BaseTitle        *string        `json:"baseTitle"`
 			Viewport         map[string]any `json:"viewport"`
 			WorkspaceID      *string        `json:"workspaceId"`
 			ExpectedRevision *int64         `json:"expectedRevision"`
@@ -180,7 +178,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			return nil, problem(400, "invalid_title", "请输入 1–200 字的画布标题")
 		}
 		if input.Snapshot != nil {
-			if err = canvasSnapshot(input.Snapshot); err != nil {
+			if err = validateCanvasSnapshot(input.Snapshot); err != nil {
 				return nil, err
 			}
 		}
@@ -202,6 +200,8 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			return nil, problem(400, "invalid_id", "画布编号不正确")
 		}
 		var saved Row
+		personalSnapshot := input.Snapshot
+		sharedChanged := create
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			if create {
 				var workspace any
@@ -219,24 +219,39 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 					}
 					workspace = target
 				}
+				input.Snapshot = sharedCanvasSnapshot(input.Snapshot)
 				if _, err := tx.Exec(ctx, "INSERT INTO canvas_projects(id,user_id,title,snapshot,workspace_id) VALUES($1,$2,$3,$4,$5)", id, userID, *input.Title, jsonBytes(input.Snapshot), workspace); err != nil {
 					return err
 				}
 			} else {
-				oldProject, err := one(ctx, tx, "SELECT id,user_id,revision FROM canvas_projects WHERE id=$1 FOR UPDATE", id)
+				oldProject, err := one(ctx, tx, "SELECT id,user_id,title,snapshot,revision FROM canvas_projects WHERE id=$1 FOR UPDATE", id)
 				if err != nil {
 					return err
 				}
-				if err := projectWriteAccess(ctx, tx, id, userID); err != nil {
+				access := projectWriteAccess
+				if input.Title == nil && input.Snapshot == nil && input.WorkspaceID == nil { access = projectAccess }
+				if err := access(ctx, tx, id, userID); err != nil {
 					return err
 				}
-				if input.Title != nil || input.Snapshot != nil || input.Viewport != nil {
+				if input.Title != nil || input.Snapshot != nil {
 					if input.ExpectedRevision == nil || *input.ExpectedRevision < 0 {
 						return problem(400, "invalid_revision", "保存画布内容必须提供有效的 expectedRevision")
 					}
 				}
-				if input.ExpectedRevision != nil && *input.ExpectedRevision != integer(oldProject["revision"]) {
+				stale := input.ExpectedRevision != nil && *input.ExpectedRevision != integer(oldProject["revision"])
+				if stale && (input.WorkspaceID != nil || input.Snapshot != nil && input.BaseSnapshot == nil || input.Title != nil && input.BaseTitle == nil) {
 					return problem(409, "canvas_revision_conflict", "画布已被其他操作修改，本地编辑已保留；请先核对远端内容并明确处理冲突，普通重试不会覆盖远端修改")
+				}
+				if input.Snapshot != nil {
+					if input.BaseSnapshot != nil {
+						input.Snapshot, err = mergeCanvasSnapshot(input.BaseSnapshot, input.Snapshot, object(oldProject["snapshot"]))
+						if err != nil { return err }
+					} else { input.Snapshot = sharedCanvasSnapshot(input.Snapshot) }
+					sharedChanged = string(jsonBytes(input.Snapshot)) != string(jsonBytes(sharedCanvasSnapshot(object(oldProject["snapshot"]))))
+				}
+				if input.Title != nil {
+					if input.BaseTitle != nil && str(oldProject["title"]) != *input.BaseTitle && str(oldProject["title"]) != strings.TrimSpace(*input.Title) { return canvasRevisionConflict() }
+					sharedChanged = sharedChanged || str(oldProject["title"]) != strings.TrimSpace(*input.Title)
 				}
 				if input.WorkspaceID != nil {
 					if str(oldProject["userId"]) != userID && currentUser(c).Role != "admin" {
@@ -260,8 +275,9 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 					if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET workspace_id=$2,updated_at=now() WHERE id=$1", id, workspace); err != nil {
 						return err
 					}
+					sharedChanged = true
 				}
-				if input.Snapshot != nil {
+				if input.Snapshot != nil && sharedChanged {
 					// 先用走索引的时间窗口判断，避免每次保存都整份比较 JSONB。
 					var recent bool
 					if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM canvas_project_history WHERE project_id=$1 AND note IS NULL AND created_at>now()-interval '5 minutes')", id).Scan(&recent); err != nil {
@@ -276,29 +292,28 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 							if _, err = tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id) SELECT 'history',$1,user_id,media_id FROM media_references WHERE owner_kind='canvas' AND owner_id=$2", h["id"], id); err != nil {
 								return err
 							}
+								if err := saveCanvasPersonalHistory(ctx, tx, id, str(h["id"]), userID); err != nil { return err }
 						}
 					}
 				}
 			}
-			if input.Snapshot != nil {
+			if personalSnapshot != nil || input.Viewport != nil {
+				if err := saveCanvasPersonalState(ctx, tx, id, userID, personalSnapshot, input.Viewport); err != nil { return err }
+			}
+			if input.Snapshot != nil && sharedChanged {
 				if err := syncMediaRefs(ctx, tx, "canvas", id, userID, extractMediaIDs(input.Snapshot)); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET snapshot=$2,updated_at=now() WHERE id=$1", id, jsonBytes(input.Snapshot)); err != nil {
 					return err
 				}
-			} else if input.Viewport != nil {
-				// 平移和缩放只改视口，原地替换这一个字段，不重写整份快照。
-				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET snapshot=jsonb_set(snapshot,'{viewport}',$2::jsonb,true),updated_at=now() WHERE id=$1", id, jsonBytes(input.Viewport)); err != nil {
-					return err
-				}
 			}
-			if input.Title != nil {
+			if input.Title != nil && sharedChanged {
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET title=$2,updated_at=now() WHERE id=$1", id, strings.TrimSpace(*input.Title)); err != nil {
 					return err
 				}
 			}
-			if !create && (input.Title != nil || input.Snapshot != nil || input.Viewport != nil || input.WorkspaceID != nil) {
+			if !create && sharedChanged {
 				if _, err := tx.Exec(ctx, "UPDATE canvas_projects SET revision=revision+1 WHERE id=$1", id); err != nil {
 					return err
 				}
@@ -309,17 +324,14 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 				}
 			}
 			var err error
-			// 只有创建时客户端需要快照本身；更新只回传统计信息，避免每次保存都读回整份快照。
-			columns := canvasSummary + ",workspace_id,(SELECT name FROM workspaces WHERE id=canvas_projects.workspace_id) AS workspace_name"
-			if create {
-				columns += ",snapshot"
-			}
-			saved, err = one(ctx, tx, "SELECT "+columns+" FROM canvas_projects WHERE id=$1", id)
+			// 协作保存返回合并后的权威快照，客户端据此重新应用请求期间的本地编辑。
+			saved, err = canvasProjectDetail(ctx, tx, id, userID, true)
 			return err
 		})
 		if err != nil {
 			return nil, err
 		}
+		if sharedChanged { a.publishCanvasChange(ctx, id) }
 		return gin.H{"project": saved}, nil
 	})
 	api.POST("/canvas-projects", a.rateLimit("canvas-create", 30, time.Minute), saveProject)
@@ -351,12 +363,10 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		userID := currentUser(c).ID
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if err := projectWriteAccess(ctx, tx, id, userID); err != nil {
-				return err
-			}
 			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 FOR UPDATE", id); err != nil {
 				return err
 			}
+			if err := projectWriteAccess(ctx, tx, id, userID); err != nil { return err }
 			var err error
 			saved, err = one(ctx, tx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot,note) SELECT id,user_id,title,snapshot,$2 FROM canvas_projects WHERE id=$1 RETURNING id,title,note,created_at,jsonb_array_length(snapshot->'nodes') AS node_count,jsonb_array_length(snapshot->'connections') AS connection_count", id, input.Note)
 			if err != nil {
@@ -365,6 +375,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			if _, err = tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id) SELECT 'history',$1,user_id,media_id FROM media_references WHERE owner_kind='canvas' AND owner_id=$2", saved["id"], id); err != nil {
 				return err
 			}
+			if err := saveCanvasPersonalHistory(ctx, tx, id, str(saved["id"]), userID); err != nil { return err }
 			return trimCanvasHistory(ctx, tx, id)
 		})
 		return gin.H{"history": saved}, err
@@ -382,12 +393,10 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 		u := currentUser(c)
 		var saved Row
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
-			if err := projectWriteAccess(ctx, tx, id, u.ID); err != nil {
-				return err
-			}
 			if _, err := one(ctx, tx, "SELECT id FROM canvas_projects WHERE id=$1 FOR UPDATE", id); err != nil {
 				return err
 			}
+			if err := projectWriteAccess(ctx, tx, id, u.ID); err != nil { return err }
 			history, err := one(ctx, tx, "SELECT * FROM canvas_project_history WHERE id=$1 AND project_id=$2", historyID, id)
 			if err != nil {
 				return err
@@ -399,6 +408,8 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			if _, err = tx.Exec(ctx, "INSERT INTO media_references(owner_kind,owner_id,user_id,media_id) SELECT 'history',$1,user_id,media_id FROM media_references WHERE owner_kind='canvas' AND owner_id=$2", backup["id"], id); err != nil {
 				return err
 			}
+			if err := saveCanvasPersonalHistory(ctx, tx, id, str(backup["id"]), u.ID); err != nil { return err }
+			if err := restoreCanvasPersonalHistory(ctx, tx, id, historyID, u.ID); err != nil { return err }
 			if err = syncMediaRefs(ctx, tx, "canvas", id, u.ID, extractMediaIDs(history["snapshot"])); err != nil {
 				return err
 			}
@@ -408,9 +419,10 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			if err = trimCanvasHistory(ctx, tx, id); err != nil {
 				return err
 			}
-			saved, err = one(ctx, tx, "SELECT "+canvasSummary+",snapshot FROM canvas_projects WHERE id=$1", id)
+			saved, err = canvasProjectDetail(ctx, tx, id, u.ID, true)
 			return err
 		})
+		if err == nil { a.publishCanvasChange(ctx, id) }
 		return gin.H{"project": saved}, err
 	}))
 	api.DELETE("/canvas-projects/:id", respond(func(c *gin.Context) (any, error) {
@@ -429,6 +441,7 @@ func (a *App) contentRoutes(api *gin.RouterGroup) {
 			_, err := tx.Exec(ctx, "DELETE FROM canvas_projects WHERE id=$1", id)
 			return err
 		})
+		if err == nil { a.publishCanvasChange(ctx, id) }
 		return nil, err
 	}))
 	a.assetRoutes(api)

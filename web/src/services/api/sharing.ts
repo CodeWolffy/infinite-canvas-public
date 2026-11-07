@@ -2,12 +2,15 @@ import { apiRequest } from "@/services/api/request";
 
 export type ShareKind = "canvas" | "asset";
 
+export type SharingUser = { userId: string; username: string; displayName: string };
+
 export type ShareLink = {
     token: string;
     url: string;
     createdAt: string;
     /** 到期后链接失效，需要重新创建。 */
     expiresAt: string | null;
+    createdBy?: SharingUser;
 };
 
 export type SharedCanvas = {
@@ -46,6 +49,10 @@ export function createShareLink(kind: ShareKind, id: string) {
 
 export function revokeShareLink(kind: ShareKind, id: string) {
     return apiRequest<void>(`/api/${sharePath(kind)}/${id}/share`, { method: "DELETE" });
+}
+
+export function resetShareLink(kind: ShareKind, id: string) {
+    return apiRequest<{ share: ShareLink }>(`/api/${sharePath(kind)}/${id}/share/reset`, { method: "POST" });
 }
 
 /** 公开只读访问：不需要登录态，token 即权限。 */

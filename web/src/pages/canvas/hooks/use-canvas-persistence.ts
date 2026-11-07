@@ -17,15 +17,16 @@ export function useCanvasPersistence(projectId: string, enabled: boolean, snapsh
     const changes = useCallback((current = latest.current) => {
         const store = useCanvasStore.getState();
         const project = store.projects.find((item) => item.id === current.projectId);
-        if (!current.enabled || current.session !== useUserStore.getState().sessionVersion || !project?.snapshotLoaded || project.accessRole === "viewer") return null;
+        if (!current.enabled || current.session !== useUserStore.getState().sessionVersion || !project?.snapshotLoaded || project.accessRole === "") return null;
         const patch = Object.fromEntries(Object.entries(current.snapshot).filter(([key, value]) => key === "viewport"
             ? project.viewport.x !== current.snapshot.viewport.x || project.viewport.y !== current.snapshot.viewport.y || project.viewport.k !== current.snapshot.viewport.k
-            : project[key as keyof Snapshot] !== value)) as Partial<Snapshot>;
+            : project.accessRole !== "viewer" && project[key as keyof Snapshot] !== value)) as Partial<Snapshot>;
         return { current, store, patch };
     }, []);
     const dirty = useCallback(() => {
         const value = changes();
-        return Boolean(value && (Object.keys(value.patch).length || value.store.hasPendingChanges(value.current.projectId)));
+        const current = latest.current;
+        return current.session === useUserStore.getState().sessionVersion && Boolean(value && Object.keys(value.patch).length || useCanvasStore.getState().hasPendingChanges(current.projectId));
     }, [changes]);
     const flush = useCallback(async (current = latest.current) => {
         const value = changes(current);

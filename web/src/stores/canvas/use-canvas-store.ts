@@ -1,10 +1,12 @@
 import { create } from "zustand";
+import stringify from "fast-json-stable-stringify";
 import i18n from "@/i18n";
 import * as canvasApi from "@/services/api/canvas-projects";
 import { ApiError } from "@/services/api/request";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
+import { mergeCanvasSnapshots } from "@/lib/canvas/canvas-collaboration-merge";
 
 export type CanvasProject = {
     id: string;
@@ -23,6 +25,8 @@ export type CanvasProject = {
     workspaceId: string | null;
     workspaceName: string | null;
     canDelete: boolean;
+    canManageSharing?: boolean;
+    collaborationVersion?: number;
     snapshotLoaded: boolean;
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
@@ -73,6 +77,8 @@ type CanvasStore = {
     hasPendingChanges: (id: string) => boolean;
     registerSnapshotCapture: (id: string, capture: () => void) => () => void;
     resolveConflict: (id: string, action: "reload" | "copy") => Promise<string>;
+    acceptRemoteProject: (record: canvasApi.CanvasProjectDetail) => void;
+    suspendProjectAccess: (id: string) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -85,6 +91,8 @@ const deletingProjects = new Set<string>();
 const hydratePromises = new Map<string, Promise<void>>();
 const loadPromises = new Map<string, Promise<CanvasProject | null>>();
 const snapshotCaptures = new Map<string, () => void>();
+const serverProjects = new Map<string, CanvasProject>();
+const deferredRemoteProjects = new Map<string, canvasApi.CanvasProjectDetail>();
 const saveAttempts = new Map<string, number>();
 /** 命中不可恢复错误（如 413、400）后停止自动重试，改由用户手动重试，避免无限循环打爆接口。 */
 const blockedProjects = new Set<string>();
@@ -122,10 +130,11 @@ function projectSnapshot(project: CanvasProject): CanvasSnapshot {
 
 function accessFields(record: canvasApi.CanvasProjectSummary) {
     return {
-        accessRole: record.accessRole || "owner",
+        accessRole: record.accessRole ?? "owner",
         workspaceId: record.workspaceId || null,
         workspaceName: record.workspaceName || null,
         canDelete: record.canDelete !== false,
+        canManageSharing: record.canManageSharing === true,
     };
 }
 
@@ -182,6 +191,7 @@ function mergeProjectSummaries(records: canvasApi.CanvasProjectSummary[], projec
 
 function mergeProject(project: CanvasProject, preserveLocal = true) {
     let next = project;
+    if ((!preserveLocal || !pendingUpdates.has(project.id) && !savingProjects.has(project.id) && !blockedProjects.has(project.id)) && project.revision >= (serverProjects.get(project.id)?.revision ?? -1)) serverProjects.set(project.id, project);
     useCanvasStore.setState((state) => ({
         projects: state.projects.some((item) => item.id === project.id)
             ? state.projects.map((current) => {
@@ -220,7 +230,8 @@ function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
     const state = useCanvasStore.getState();
     if (!state.hydrated) return;
     // 工作区 viewer 角色只读：本地编辑不落库，也不会打到服务端 403。
-    if (state.projects.find((project) => project.id === id)?.accessRole === "viewer") return;
+    const role = state.projects.find((project) => project.id === id)?.accessRole;
+    if (role === "" || role === "viewer" && (patch.title !== undefined || patch.snapshot !== undefined)) return;
     const merged = mergeUpdates(pendingUpdates.get(id), patch);
     pendingUpdates.set(id, merged);
     publishSaveState(id);
@@ -255,14 +266,29 @@ async function flushProjectUpdate(id: string) {
     if (!patch || blockedProjects.has(id)) return;
     const project = useCanvasStore.getState().projects.find((item) => item.id === id);
     if (!project) return;
+    const base = serverProjects.get(id);
     pendingUpdates.delete(id);
     let failed = false;
     const request = canvasApi
-        .updateCanvasProject(id, { ...patch, expectedRevision: project.revision })
+        .updateCanvasProject(id, { ...patch, expectedRevision: base?.revision ?? project.revision, ...(patch.snapshot && base ? { baseSnapshot: projectSnapshot(base) } : {}), ...(patch.title !== undefined && base ? { baseTitle: base.title } : {}) })
         .then((record) => {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             if (record.revision < (useCanvasStore.getState().projects.find((item) => item.id === id)?.revision ?? 0)) return;
-            if (blockedProjects.has(id) && useCanvasStore.getState().saveStates[id]?.error?.conflict) return;
+            if (blockedProjects.has(id) && useCanvasStore.getState().saveStates[id]?.error?.permanent) return;
+            if (record.snapshot) {
+                snapshotCaptures.get(id)?.();
+                const authoritative = detailProject({ ...record, snapshot: record.snapshot });
+                const local = useCanvasStore.getState().projects.find((item) => item.id === id)!;
+                serverProjects.set(id, authoritative);
+                const rebased = mergeCanvasSnapshots(patch.snapshot || projectSnapshot(project), projectSnapshot(local), projectSnapshot(authoritative));
+                const changed = stringify([rebased.nodes, rebased.connections, rebased.backgroundMode, rebased.showImageInfo]) !== stringify([local.nodes, local.connections, local.backgroundMode, local.showImageInfo]);
+                const next = { ...local, ...(changed ? rebased : {}), backgroundMode: rebased.backgroundMode as CanvasBackgroundMode, title: pendingUpdates.get(id)?.title ?? authoritative.title, revision: record.revision, updatedAt: record.updatedAt, collaborationVersion: (local.collaborationVersion || 0) + Number(changed) };
+                useCanvasStore.setState((state) => ({ projects: state.projects.map((item) => item.id === id ? next : item) }));
+                const pending = pendingUpdates.get(id);
+                if (pending?.snapshot) pendingUpdates.set(id, { ...pending, snapshot: projectSnapshot(next) });
+            } else if (base) {
+                serverProjects.set(id, { ...base, ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.viewport ? { viewport: patch.viewport } : {}), ...(patch.snapshot || {}), revision: record.revision, updatedAt: record.updatedAt });
+            }
             saveAttempts.delete(id);
             blockedProjects.delete(id);
             publishSaveState(id, null);
@@ -274,8 +300,8 @@ async function flushProjectUpdate(id: string) {
                               ...project,
                               updatedAt: record.updatedAt,
                               revision: record.revision,
-                              nodeCount: patch.snapshot ? patch.snapshot.nodes.length : project.nodeCount,
-                              connectionCount: patch.snapshot ? patch.snapshot.connections.length : project.connectionCount,
+                              nodeCount: project.nodes.length,
+                              connectionCount: project.connections.length,
                           }
                         : project,
                 ),
@@ -289,19 +315,23 @@ async function flushProjectUpdate(id: string) {
             pendingUpdates.set(id, mergeUpdates(patch, pendingUpdates.get(id) || {}));
             const attempt = (saveAttempts.get(id) ?? 0) + 1;
             saveAttempts.set(id, attempt);
-            const permanent = isPermanentFailure(error) || attempt >= MAX_SAVE_ATTEMPTS;
+            const mergeConflict = !(error instanceof ApiError) && Boolean(serverProjects.get(id)?.revision !== base?.revision);
+            const permanent = mergeConflict || isPermanentFailure(error) || attempt >= MAX_SAVE_ATTEMPTS;
             if (permanent) blockedProjects.add(id);
             else saveTimers.set(id, setTimeout(() => void flushProjectUpdate(id), retryDelay(attempt)));
             publishSaveState(id, {
                 projectId: id,
                 message: error instanceof Error ? error.message : i18n.t("canvas.save.failed"),
                 permanent,
-                conflict: error instanceof ApiError && error.status === 409,
+                conflict: mergeConflict || error instanceof ApiError && error.status === 409,
             });
         })
         .finally(() => {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             savingProjects.delete(id);
+            const remote = deferredRemoteProjects.get(id);
+            deferredRemoteProjects.delete(id);
+            if (remote) useCanvasStore.getState().acceptRemoteProject(remote);
             publishSaveState(id);
         });
     savingProjects.set(id, request);
@@ -405,6 +435,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 const sessionVersion = useUserStore.getState().sessionVersion;
                 const project = detailProject(await canvasApi.createCanvasProject({ title, snapshot: emptySnapshot(), workspaceId: workspaceId || undefined }));
                 assertCurrentSession(sessionVersion);
+                serverProjects.set(project.id, project);
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
             },
@@ -421,6 +452,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 };
                 const project = detailProject(await canvasApi.createCanvasProject({ title: source.title || i18n.t("canvas.project.imported"), snapshot }));
                 assertCurrentSession(sessionVersion);
+                serverProjects.set(project.id, project);
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
             },
@@ -475,6 +507,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     ids.forEach(cancelProjectUpdate);
                     await Promise.all(ids.map(canvasApi.deleteCanvasProject));
                     assertCurrentSession(sessionVersion);
+                    ids.forEach((id) => { serverProjects.delete(id); deferredRemoteProjects.delete(id); });
                     const now = new Date().toISOString();
                     const removing = new Set(ids);
                     set((state) => ({
@@ -496,7 +529,10 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
             updateProject: (id, patch) => {
                 // 快照没加载完就写回去会把服务端的真实内容覆盖成空画布。
-                if (!get().projects.find((project) => project.id === id)?.snapshotLoaded) return;
+                const current = get().projects.find((project) => project.id === id);
+                if (!current?.snapshotLoaded || current.accessRole === "") return;
+                if (current.accessRole === "viewer") patch = patch.viewport ? { viewport: patch.viewport } : {};
+                if (!Object.keys(patch).length || Object.entries(patch).every(([key, value]) => key === "viewport" ? JSON.stringify(current.viewport) === JSON.stringify(value) : current[key as keyof CanvasProject] === value)) return;
                 let updated: CanvasProject | undefined;
                 set((state) => ({
                     projects: state.projects.map((project) => {
@@ -553,8 +589,57 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 if (get().projects.find((project) => project.id === id) !== local) throw new Error("本地编辑已变化，请重新核对后加载远端版本");
                 cancelProjectUpdate(id);
                 const restored = detailProject(remote);
+                serverProjects.set(id, restored);
                 set((state) => ({ projects: state.projects.map((project) => project.id === id ? restored : project), saveError: state.saveError?.projectId === id ? null : state.saveError, reloadVersion: state.reloadVersion + 1 }));
                 return id;
+            },
+            acceptRemoteProject: (record) => {
+                const id = record.id;
+                if (savingProjects.has(id)) { deferredRemoteProjects.set(id, record); return; }
+                const base = serverProjects.get(id);
+                if (!base || record.revision < base.revision) return;
+                snapshotCaptures.get(id)?.();
+                const local = get().projects.find((item) => item.id === id);
+                if (!local?.snapshotLoaded) return;
+                const access = accessFields(record);
+                if (access.accessRole === "viewer" && local.accessRole !== "viewer" && pendingUpdates.has(id)) {
+                    const timer = saveTimers.get(id);
+                    if (timer) clearTimeout(timer);
+                    saveTimers.delete(id);
+                    blockedProjects.add(id);
+                    publishSaveState(id, { projectId: id, message: "权限已改为只读，本地未保存编辑已保留，可通过保存冲突入口另存副本", permanent: true, conflict: true });
+                }
+                set((state) => ({ projects: state.projects.map((item) => item.id === id ? { ...item, ...access } : item) }));
+                if (record.revision === base.revision) {
+                    return;
+                }
+                if (blockedProjects.has(id)) return;
+                try {
+                    const remote = detailProject(record);
+                    const shared = mergeCanvasSnapshots(projectSnapshot(base), projectSnapshot(local), projectSnapshot(remote));
+                    if (local.title !== base.title && remote.title !== base.title && remote.title !== local.title) throw new Error("画布标题已被其他协作者修改");
+                    const changed = stringify([shared.nodes, shared.connections, shared.backgroundMode, shared.showImageInfo]) !== stringify([local.nodes, local.connections, local.backgroundMode, local.showImageInfo]);
+                    const next = { ...local, ...(changed ? shared : {}), ...access, backgroundMode: shared.backgroundMode as CanvasBackgroundMode, title: local.title === base.title ? remote.title : local.title, revision: remote.revision, updatedAt: remote.updatedAt, collaborationVersion: (local.collaborationVersion || 0) + Number(changed) };
+                    serverProjects.set(id, { ...remote, viewport: local.viewport, chatSessions: local.chatSessions, activeChatId: local.activeChatId });
+                    const pending = pendingUpdates.get(id);
+                    if (pending?.snapshot) pendingUpdates.set(id, { ...pending, snapshot: projectSnapshot(next) });
+                    set((state) => ({ projects: state.projects.map((item) => item.id === id ? next : item) }));
+                } catch {
+                    blockedProjects.add(id);
+                    const timer = saveTimers.get(id);
+                    if (timer) clearTimeout(timer);
+                    saveTimers.delete(id);
+                    publishSaveState(id, { projectId: id, message: "同一内容被协作者修改，本地编辑已保留，请处理版本冲突", permanent: true, conflict: true });
+                }
+            },
+            suspendProjectAccess: (id) => {
+                snapshotCaptures.get(id)?.();
+                const timer = saveTimers.get(id);
+                if (timer) clearTimeout(timer);
+                saveTimers.delete(id);
+                blockedProjects.add(id);
+                set((state) => ({ projects: state.projects.map((item) => item.id === id ? { ...item, accessRole: "" as const } : item) }));
+                publishSaveState(id, { projectId: id, message: "访问权限已变更，同步已停止；本地未保存编辑仍保留", permanent: true, conflict: pendingUpdates.has(id) || savingProjects.has(id) });
             },
 }));
 
@@ -569,6 +654,8 @@ useUserStore.subscribe((state, previous) => {
     hydratePromises.clear();
     loadPromises.clear();
     snapshotCaptures.clear();
+    serverProjects.clear();
+    deferredRemoteProjects.clear();
     saveAttempts.clear();
     blockedProjects.clear();
     useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null, saveStates: {} });

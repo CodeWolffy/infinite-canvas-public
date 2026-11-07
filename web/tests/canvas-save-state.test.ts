@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CanvasProjectDetail } from "@/services/api/canvas-projects";
+import { CanvasNodeType } from "@/types/canvas";
 
 const state = vi.hoisted(() => ({ sessionVersion: 1, listener: (_next: { sessionVersion: number }, _previous: { sessionVersion: number }) => {}, move: (_record: CanvasProjectDetail) => {}, update: vi.fn(), remove: vi.fn(), read: vi.fn() }));
 vi.mock("@/stores/use-user-store", () => ({
@@ -122,4 +123,94 @@ test("工作区冲突拦截迟到成功后，重新接纳远端详情仍保留�
     expect(state.read).not.toHaveBeenCalled();
     store.getState().applyRestoredProject(record("a", 4));
     expect(store.getState().saveStates.a).toMatchObject({ phase: "saved", error: null });
+});
+
+const shared = (x = 0, content = "原文") => ({ nodes: [{ id: "node", type: CanvasNodeType.Text, title: "文本", position: { x, y: 0 }, width: 100, height: 100, metadata: { content } }], connections: [], backgroundMode: "lines" as const, showImageInfo: false });
+const collaborative = (revision = 1, x = 0, content = "原文"): CanvasProjectDetail => ({ ...record("a", revision), snapshot: shared(x, content) });
+
+test("远端修改正文与本地移动合并，后续保存以新权威快照为基线，个人视口不变", async () => {
+    store.getState().adoptProject(collaborative());
+    store.getState().updateProject("a", { nodes: shared(80).nodes, viewport: { x: 50, y: 30, k: 2 } });
+    store.getState().acceptRemoteProject(collaborative(2, 0, "远端正文"));
+    const merged = store.getState().projects.find((project) => project.id === "a")!;
+    expect(merged.nodes).toEqual(shared(80, "远端正文").nodes);
+    expect(merged.viewport).toEqual({ x: 50, y: 30, k: 2 });
+    state.update.mockResolvedValue(collaborative(3, 80, "远端正文"));
+    await store.getState().flushProject("a");
+    expect(state.update).toHaveBeenCalledWith("a", expect.objectContaining({ expectedRevision: 2, baseSnapshot: expect.objectContaining(shared(0, "远端正文")), snapshot: expect.objectContaining(shared(80, "远端正文")) }));
+});
+
+test("同字段远端冲突保留本地编辑并暂停自动覆盖", async () => {
+    store.getState().adoptProject(collaborative());
+    store.getState().updateProject("a", { nodes: shared(0, "我的正文").nodes });
+    store.getState().acceptRemoteProject(collaborative(2, 0, "别人的正文"));
+    expect(store.getState().projects.find((project) => project.id === "a")?.nodes).toEqual(shared(0, "我的正文").nodes);
+    expect(store.getState().saveStates.a.error?.conflict).toBe(true);
+    await store.getState().flushProject("a");
+    expect(state.update).not.toHaveBeenCalled();
+});
+
+test("保存期间继续编辑并收到远端事件，响应合并后仍提交最新本地修改", async () => {
+    store.getState().adoptProject(collaborative());
+    const first = deferred(), second = deferred();
+    state.update.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    store.getState().updateProject("a", { nodes: shared(10).nodes });
+    const saving = store.getState().flushProject("a");
+    store.getState().updateProject("a", { nodes: shared(20).nodes });
+    store.getState().acceptRemoteProject(collaborative(2, 0, "远端"));
+    first.resolve(collaborative(3, 10, "远端"));
+    await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
+    expect(state.update.mock.calls[1][1]).toMatchObject({ expectedRevision: 3, baseSnapshot: shared(10, "远端"), snapshot: shared(20, "远端") });
+    second.resolve(collaborative(4, 20, "远端"));
+    await saving;
+    expect(store.getState().projects.find((project) => project.id === "a")?.nodes).toEqual(shared(20, "远端").nodes);
+    expect(store.getState().saveStates.a.phase).toBe("saved");
+});
+
+test("只读成员能保存个人视口，不能入队共享内容修改", async () => {
+    store.getState().adoptProject({ ...collaborative(), accessRole: "viewer" });
+    store.getState().updateProject("a", { nodes: shared(99).nodes, viewport: { x: 20, y: 0, k: 1 } });
+    state.update.mockResolvedValue({ ...collaborative(), accessRole: "viewer" });
+    await store.getState().flushProject("a");
+    expect(state.update.mock.calls[0][1]).toEqual({ expectedRevision: 1, viewport: { x: 20, y: 0, k: 1 } });
+    expect(store.getState().projects.find((project) => project.id === "a")?.nodes).toEqual(shared().nodes);
+});
+
+test("迟到的旧详情不能倒退协作保存基线", async () => {
+    store.getState().adoptProject(collaborative(3, 0, "最新"));
+    store.getState().adoptProject(collaborative(1));
+    store.getState().updateProject("a", { nodes: shared(20, "最新").nodes });
+    state.update.mockResolvedValue(collaborative(4, 20, "最新"));
+    await store.getState().flushProject("a");
+    expect(state.update.mock.calls[0][1]).toMatchObject({ expectedRevision: 3, baseSnapshot: shared(0, "最新") });
+});
+
+test("权限降为只读后停止待保存共享写入并保留本地副本", async () => {
+    store.getState().adoptProject(collaborative());
+    store.getState().updateProject("a", { nodes: shared(10).nodes });
+    store.getState().acceptRemoteProject({ ...collaborative(), accessRole: "viewer" });
+    await store.getState().flushProject("a");
+    expect(state.update).not.toHaveBeenCalled();
+    expect(store.getState().saveStates.a.error?.conflict).toBe(true);
+    expect(store.getState().projects.find((project) => project.id === "a")?.nodes).toEqual(shared(10).nodes);
+});
+
+test.each(["viewport", "title"])("%s保存先于SSE返回时采纳响应里的权威共享内容", async (kind) => {
+    store.getState().adoptProject(collaborative());
+    if (kind === "viewport") store.getState().updateProject("a", { viewport: { x: 20, y: 0, k: 1 } });
+    else await store.getState().renameProject("a", "新标题");
+    state.update.mockResolvedValue({ ...collaborative(3, 0, "远端新正文"), title: kind === "title" ? "新标题" : "a" });
+    await store.getState().flushProject("a");
+    expect(store.getState().projects.find((item) => item.id === "a")?.nodes).toEqual(shared(0, "远端新正文").nodes);
+    store.getState().acceptRemoteProject({ ...collaborative(3, 0, "远端新正文"), title: kind === "title" ? "新标题" : "a" });
+    expect(store.getState().projects.find((item) => item.id === "a")?.nodes).toEqual(shared(0, "远端新正文").nodes);
+});
+
+test("撤权前捕获未入队编辑，保存冲突入口允许保留副本", () => {
+    store.getState().adoptProject(collaborative());
+    const unregister = store.getState().registerSnapshotCapture("a", () => store.getState().updateProject("a", { nodes: shared(25).nodes }));
+    store.getState().suspendProjectAccess("a");
+    expect(store.getState().projects.find((item) => item.id === "a")).toMatchObject({ accessRole: "", nodes: shared(25).nodes });
+    expect(store.getState().saveStates.a.error?.conflict).toBe(true);
+    unregister();
 });

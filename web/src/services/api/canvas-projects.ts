@@ -17,6 +17,7 @@ export type CanvasProjectSummary = {
     workspaceName?: string | null;
     /** 只有画布所有者或工作区所有者能删除。 */
     canDelete?: boolean;
+    canManageSharing?: boolean;
 };
 
 export type CanvasProjectDetail = CanvasProjectSummary & { snapshot: unknown };
@@ -49,8 +50,8 @@ export function onCanvasWorkspaceMove(listener: (record: CanvasProjectSummary) =
     onWorkspaceMove = listener;
 }
 
-export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; viewport?: unknown; workspaceId?: string | null; expectedRevision?: number }) {
-    const record = (await apiRequest<{ project: CanvasProjectSummary }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
+export async function updateCanvasProject(id: string, input: { title?: string; snapshot?: unknown; baseSnapshot?: unknown; baseTitle?: string; viewport?: unknown; workspaceId?: string | null; expectedRevision?: number }) {
+    const record = (await apiRequest<{ project: CanvasProjectSummary & { snapshot?: unknown } }>(`/api/canvas-projects/${id}`, { method: "PUT", body: input })).project;
     if (input.workspaceId !== undefined && input.title === undefined && input.snapshot === undefined && input.viewport === undefined) onWorkspaceMove(record);
     return record;
 }

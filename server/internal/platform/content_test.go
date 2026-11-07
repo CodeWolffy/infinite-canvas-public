@@ -48,31 +48,36 @@ func TestCanvasProjectLifecycle(t *testing.T) {
 	if saved.Code != 200 {
 		t.Fatalf("保存视口失败: %d %s", saved.Code, saved.Body.String())
 	}
-	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(1) {
-		t.Fatalf("视口保存应推进版本到 1: %v", revision)
+	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(0) {
+		t.Fatalf("个人视口保存不应推进共享版本: %v", revision)
 	}
-	viewport, err := one(ctx, a.DB, "SELECT snapshot->'viewport' AS viewport FROM canvas_projects WHERE id=$1", projectID)
+	viewport, err := one(ctx, a.DB, "SELECT v.viewport,p.snapshot FROM canvas_user_views v JOIN canvas_projects p ON p.id=v.project_id WHERE v.project_id=$1 AND v.user_id=$2", projectID, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := object(viewport["viewport"])
-	if got["x"] != 12.0 || got["k"] != 1.5 {
+	if got["x"] != 12.0 || got["y"] != 34.0 || got["k"] != 1.5 {
 		t.Fatalf("视口未保存: %v", got)
+	}
+	for _, key := range []string{"viewport", "chatSessions", "activeChatId"} {
+		if _, exists := object(viewport["snapshot"])[key]; exists {
+			t.Fatalf("共享快照不应保存个人字段 %s: %v", key, viewport["snapshot"])
+		}
 	}
 
 	// 历史超过 20 条时只保留最新的 20 条；用历史时间规避 5 分钟内的合并窗口。
 	for i := 0; i < 25; i++ {
-		if _, err = a.DB.Exec(ctx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot,created_at) VALUES($1,$2,'旧版本',$3,now()-($4*interval '1 hour'))", projectID, userID, jsonBytes(canvasTestSnapshot(mediaID)), i+1); err != nil {
+		if _, err = a.DB.Exec(ctx, "INSERT INTO canvas_project_history(project_id,user_id,title,snapshot,created_at) VALUES($1,$2,'旧版本',$3::jsonb-'viewport',now()-($4*interval '1 hour'))", projectID, userID, jsonBytes(canvasTestSnapshot(mediaID)), i+1); err != nil {
 			t.Fatal(err)
 		}
 	}
 	snapshot := canvasTestSnapshot(mediaID)
 	snapshot["nodes"] = []any{map[string]any{"id": "n2", "type": "text", "metadata": map[string]any{}}}
-	if saved = testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": snapshot, "expectedRevision": 1}, cookie); saved.Code != 200 {
+	if saved = testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": snapshot, "expectedRevision": 0}, cookie); saved.Code != 200 {
 		t.Fatalf("保存快照失败: %d %s", saved.Code, saved.Body.String())
 	}
-	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(2) {
-		t.Fatalf("快照保存应推进版本到 2: %v", revision)
+	if revision := object(responseRow(t, saved)["project"])["revision"]; revision != float64(1) {
+		t.Fatalf("共享快照保存应推进版本到 1: %v", revision)
 	}
 	var history int
 	if err = a.DB.QueryRow(ctx, "SELECT count(*) FROM canvas_project_history WHERE project_id=$1", projectID).Scan(&history); err != nil || history != 20 {
@@ -157,6 +162,7 @@ func TestCanvasProjectPutMovesWorkspaceAndSavesPriorSnapshot(t *testing.T) {
 	}
 	projectID := str(object(responseRow(t, created)["project"])["id"])
 	prior := canvasTestSnapshot("")
+	delete(prior, "viewport")
 	next := canvasTestSnapshot("")
 	next["nodes"] = []any{map[string]any{"id": "n2", "type": "text", "metadata": map[string]any{}}}
 	updated := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"workspaceId": workspaceID, "snapshot": next, "expectedRevision": 0}, ownerCookie)
@@ -173,7 +179,8 @@ func TestCanvasProjectPutMovesWorkspaceAndSavesPriorSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if str(project["workspaceId"]) != workspaceID || string(jsonBytes(project["snapshot"])) != string(jsonBytes(next)) {
+	expectedShared := map[string]any{"nodes": next["nodes"], "connections": next["connections"]}
+	if str(project["workspaceId"]) != workspaceID || string(jsonBytes(project["snapshot"])) != string(jsonBytes(expectedShared)) {
 		t.Fatalf("画布工作区或快照未持久化: %v", project)
 	}
 	history, err := rows(ctx, a.DB, "SELECT title,snapshot FROM canvas_project_history WHERE project_id=$1", projectID)
@@ -224,7 +231,8 @@ func TestCanvasProjectRevisionConflictPreservesCommittedSnapshot(t *testing.T) {
 		t.Fatalf("过期快照应返回版本冲突: %d %s", conflict.Code, conflict.Body.String())
 	}
 	stored, err := one(ctx, a.DB, "SELECT snapshot,revision FROM canvas_projects WHERE id=$1", projectID)
-	if err != nil || string(jsonBytes(stored["snapshot"])) != string(jsonBytes(first)) || integer(stored["revision"]) != 1 {
+	expectedShared := map[string]any{"nodes": first["nodes"], "connections": first["connections"]}
+	if err != nil || string(jsonBytes(stored["snapshot"])) != string(jsonBytes(expectedShared)) || integer(stored["revision"]) != 1 {
 		t.Fatalf("冲突不得覆盖已提交快照: %v %v", stored, err)
 	}
 	missing := testRequest(router, "PUT", "/api/canvas-projects/"+projectID, map[string]any{"snapshot": second}, editorCookie)

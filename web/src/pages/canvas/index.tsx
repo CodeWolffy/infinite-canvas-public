@@ -15,6 +15,7 @@ import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
 import { TemplatePickerModal } from "@/pages/canvas/template-picker-modal";
 import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { CanvasInvitations } from "@/components/canvas/canvas-invitations";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
@@ -239,6 +240,7 @@ export default function CanvasPage() {
                     </div>
                 </header>
 
+                <CanvasInvitations />
                 <section aria-label="搜索和筛选画布" className="flex flex-col gap-3">
                     <div className="flex flex-wrap items-center gap-3">
                         <Input.Search aria-label="按标题搜索画布" placeholder="按标题搜索全部画布" value={keywordInput} allowClear disabled={loadingAllProjects} onChange={(event) => { setKeywordInput(event.target.value); if (!event.target.value) setKeyword(""); }} onSearch={(value) => setKeyword(value.trim())} className="min-w-48 flex-1 sm:max-w-sm" />

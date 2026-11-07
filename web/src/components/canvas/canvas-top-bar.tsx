@@ -9,6 +9,7 @@ import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
 import { CanvasSaveStatus } from "@/components/canvas/canvas-save-status";
+import { CanvasCollaborationStatus } from "@/components/canvas/canvas-collaboration-status";
 
 export function CanvasTopBar({
     title,
@@ -157,9 +158,10 @@ export function CanvasTopBar({
                 </div>
 
                 <div className="pointer-events-auto ml-auto flex max-w-full shrink-0 items-center gap-1.5">
+                    <CanvasCollaborationStatus />
                     {onShare ? (
-                        <Tooltip title={t("share.title")}>
-                            <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
+                        <Tooltip title="分享与协作">
+                            <Button type="text" aria-label="分享与协作" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
                         </Tooltip>
                     ) : null}
                     <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} />

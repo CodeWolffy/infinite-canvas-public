@@ -5,9 +5,11 @@ import { findNode, loadModule, readSource, sourceFile } from "./support/source-l
 const helpers = loadModule(readSource("lib/canvas/canvas-text-generation.ts"));
 const reasoning = loadModule(readSource("lib/model-reasoning.ts"), {}, { "@/i18n": { default: { t: (key: string) => key } } });
 const restoreSource = sourceFile("lib/canvas/canvas-generation-helpers.ts");
+const ownershipDeclaration = restoreSource.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "canRecoverCanvasGeneration")!;
+const { canRecoverCanvasGeneration } = loadModule(ownershipDeclaration.getText(restoreSource), { useUserStore: { getState: () => ({ user: { id: "user" } }) } });
 const restoreDeclaration = restoreSource.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "resetInterruptedGeneration")!;
 const { resetInterruptedGeneration } = loadModule(restoreDeclaration.getText(restoreSource), {
-    ...helpers, CanvasNodeType: { Text: "text", Config: "config", Image: "image" }, hasResumableVideoTask: () => false, i18n: { t: () => "interrupted" },
+    ...helpers, canRecoverCanvasGeneration, CanvasNodeType: { Text: "text", Config: "config", Image: "image" }, hasResumableVideoTask: () => false, i18n: { t: () => "interrupted" },
 });
 const node = (): any => ({ id: "node", type: "text", metadata: { status: "loading", primaryTextId: "a", texts: ["a", "b"].map((id) => ({ id, status: "loading", content: "", textRequestId: `request-${id}`, conversationId: `conversation-${id}` })) } });
 
@@ -32,7 +34,7 @@ test("initial multi-text generation persists distinct request and conversation a
     current.metadata.texts = current.metadata.texts.map(({ id }: any) => ({ id, status: "loading", content: "" }));
     let sequence = 0;
     const { generate } = loadModule(`export const generate = ${callback.getText(source)};`, {
-        ...helpers,
+        ...helpers, canRecoverCanvasGeneration,
         textIds: ["a", "b"], rootId: "node", projectId: "project", sourceNode: {}, generationConfig: {}, generationContext: {}, effectivePrompt: "question", controller: new AbortController(),
         NODE_STATUS_LOADING: "loading", NODE_STATUS_SUCCESS: "success", NODE_STATUS_ERROR: "error",
         buildNodeResponseMessages: () => [], isGenerationCanceled: () => false, t: (key: string) => key,
@@ -64,7 +66,7 @@ const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-reco
     let sequence = 0, conversation = 0;
     let nodes: any[] = [{ id: "source", type: "config", metadata: { status: "loading", prompt: "question" } }, { ...node(), metadata: { status: "loading", prompt: "question", primaryTextId: "a", texts: ["a", "b"].slice(0, count).map((id) => ({ id, status: "loading", content: "" })) } }];
     const context: Record<string, any> = {
-        ...helpers, ...reasoning, AbortController, DOMException,
+        ...helpers, ...reasoning, canRecoverCanvasGeneration, AbortController, DOMException,
         findChannelModel: () => ({ model: { reasoningEfforts } }),
         useUserStore: { getState: () => user },
         assertCurrentSession: (version: number) => { if (user.sessionVersion !== version) throw new DOMException("changed session", "AbortError"); },

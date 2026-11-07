@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { expect, test } from "vitest";
-import { evaluate, findNode, sourceFile } from "./support/source-loader";
+import { evaluate, findNode, loadModule, sourceFile } from "./support/source-loader";
 
 // The generation/recovery callbacks live inside the canvas page component, so they are extracted
 // from the source and executed with HTTP and React's state setter isolated.
@@ -9,6 +9,9 @@ const declares = (statement: ts.Statement, name: string) =>
     ts.isVariableStatement(statement) && statement.declarationList.declarations.some((item) => ts.isIdentifier(item.name) && item.name.text === name);
 // 图片恢复轮询已迁到 use-canvas-generation-recovery，生成尾部仍在画布页面里。
 const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-recovery.ts");
+const helpersSource = sourceFile("lib/canvas/canvas-generation-helpers.ts");
+const ownershipDeclaration = helpersSource.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "canRecoverCanvasGeneration")!;
+const { canRecoverCanvasGeneration } = loadModule(ownershipDeclaration.getText(helpersSource), { useUserStore: { getState: () => ({ user: { id: "user" } }) } });
 const recovery = findNode(recoverySource, (node) => ts.isArrowFunction(node) && ts.isBlock(node.body) && node.body.statements.some((item) => declares(item, "pollPendingImage"))) as ts.ArrowFunction;
 const generation = findNode(source, (node) => ts.isTryStatement(node) && node.tryBlock.statements.some((item) => declares(item, "generatedImages"))) as ts.TryStatement;
 expect(recovery && generation).toBeTruthy();
@@ -26,6 +29,7 @@ for (const terminalStatus of ["succeeded", "failed"]) {
         let interval: (() => void) | undefined;
         let task: any = { id: "task", status: "running" };
         const context: Record<string, any> = {
+            canRecoverCanvasGeneration,
             rootId: "image", nodeId: "source", isConfigNode: true, projectId: "project", batchId: "batch",
             referenceImages: [], generationConfig: {}, effectivePrompt: "prompt", count: 1,
             controller: { signal: { aborted: false } }, onBatchCreated() {}, applyTaskUpdate() {},

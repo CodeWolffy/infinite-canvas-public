@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/Calcium-Ion/go-epay v0.0.4
 	github.com/alexedwards/argon2id v1.0.0
+	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/gabriel-vasile/mimetype v1.4.8
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-audio/audio v1.0.0
@@ -18,6 +19,7 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartwalle/alipay/v3 v3.2.31
 	github.com/tmaxmax/go-sse v0.11.0
+	github.com/wI2L/jsondiff v0.7.0
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
 	golang.org/x/image v0.46.0
 )
@@ -65,6 +67,10 @@ require (
 	github.com/smartwalle/ncrypto v1.0.4 // indirect
 	github.com/smartwalle/ngx v1.1.2 // indirect
 	github.com/smartwalle/nsign v1.0.9 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tinylib/msgp v1.3.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect

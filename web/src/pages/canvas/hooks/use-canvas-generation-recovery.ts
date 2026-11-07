@@ -6,6 +6,8 @@ import { watchTextRequest, type TextRequestDetail } from "@/services/api/text";
 import { ApiError } from "@/services/api/request";
 import { applyTextGenerationProgress, applyTextGenerationResult, hasTextGenerationRequest, textGenerationRequests } from "@/lib/canvas/canvas-text-generation";
 import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { canRecoverCanvasGeneration } from "@/lib/canvas/canvas-generation-helpers";
+import { useUserStore } from "@/stores/use-user-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeImage } from "@/types/canvas";
 
 export type CanvasGenerationRequest = {
@@ -38,16 +40,17 @@ const NODE_STATUS_ERROR = "error" as const;
  * 节点其他字段变化不会重建。
  */
 export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded, setNodes, t, generationRequestsRef }: CanvasGenerationRecoveryParams) {
+    const userId = useUserStore((state) => state.user?.id);
     const restoringGenerationImagesRef = useRef(new Set<string>());
     const missingTextRequestsRef = useRef(new Map<string, number>());
 
     const pendingImages = useMemo<PendingImage[]>(
         () =>
             nodes.flatMap((node) => {
-                if (generationRequestsRef.current.has(node.id)) return [];
+                if (!canRecoverCanvasGeneration(node) || generationRequestsRef.current.has(node.id)) return [];
                 return (node.metadata?.images || []).flatMap((image) => (image.status === NODE_STATUS_LOADING && image.generationBatchId ? [{ nodeId: node.id, image }] : []));
             }),
-        [generationRequestsRef, nodes],
+        [generationRequestsRef, nodes, userId],
     );
     const pendingImageKey = useMemo(() => pendingImages.map(({ nodeId, image }) => `${nodeId}:${image.id}:${image.generationBatchId}`).join(","), [pendingImages]);
     const pendingImagesRef = useRef(pendingImages);
@@ -56,8 +59,8 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
     });
 
     const pendingText = useMemo<PendingText[]>(
-        () => nodes.flatMap((node) => textGenerationRequests(node).filter((text) => text.status === NODE_STATUS_LOADING && text.textRequestId).map((text) => ({ nodeId: node.id, requestId: text.textRequestId! }))),
-        [nodes],
+        () => nodes.flatMap((node) => canRecoverCanvasGeneration(node) ? textGenerationRequests(node).filter((text) => text.status === NODE_STATUS_LOADING && text.textRequestId).map((text) => ({ nodeId: node.id, requestId: text.textRequestId! })) : []),
+        [nodes, userId],
     );
     const pendingTextKey = useMemo(() => pendingText.map(({ nodeId, requestId }) => `${nodeId}:${requestId}`).join(","), [pendingText]);
     const pendingTextRef = useRef(pendingText);
@@ -86,9 +89,9 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
                 if (!task) {
                     const errorDetails = t("canvas.projectPage.generationFailed");
                     setNodes((current) => {
-                        const updated = current.map((item) => item.id === nodeId ? { ...item, metadata: { ...item.metadata, images: item.metadata?.images?.map((image) => image.id === pendingImage.id ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image) } } : item);
+                        const updated = current.map((item) => item.id === nodeId && canRecoverCanvasGeneration(item) ? { ...item, metadata: { ...item.metadata, images: item.metadata?.images?.map((image) => image.id === pendingImage.id ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image) } } : item);
                         return updated.map((item) => {
-                            if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
+                            if (!canRecoverCanvasGeneration(item) || item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
                             const children = connections.filter((connection) => connection.fromNodeId === item.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => child?.type === CanvasNodeType.Image);
                             if (!children.length) return item;
                             const failed = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_ERROR));
@@ -102,7 +105,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
                 if (task.status !== "succeeded" || !task.image) {
                     setNodes((current) => {
                         const updated = current.map((item) => {
-                            if (item.id !== nodeId) return item;
+                            if (item.id !== nodeId || !canRecoverCanvasGeneration(item)) return item;
                             const currentImage = item.metadata?.images?.find((image) => image.id === pendingImage.id);
                             if (currentImage?.generationBatchId !== batchId || (currentImage.generationTaskId && currentImage.generationTaskId !== task.id)) return item;
                             const errorDetails = task.errorMessage || t("canvas.projectPage.generationFailed");
@@ -110,7 +113,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
                             return { ...item, metadata: { ...item.metadata, images, status: images?.some((image) => image.status === NODE_STATUS_LOADING) ? NODE_STATUS_LOADING : images?.some((image) => image.status === NODE_STATUS_SUCCESS) ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails } };
                         });
                         return updated.map((item) => {
-                            if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
+                            if (!canRecoverCanvasGeneration(item) || item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
                             const children = connections.filter((connection) => connection.fromNodeId === item.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => child?.type === CanvasNodeType.Image && (child.id === nodeId || Boolean(child.metadata?.images?.some((image) => image.generationBatchId))));
                             if (!children.length) return item;
                             const failed = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_ERROR));
@@ -131,7 +134,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
                 if (disposed) return;
                 setNodes((current) => {
                     const updated = current.map((item) => {
-                        if (item.id !== nodeId) return item;
+                        if (item.id !== nodeId || !canRecoverCanvasGeneration(item)) return item;
                         const metadata = item.metadata;
                         const currentImage = metadata?.images?.find((image) => image.id === pendingImage.id);
                         if (!metadata || currentImage?.generationBatchId !== batchId || (currentImage.generationTaskId && currentImage.generationTaskId !== task.id)) return item;
@@ -142,7 +145,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
                         return { ...item, ...(isPrimary ? imageSize : {}), metadata: { ...metadata, content: metadata.content || image.content, storageKey: metadata.storageKey || image.storageKey, naturalWidth: metadata.naturalWidth || image.naturalWidth, naturalHeight: metadata.naturalHeight || image.naturalHeight, bytes: metadata.bytes || image.bytes, mimeType: metadata.mimeType || image.mimeType, images, primaryImageId: metadata.primaryImageId || image.id, status: images.some((entry) => entry.status === NODE_STATUS_LOADING) ? NODE_STATUS_LOADING : NODE_STATUS_SUCCESS, errorDetails: undefined } };
                     });
                     return updated.map((item) => {
-                        if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
+                        if (!canRecoverCanvasGeneration(item) || item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
                         const children = connections.filter((connection) => connection.fromNodeId === item.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => child?.type === CanvasNodeType.Image && (child.id === nodeId || Boolean(child.metadata?.images?.some((image) => image.generationBatchId))));
                         if (!children.length) return item;
                         const failed = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_ERROR));
@@ -174,7 +177,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
             if (detail.request.status !== "succeeded" && detail.request.status !== "failed" && detail.request.status !== "canceled") {
                 if (detail.request.partialText) setNodes((current) => {
                     const node = current.find((item) => item.id === nodeId);
-                    if (!node) return current;
+                    if (!node || !canRecoverCanvasGeneration(node)) return current;
                     const updated = applyTextGenerationProgress(node, requestId, detail.request.partialText!);
                     return updated === node ? current : current.map((item) => item.id === nodeId ? updated : item);
                 });
@@ -182,14 +185,14 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
             }
             setNodes((current) => {
                 const updated = current.map((node) => {
-                    if (node.id !== nodeId) return node;
+                    if (node.id !== nodeId || !canRecoverCanvasGeneration(node)) return node;
                     if (detail.request.status === "succeeded" && detail.message) return applyTextGenerationResult(node, requestId, { content: detail.message.content, status: NODE_STATUS_SUCCESS, errorDetails: undefined });
                     const errorDetails = detail.request.errorCode ? `文本请求失败：${detail.request.errorCode}` : t("canvas.projectPage.generationFailed");
                     return applyTextGenerationResult(node, requestId, { content: "", status: NODE_STATUS_ERROR, errorDetails });
                 });
                 const parentIds = connections.filter((connection) => connection.toNodeId === nodeId).map((connection) => connection.fromNodeId);
                 return updated.map((node) => {
-                    if (!parentIds.includes(node.id) || node.type !== CanvasNodeType.Config || node.metadata?.status !== NODE_STATUS_LOADING) return node;
+                    if (!canRecoverCanvasGeneration(node) || !parentIds.includes(node.id) || node.type !== CanvasNodeType.Config || node.metadata?.status !== NODE_STATUS_LOADING) return node;
                     const children = connections.filter((connection) => connection.fromNodeId === node.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => Boolean(child) && (hasTextGenerationRequest(child!) || child?.type === CanvasNodeType.Text && child.metadata?.status === NODE_STATUS_ERROR));
                     if (!children.length || children.some((child) => child.metadata?.status === NODE_STATUS_LOADING)) return node;
                     const failed = children.find((child) => child.metadata?.status === NODE_STATUS_ERROR);
@@ -200,13 +203,13 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
         const markTextInterrupted = (nodeId: string, requestId: string) => {
             setNodes((current) => {
                 const updated = current.map((node) =>
-                    node.id === nodeId
+                    node.id === nodeId && canRecoverCanvasGeneration(node)
                         ? applyTextGenerationResult(node, requestId, { content: "", status: NODE_STATUS_ERROR, errorDetails: t("canvas.generation.interrupted") })
                         : node,
                 );
                 const parentIds = connections.filter((connection) => connection.toNodeId === nodeId).map((connection) => connection.fromNodeId);
                 return updated.map((node) => {
-                    if (!parentIds.includes(node.id) || node.type !== CanvasNodeType.Config || node.metadata?.status !== NODE_STATUS_LOADING) return node;
+                    if (!canRecoverCanvasGeneration(node) || !parentIds.includes(node.id) || node.type !== CanvasNodeType.Config || node.metadata?.status !== NODE_STATUS_LOADING) return node;
                     const children = connections.filter((connection) => connection.fromNodeId === node.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => Boolean(child) && (hasTextGenerationRequest(child!) || child?.type === CanvasNodeType.Text && child.metadata?.status === NODE_STATUS_ERROR));
                     if (!children.length || children.some((child) => child.metadata?.status === NODE_STATUS_LOADING)) return node;
                     const failed = children.find((child) => child.metadata?.status === NODE_STATUS_ERROR);
@@ -240,7 +243,7 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
         if (!projectLoaded) return;
         let changed = false;
         const nextNodes = nodes.map((node) => {
-            if (node.type !== CanvasNodeType.Config || (node.metadata?.status !== NODE_STATUS_LOADING && node.metadata?.status !== NODE_STATUS_IDLE)) return node;
+            if (!canRecoverCanvasGeneration(node) || node.type !== CanvasNodeType.Config || (node.metadata?.status !== NODE_STATUS_LOADING && node.metadata?.status !== NODE_STATUS_IDLE)) return node;
             const children = connections
                 .filter((connection) => connection.fromNodeId === node.id)
                 .map((connection) => nodes.find((child) => child.id === connection.toNodeId))
@@ -253,5 +256,5 @@ export function useCanvasGenerationRecovery({ nodes, connections, projectLoaded,
             return { ...node, metadata: { ...node.metadata, status: nextStatus, errorDetails: failed?.metadata?.errorDetails } };
         });
         if (changed) setNodes(nextNodes);
-    }, [connections, nodes, projectLoaded, setNodes]);
+    }, [connections, nodes, projectLoaded, setNodes, userId]);
 }
