@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Spin, Tag } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, LayoutGrid, ListChecks, Music2, Plus, Rows3, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, LayoutGrid, ListChecks, Music2, Plus, Rows3, Search, Settings2, Square, Trash2, Type, Video, X } from "lucide-react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
-import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
+import { useDownloadCanvasSelection } from "@/hooks/use-download-canvas-selection";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
 import { PromptDetailDialog } from "@/components/prompts/prompt-detail-dialog";
@@ -61,6 +61,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     const panelMounted = useCanvasSidePanelStore((state) => state.panelMounted);
     const panelClosing = useCanvasSidePanelStore((state) => state.panelClosing);
     const setWidth = useCanvasSidePanelStore((state) => state.setWidth);
+    const closePanel = useCanvasSidePanelStore((state) => state.closePanel);
     const [resizing, setResizing] = useState(false);
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -86,8 +87,10 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     if (!panelMounted) return null;
 
     return (
+        <>
+        {panelOpen ? <button type="button" className="fixed inset-0 z-[75] opacity-70 md:hidden" style={{ background: theme.canvas.background }} onClick={closePanel} aria-label="关闭画布侧栏遮罩" /> : null}
         <motion.div
-            className="relative z-[60] flex h-full shrink-0"
+            className="fixed inset-y-0 left-0 z-[80] flex h-full max-w-[calc(100vw-2rem)] shrink-0 md:relative md:inset-auto md:z-[60] md:max-w-none"
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: panelOpen ? width + 1 : 0, opacity: panelOpen ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
@@ -98,13 +101,14 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                 initial={{ x: -48 }}
                 animate={{ x: panelClosing ? -28 : 0 }}
                 transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
-                style={{ width, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                style={{ width, maxWidth: "100%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
                 <div className="flex items-center gap-5 px-4 pt-3.5">
                     <TabButton label={t("canvas.sidePanel.canvas")} active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <TabButton label={t("canvas.sidePanel.assets")} active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <TabButton label={t("canvas.sidePanel.prompts")} active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
+                    <button type="button" onClick={closePanel} className="ml-auto grid size-7 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 md:hidden" aria-label="关闭画布侧栏"><X className="size-4" /></button>
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
                     {tab === "canvas" ? (
@@ -115,9 +119,10 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                         <CanvasPromptsTab onInsert={onInsertAsset} theme={theme} />
                     )}
                 </div>
-                <button type="button" className="absolute inset-y-0 right-0 z-40 w-4 translate-x-1/2 cursor-col-resize" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} />
+                <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize md:block" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} />
             </motion.aside>
         </motion.div>
+        </>
     );
 }
 
@@ -142,7 +147,6 @@ function nodePreviewText(node: CanvasNodeData) {
 }
 
 function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, onHoverNode, theme }: { nodes: CanvasNodeData[]; selectedNodeIds: Set<string>; onFocusNode: (nodeId: string) => void; onPreviewNode: (nodeId: string) => void; onHoverNode: (nodeId: string | null) => void; theme: CanvasTheme }) {
-    const { message } = App.useApp();
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const [keyword, setKeyword] = useState("");
@@ -150,7 +154,7 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, on
     const [selectMode, setSelectMode] = useState(false);
     const [checked, setChecked] = useState<Set<string>>(new Set());
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [exporting, setExporting] = useState(false);
+    const { downloading, downloadSelection } = useDownloadCanvasSelection();
     const nodeViewMode = useCanvasSidePanelStore((state) => state.nodeViewMode);
     const setNodeViewMode = useCanvasSidePanelStore((state) => state.setNodeViewMode);
 
@@ -211,24 +215,6 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, on
         }, PRESS_FOCUS_DELAY);
     };
 
-    const handleExport = async () => {
-        const targets = nodes.filter((node) => checked.has(node.id));
-        if (!targets.length) return;
-        setExporting(true);
-        const hide = message.loading(t("canvas.sidePanel.exporting"), 0);
-        try {
-            await exportCanvasNodes(targets, t("canvas.sidePanel.exportName", { count: targets.length }));
-            message.success(t("canvas.sidePanel.exported", { count: targets.length }));
-            exitSelect();
-        } catch (error) {
-            console.error(error);
-            message.error(t("canvas.sidePanel.exportFailed"));
-        } finally {
-            hide();
-            setExporting(false);
-        }
-    };
-
     return (
         <div className="flex h-full flex-col" onMouseLeave={() => onHoverNode(null)}>
             <div className="flex items-center gap-2 px-3 pb-2.5 pt-1">
@@ -236,7 +222,7 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, on
                 {filtered.length ? <span className="shrink-0 text-xs opacity-35">{filtered.length}</span> : null}
                 <button
                     type="button"
-                    onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+                    onClick={() => { if (selectMode) exitSelect(); else { setChecked(new Set(nodes.filter((node) => selectedNodeIds.has(node.id)).map((node) => node.id))); setSelectMode(true); } }}
                     className="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-xs font-medium opacity-70 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
                     style={selectMode ? { color: theme.toolbar.activeText, opacity: 1 } : undefined}
                 >
@@ -357,13 +343,13 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, on
                     <span className="text-xs opacity-45">{t("canvas.sidePanel.selected", { count: checked.size })}</span>
                     <button
                         type="button"
-                        onClick={() => void handleExport()}
-                        disabled={!checked.size || exporting}
+                        onClick={() => void downloadSelection(nodes, checked)}
+                        disabled={!checked.size || downloading}
                         className="ml-auto flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/10"
                         style={{ color: theme.node.text }}
                     >
                         <Download className="size-3.5" />
-                        {t("canvas.exportSelected")}
+                        {downloading ? "正在打包…" : "下载选中内容"}
                     </button>
                 </div>
             ) : null}

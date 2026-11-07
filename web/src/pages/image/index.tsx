@@ -1,6 +1,6 @@
 import { BookOpen, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Drawer, Empty, Image, Input, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Drawer, Empty, Image, Input, Tag, Tooltip } from "antd";
 import { saveAs } from "file-saver";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -11,6 +11,9 @@ import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { LogPanel } from "@/components/generation/log-panel";
 import { ReferenceOrderButtons } from "@/components/generation/reference-order-buttons";
+import { ReferenceUploadFeedback } from "@/components/generation/reference-upload-feedback";
+import { GenerationFailureCard } from "@/components/generation/generation-failure-card";
+import { workbenchExamples } from "@/constant/creation-scenes";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { fileBaseName, fileExtension, moveListItem, summaryLogBase, type GenerationLog } from "@/lib/generation-log";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
@@ -20,7 +23,7 @@ import { modelOptionName, useConfigStore, type AiConfig } from "@/stores/use-con
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { platformImageParameters } from "@/services/api/image";
 import { ensurePlatformMedia, selectedPlatformModel } from "@/services/api/tasks";
 import { mediaId } from "@/services/api/media";
@@ -32,10 +35,11 @@ import { useGenerationQuote } from "@/hooks/use-generation-quote";
 import { useConfirmInputReplace } from "@/hooks/use-confirm-input-replace";
 import { useAddToCanvas } from "@/hooks/use-add-to-canvas";
 import { useWorkbenchInput, type WorkbenchInput } from "@/hooks/use-workbench-input";
+import { useWorkbenchReferenceUploads } from "@/hooks/use-workbench-reference-uploads";
+import { useWorkbenchView } from "@/hooks/use-workbench-view";
 import { getWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import { useCreationDraftStore } from "@/stores/use-creation-draft-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
-import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
 import { IMAGE_WORKBENCH_MAX_COUNT, readImageDraftSettings } from "./creation-draft";
 
@@ -72,6 +76,8 @@ export default function ImagePage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const targetBatchId = searchParams.get("batch") || "";
     const reuseBatch = searchParams.get("reuse") === "1";
+    const workbenchView = useWorkbenchView(targetBatchId && !reuseBatch ? "results" : "create");
+    const viewBatchRef = useRef(targetBatchId);
     const handledReuse = useRef("");
     const targetBatchRef = useRef(targetBatchId);
     targetBatchRef.current = targetBatchId;
@@ -109,7 +115,8 @@ export default function ImagePage() {
     const [modelId, setModelId] = useState(savedInput?.model || remixState?.modelId || "");
     const [ambiguousDraftModel, setAmbiguousDraftModel] = useState(false);
     const [prompt, setPrompt] = useState(savedInput?.prompt || remixState?.prompt || "");
-    const [references, setReferences] = useState<ReferenceImage[]>(savedInput?.references || []);
+    const referenceUploads = useWorkbenchReferenceUploads({ initialReferences: savedInput?.references || [], sessionVersion, captureInputScope, supportsType: (type) => SUPPORTED_IMAGE_TYPES.has(type), unsupportedMessage: "仅支持 PNG、JPEG、WebP 图片，请转换格式后重新上传" });
+    const { references, setReferences, addFiles: addReferences, addClipboard: addReferencesFromClipboard } = referenceUploads;
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -155,8 +162,10 @@ export default function ImagePage() {
     let parameterError = "";
     try { parameters = platformImageParameters(effectiveConfig); }
     catch (error) { parameterError = error instanceof Error ? error.message : "图片参数不可用"; }
-    const quote = useGenerationQuote({ modelId: quoteModelId, count: generationCount, content: prompt, parameters, attachmentMediaIds: references.flatMap((item) => item.storageKey ? [mediaId(item.storageKey)] : []) }, initialized && !parameterError);
-    const canGenerate = Boolean(prompt.trim() && model && !generating && quote.ready);
+    const referencesReady = !referenceUploads.hasPending() && !referenceUploads.hasFailures();
+    const quote = useGenerationQuote({ modelId: quoteModelId, count: generationCount, content: prompt, parameters, attachmentMediaIds: references.flatMap((item) => item.storageKey ? [mediaId(item.storageKey)] : []) }, initialized && !parameterError && referencesReady);
+    const disabledReason = generating ? "正在提交本次生成，请稍候" : referenceUploads.hasPending() ? "参考素材正在准备或上传，请完成后再生成" : referenceUploads.hasFailures() ? "请重试或移除失败的参考素材后再生成" : !prompt.trim() ? "请先填写提示词" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : parameterError || quote.error?.message || (!quote.ready ? "正在获取本次费用，请稍候" : "");
+    const canGenerate = !disabledReason;
     const failedResultIndexes = results.flatMap((item, index) => (item.status === "failed" ? [index] : []));
     const successImages = results.flatMap((item) => (item.status === "success" && item.image ? [item.image] : []));
 
@@ -165,6 +174,7 @@ export default function ImagePage() {
     const loadBatchRef = useRef<(id: string, restoreInput: boolean) => Promise<void>>(async () => undefined);
     loadBatchRef.current = async (id, restoreInput) => {
         const request = ++batchRequestRef.current;
+        referenceUploads.clearUploads();
         const version = useUserStore.getState().sessionVersion;
         try {
             const detail = await getGenerationBatch(id);
@@ -178,6 +188,8 @@ export default function ImagePage() {
             confirmReplace(inputDraft.dirty, () => {
                 if (!mountedRef.current || request !== batchRequestRef.current || useUserStore.getState().sessionVersion !== version) return;
                 ++batchRequestRef.current;
+                referenceUploads.clearUploads();
+                workbenchView.selectView("create");
                 setPrompt(applied.log.prompt);
                 setReferences(applied.log.references);
                 setModelId(detail.batch.modelId);
@@ -202,7 +214,9 @@ export default function ImagePage() {
             dismissedBatchRef.current = previousBatch || null;
             targetBatchRef.current = "";
             ++batchRequestRef.current;
+            referenceUploads.clearUploads();
             initialBatchRef.current = null;
+            workbenchView.selectView("create");
             setPrompt(draft.prompt);
             setReferences(draft.references || []);
             setResults([]);
@@ -230,14 +244,18 @@ export default function ImagePage() {
         dismissedBatchRef.current = null;
         if (!reuseBatch) handledReuse.current = "";
         const id = targetBatchId || initialBatchRef.current;
+        if (targetBatchId !== viewBatchRef.current) {
+            viewBatchRef.current = targetBatchId;
+            if (targetBatchId) workbenchView.selectView(reuseBatch ? "create" : "results");
+        }
         if (id) {
             const shouldReuse = reuseBatch && handledReuse.current !== id;
             void loadBatchRef.current(id, shouldReuse);
         }
-        return () => { ++batchRequestRef.current; };
+        return () => { ++batchRequestRef.current; referenceUploads.clearUploads(); };
     }, [initialized, targetBatchId, sessionVersion, pendingDraft, reuseBatch]);
 
-    const captureInputScope = () => {
+    function captureInputScope() {
         const version = useUserStore.getState().sessionVersion;
         const request = batchRequestRef.current;
         const target = targetBatchRef.current;
@@ -245,70 +263,23 @@ export default function ImagePage() {
             assertCurrentSession(version);
             if (!mountedRef.current || request !== batchRequestRef.current || target !== targetBatchRef.current) throw new DOMException("当前创作输入已改变", "AbortError");
         };
-    };
-
-    const addReferences = async (files?: FileList | null) => {
-        const sessionVersion = useUserStore.getState().sessionVersion;
-        const assertInput = captureInputScope();
-        try {
-            const imageFiles = Array.from(files || []).filter((file) => SUPPORTED_IMAGE_TYPES.has(file.type));
-            const nextReferences = await Promise.all(
-                imageFiles.map(async (file) => {
-                    assertInput();
-                    const media = await uploadGenerationMedia(file, file.name);
-                    assertInput();
-                    void ensureImagePreview(media.id);
-                    return { id: nanoid(), name: file.name, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
-                }),
-            );
-            assertInput();
-            setReferences((value) => [...value, ...nextReferences]);
-        } catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") return;
-            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
-            message.error(error instanceof Error ? error.message : "参考图上传失败");
-        }
-    };
-
-    const addReferencesFromClipboard = async () => {
-        const sessionVersion = useUserStore.getState().sessionVersion;
-        const assertInput = captureInputScope();
-        try {
-            assertInput();
-            const items = await navigator.clipboard.read();
-            assertInput();
-            const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => SUPPORTED_IMAGE_TYPES.has(type)).map((type) => item.getType(type))));
-            assertInput();
-            if (!blobs.length) {
-                message.error(t("imageWorkbench.clipboardEmpty"));
-                return;
-            }
-            const nextReferences = await Promise.all(
-                blobs.map(async (blob, index) => {
-                    assertInput();
-                    const media = await uploadGenerationMedia(blob, `clipboard-${index + 1}.png`);
-                    assertInput();
-                    void ensureImagePreview(media.id);
-                    return { id: nanoid(), name: media.originalName, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
-                }),
-            );
-            assertInput();
-            setReferences((value) => [...value, ...nextReferences]);
-            message.success(t("imageWorkbench.clipboardAdded", { count: nextReferences.length }));
-        } catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") return;
-            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
-            message.error(error instanceof Error ? error.message : t("imageWorkbench.clipboardEmpty"));
-        }
-    };
+    }
 
     const generate = async () => {
         if (generatingRef.current) return;
+        if (referenceUploads.hasPending() || referenceUploads.hasFailures()) {
+            message.warning("请等待参考素材上传完成，并重试或移除失败项后再生成");
+            const taskId = agentTaskIdRef.current;
+            if (taskId) updateAgentTask(taskId, { status: "failed", error: "参考素材尚未准备完成" });
+            agentTaskIdRef.current = undefined;
+            return;
+        }
         generatingRef.current = true;
         setGenerating(true);
         const sessionVersion = useUserStore.getState().sessionVersion;
         const sourceBatchId = targetBatchRef.current;
         const viewRequest = ++batchRequestRef.current;
+        const showSubmittedResults = workbenchView.captureResultView();
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const submittedFingerprint = inputDraft.fingerprint;
@@ -341,6 +312,8 @@ export default function ImagePage() {
             if (mountedRef.current && viewRequest === batchRequestRef.current && targetBatchRef.current === sourceBatchId) {
                 setPreviewLog(applied.log);
                 setResults(applied.results);
+                showSubmittedResults();
+                viewBatchRef.current = created.batch.id;
                 setSearchParams((current) => { current.set("batch", created.batch.id); current.delete("reuse"); return current; }, { replace: true });
             }
             if (agentTaskId) {
@@ -403,7 +376,7 @@ export default function ImagePage() {
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
         if (image.storageKey) void ensureImagePreview(image.storageKey);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: image.mimeType || "image/png", dataUrl: image.dataUrl, storageKey: image.storageKey }]);
+        referenceUploads.addReference({ id: nanoid(), name: `生成图片-${index + 1}.png`, type: image.mimeType || "image/png", dataUrl: image.dataUrl, storageKey: image.storageKey });
         message.success(t("imageWorkbench.addedReference"));
     };
 
@@ -435,17 +408,13 @@ export default function ImagePage() {
         try {
             assertInput();
             if (payload.kind === "text") {
-                confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; setPrompt(payload.content); });
+                confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; referenceUploads.clearUploads(); setPrompt(payload.content); });
             } else if (payload.kind === "image") {
                 const existingId = payload.storageKey ? mediaId(payload.storageKey) : "";
                 if (existingId) {
-                    setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: "image", dataUrl: `/api/media/${existingId}`, storageKey: existingId }]);
+                    referenceUploads.addReference({ id: nanoid(), name: payload.title, type: "image", dataUrl: `/api/media/${existingId}`, storageKey: existingId });
                 } else {
-                    const blob = await (await fetch(payload.dataUrl)).blob();
-                    assertInput();
-                    const media = await uploadGenerationMedia(blob, `${payload.title}.png`);
-                    assertInput();
-                    setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: media.mimeType, dataUrl: media.url, storageKey: media.id }]);
+                    referenceUploads.addSources([{ name: payload.title, type: "image/png", prepare: async () => (await fetch(payload.dataUrl)).blob() }], assertInput);
                 }
             } else {
                 message.warning(t("imageWorkbench.unsupportedAsset"));
@@ -462,6 +431,7 @@ export default function ImagePage() {
         dismissedBatchRef.current = previousBatch || null;
         targetBatchRef.current = "";
         ++batchRequestRef.current;
+        referenceUploads.clearUploads();
         initialBatchRef.current = null;
         if (previousBatch) setSearchParams((current) => { current.delete("batch"); current.delete("reuse"); return current; }, { replace: true });
         setResults([]);
@@ -471,6 +441,8 @@ export default function ImagePage() {
 
     const createSession = () => confirmReplace(inputDraft.dirty, () => {
         clearViewedBatch();
+        workbenchView.selectView("create");
+        setLogsOpen(false);
         setPrompt("");
         setReferences([]);
     });
@@ -501,6 +473,7 @@ export default function ImagePage() {
     const previewGenerationLog = (log: GenerationLog) => {
         dismissedBatchRef.current = null;
         setLogsOpen(false);
+        workbenchView.selectView("results");
         if (targetBatchId === log.id) void loadBatchRef.current(log.id, false);
         else setSearchParams((current) => { current.set("batch", log.id); current.delete("reuse"); handledReuse.current = ""; return current; });
     };
@@ -519,6 +492,7 @@ export default function ImagePage() {
 
 
     const updateGenerationConfig: UpdateAiConfig = (key, value) => {
+        workbenchView.markInteraction();
         updateConfig(key, value);
         if (key === "imageModel" && typeof value === "string") {
             setModelId(value);
@@ -531,9 +505,14 @@ export default function ImagePage() {
     };
 
     return (
-        <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
-            <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
-                <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
+        <div className="@container/workbench flex h-full min-w-0 flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
+            <nav className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2 @min-[1024px]/workbench:hidden" aria-label="工作台视图">
+                <Button type={workbenchView.view === "create" ? "primary" : "text"} aria-pressed={workbenchView.view === "create"} onClick={() => workbenchView.selectView("create")}>创作</Button>
+                <Button type={workbenchView.view === "results" ? "primary" : "text"} aria-pressed={workbenchView.view === "results"} onClick={() => workbenchView.selectView("results")}>结果</Button>
+                <Button type="text" className="!ml-auto" icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>{t("workbench.logs")}</Button>
+            </nav>
+            <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden p-3 @min-[1024px]/workbench:grid-cols-[300px_minmax(0,1fr)] @min-[1280px]/workbench:grid-cols-[320px_minmax(0,1fr)]">
+                <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 @min-[1024px]/workbench:block">
                     <LogPanel
                         logs={logs}
                         variant="image"
@@ -546,114 +525,109 @@ export default function ImagePage() {
                     />
                 </aside>
 
-                <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
-                    <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
-                        <div>
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                    <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
+                <section className="grid min-h-0 min-w-0 gap-3 overflow-hidden @min-[1024px]/workbench:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] @min-[1280px]/workbench:grid-cols-[420px_minmax(0,1fr)]">
+                    <div className={`min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800 ${workbenchView.view === "create" ? "flex" : "hidden"} @min-[1024px]/workbench:flex`} aria-label="创作输入">
+                        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4" onPointerDownCapture={workbenchView.markInteraction} onChangeCapture={workbenchView.markInteraction} onKeyDownCapture={workbenchView.markInteraction}>
+                            <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
+
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">输入在当前会话跨页面保留，刷新页面后清空。</p>
+                            <div className="mt-6 space-y-5">
+                                <div>
+                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                        <span className="text-base font-semibold">{t("workbench.prompt")}</span>
+                                        <div className="flex gap-2">
+                                            <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
+                                                {t("workbench.viewPrompts")}
+                                            </Button>
+                                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
+                                                {t("workbench.viewAssets")}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                    <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder={t("imageWorkbench.promptPlaceholder")} />
                                 </div>
-                                <div className="flex shrink-0 gap-2 lg:hidden">
-                                    <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                        {t("workbench.logs")}
+
+                                <div className="min-w-0">
+                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                        <span className="text-base font-semibold">{t("imageWorkbench.references")}</span>
+                                        <div className="flex gap-2">
+                                            <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                                {t("workbench.clipboard")}
+                                            </Button>
+                                            <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                                {t("workbench.upload")}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                    <div
+                                        className={`hover-scrollbar hover-scrollbar-hint relative flex min-h-24 w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden rounded-lg border border-dashed p-2 pb-3 overscroll-x-contain transition-colors ${isReferenceDragActive ? "border-stone-900 bg-stone-100/80 dark:border-stone-100 dark:bg-stone-900/80" : "border-stone-300 dark:border-stone-700"}`}
+                                        onDragEnter={(event) => {
+                                            event.preventDefault();
+                                            dragDepthRef.current += 1;
+                                            if (event.dataTransfer.types.includes("Files")) setIsReferenceDragActive(true);
+                                        }}
+                                        onDragOver={(event) => {
+                                            event.preventDefault();
+                                            event.dataTransfer.dropEffect = "copy";
+                                        }}
+                                        onDragLeave={(event) => {
+                                            event.preventDefault();
+                                            dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+                                            if (!dragDepthRef.current) setIsReferenceDragActive(false);
+                                        }}
+                                        onDrop={(event) => {
+                                            event.preventDefault();
+                                            dragDepthRef.current = 0;
+                                            setIsReferenceDragActive(false);
+                                            void addReferences(event.dataTransfer.files);
+                                        }}
+                                        onWheel={(event) => {
+                                            if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) return;
+                                            event.preventDefault();
+                                            event.currentTarget.scrollLeft += event.deltaY;
+                                        }}
+                                    >
+                                        {references.map((item, index) => (
+                                            <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
+                                                <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                                <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
+                                                <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
+                                                <button
+                                                    type="button"
+                                                    className="absolute right-1 top-1 flex size-6 items-center justify-center rounded bg-black/60 text-white [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
+                                                    onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
+                                                    aria-label={t("imageWorkbench.removeReference")}
+                                                >
+                                                    <Trash2 className="size-3.5" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{isReferenceDragActive ? t("imageWorkbench.dropReferences") : t("imageWorkbench.noReferences")}</div> : null}
+                                    </div>
+                                </div>
+
+                                <ReferenceUploadFeedback uploads={referenceUploads.uploads} onRetry={referenceUploads.retry} onRemove={referenceUploads.remove} />
+
+                                <div className="space-y-3">
+                                    <label className="block min-w-0"><span className="mb-2 block text-sm font-medium">{t("workbench.model")}</span><ModelPicker config={effectiveConfig} value={model} onChange={(value) => updateGenerationConfig("imageModel", value)} capability="image" fullWidth unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} onMissingConfig={() => message.warning(t("imageWorkbench.noModelHint"))} /></label>
+                                    <Button type="text" className="!h-auto !max-w-full !justify-start !px-0 !py-1.5" icon={<SlidersHorizontal className="size-4" />} title={`参数 · ${imageQualityLabel(effectiveConfig.quality)}`} onClick={() => setSettingsOpen(true)}>
+                                        <span className="truncate text-sm">{imageSizeLabel(effectiveConfig.size)} · {t("canvas.controls.images", { count: generationCount })}</span>
                                     </Button>
                                 </div>
                             </div>
                         </div>
-
-                        <div className="mt-6 space-y-5">
-                            <div>
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">{t("workbench.prompt")}</span>
-                                    <div className="flex gap-2">
-                                        <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
-                                            {t("workbench.viewPrompts")}
-                                        </Button>
-                                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
-                                            {t("workbench.viewAssets")}
-                                        </Button>
-                                    </div>
-                                </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder={t("imageWorkbench.promptPlaceholder")} />
-                            </div>
-
-                            <div className="min-w-0">
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">{t("imageWorkbench.references")}</span>
-                                    <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
-                                            {t("workbench.clipboard")}
-                                        </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                            {t("workbench.upload")}
-                                        </Button>
-                                    </div>
-                                </div>
-                                <div
-                                    className={`hover-scrollbar hover-scrollbar-hint relative flex min-h-24 w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden rounded-lg border border-dashed p-2 pb-3 overscroll-x-contain transition-colors ${isReferenceDragActive ? "border-stone-900 bg-stone-100/80 dark:border-stone-100 dark:bg-stone-900/80" : "border-stone-300 dark:border-stone-700"}`}
-                                    onDragEnter={(event) => {
-                                        event.preventDefault();
-                                        dragDepthRef.current += 1;
-                                        if (event.dataTransfer.types.includes("Files")) setIsReferenceDragActive(true);
-                                    }}
-                                    onDragOver={(event) => {
-                                        event.preventDefault();
-                                        event.dataTransfer.dropEffect = "copy";
-                                    }}
-                                    onDragLeave={(event) => {
-                                        event.preventDefault();
-                                        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-                                        if (!dragDepthRef.current) setIsReferenceDragActive(false);
-                                    }}
-                                    onDrop={(event) => {
-                                        event.preventDefault();
-                                        dragDepthRef.current = 0;
-                                        setIsReferenceDragActive(false);
-                                        void addReferences(event.dataTransfer.files);
-                                    }}
-                                    onWheel={(event) => {
-                                        if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) return;
-                                        event.preventDefault();
-                                        event.currentTarget.scrollLeft += event.deltaY;
-                                    }}
-                                >
-                                    {references.map((item, index) => (
-                                        <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
-                                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
-                                            <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
-                                            <button
-                                                type="button"
-                                                className="absolute right-1 top-1 flex size-6 items-center justify-center rounded bg-black/60 text-white [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
-                                                onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
-                                                aria-label={t("imageWorkbench.removeReference")}
-                                            >
-                                                <Trash2 className="size-3.5" />
-                                            </button>
-                                        </div>
-                                    ))}
-                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{isReferenceDragActive ? t("imageWorkbench.dropReferences") : t("imageWorkbench.noReferences")}</div> : null}
-                                </div>
-                            </div>
-
-                            <div className="space-y-3">
-                                <label className="block min-w-0"><span className="mb-2 block text-sm font-medium">{t("workbench.model")}</span><ModelPicker config={effectiveConfig} value={model} onChange={(value) => updateGenerationConfig("imageModel", value)} capability="image" fullWidth unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} onMissingConfig={() => message.warning(t("imageWorkbench.noModelHint"))} /></label>
-                                <Button type="text" className="!h-auto !max-w-full !justify-start !px-0 !py-1.5" icon={<SlidersHorizontal className="size-4" />} title={`参数 · ${imageQualityLabel(effectiveConfig.quality)}`} onClick={() => setSettingsOpen(true)}>
-                                    <span className="truncate text-sm">{imageSizeLabel(effectiveConfig.size)} · {t("canvas.controls.images", { count: generationCount })}</span>
-                                </Button>
-                            </div>
-                        </div>
-
-                        <div className="mt-auto pt-6">
+                        <div className="shrink-0 border-t border-border bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                             <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0 text-xs leading-5 text-muted-foreground" aria-live="polite">{quote.quote ? <>预计冻结 <span className="font-semibold tabular-nums text-foreground">¥{quote.quote.estimatedHold}</span></> : quote.isFetching ? "正在获取本次费用…" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : "输入提示词后查看费用"}</div>
-                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} title={!prompt.trim() ? "请先填写提示词" : !quoteModelId ? "请选择可用模型" : !quote.ready ? "等待费用报价或处理提示的问题" : "开始生成"} onClick={() => void generate()}>{t("workbench.generate")}</Button>
+                                <div className="min-w-0 text-xs leading-5 text-muted-foreground" aria-live="polite">{!referencesReady ? "素材就绪后计算费用" : quote.quote ? <>预计冻结 <span className="font-semibold tabular-nums text-foreground">¥{quote.quote.estimatedHold}</span></> : quote.isFetching ? "正在获取本次费用…" : quote.error ? "本次费用获取失败" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : "输入提示词后查看费用"}</div>
+                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} title={disabledReason || "开始生成"} onClick={() => void generate()}>{t("workbench.generate")}</Button>
                             </div>
-                            {parameterError || quote.error ? <p className="mt-2 text-xs leading-5 text-destructive" role="alert">{parameterError || quote.error?.message}</p> : null}
+                            {disabledReason ? <p className="mt-2 text-xs leading-5 text-muted-foreground" role="status">{disabledReason}</p> : null}
+                            {referencesReady && quote.error ? <Button type="text" size="small" className="!px-0" loading={quote.isFetching} onClick={() => void quote.refetch()}>重试报价</Button> : null}
+                            {referencesReady && quote.quote ? <p className="mt-1 text-xs leading-5 text-muted-foreground">冻结金额不是最终扣费，最终结算以账户账单为准。</p> : null}
                         </div>
                     </div>
 
-                    <div className="thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5">
+                    <div className={`thin-scrollbar min-h-0 min-w-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 ${workbenchView.view === "results" ? "block" : "hidden"} @min-[1024px]/workbench:block @min-[1024px]/workbench:p-5`} aria-label="生成结果">
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
@@ -673,22 +647,27 @@ export default function ImagePage() {
                                 {activeBatchIds.length ? <Tag className="m-0 px-2 py-1">{t("imageWorkbench.batchInProgress", { count: activeBatchIds.length })}</Tag> : null}
                             </div>
                         </div>
+                        <Button type="text" className="!mb-3 !px-0 @min-[1024px]/workbench:!hidden" onClick={() => workbenchView.selectView("create")}>继续调整</Button>
                         {results.length ? (
-                            <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+                            <div className="grid gap-4 sm:grid-cols-2 @min-[1536px]/workbench:grid-cols-3">
                                 {results.map((result, index) =>
                                     result.status === "success" && result.image ? (
                                         <ResultImageCard key={result.id} image={result.image} index={index} onEdit={addResultToReferences} onDownload={downloadImage} onSaveAsset={saveResultToAssets} />
                                     ) : result.status === "reviewing" || result.status === "queued" || result.status === "running" ? (
                                         <PendingImageCard key={result.id} status={result.status} />
                                     ) : (
-                                        <FailedImageCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => void retryResults([index])} />
+                                        <GenerationFailureCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => void retryResults([index])} />
                                     ),
                                 )}
                             </div>
                         ) : (
-                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
+                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 @min-[1024px]/workbench:min-h-[560px]">
                                 <ImagePlus className="mb-4 size-11 text-stone-400" />
                                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("imageWorkbench.empty")} />
+                                <p className="mb-3 text-xs text-muted-foreground">选一个示例开始，仅填入内容，不会自动生成</p>
+                                <div className="flex flex-wrap justify-center gap-2 px-4">
+                                    {workbenchExamples.filter((item) => item.example.capability === "image").map((item) => <Button key={item.id} size="small" onClick={() => useCreationDraftStore.getState().setDraft(item.example)}>{item.title}</Button>)}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -722,7 +701,7 @@ export default function ImagePage() {
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} />
                 </div>
             </Drawer>
-            <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={(value) => confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; setPrompt(value); })} />
+            <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={(value) => confirmReplace(inputDraft.dirty, () => { ++batchRequestRef.current; referenceUploads.clearUploads(); setPrompt(value); })} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
         </div>
     );
@@ -811,24 +790,6 @@ function PendingImageCard({ status }: { status: "reviewing" | "queued" | "runnin
     );
 }
 
-function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => void }) {
-    const { t } = useTranslation();
-    return (
-        <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
-            <div className="flex aspect-square flex-col items-center justify-center gap-3 p-5 text-center">
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">{t("workbench.failed")}</div>
-                <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
-                    {error}
-                </Typography.Paragraph>
-            </div>
-            <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
-                <Button size="small" danger onClick={onRetry}>
-                    {t("workbench.retry")}
-                </Button>
-            </div>
-        </div>
-    );
-}
 
 function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): GenerationLog {
     const parameters = batch.parameters || {};

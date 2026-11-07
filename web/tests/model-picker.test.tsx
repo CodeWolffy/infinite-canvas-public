@@ -3,12 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 vi.mock("@/services/api/models", () => ({ listModels: async () => [] }));
+const account = vi.hoisted(() => ({ role: "user" }));
 vi.mock("@/stores/use-user-store", () => ({
-    useUserStore: {
+    useUserStore: Object.assign((select: (value: { user: { role: string } }) => unknown) => select({ user: account }), {
         getState: () => ({ sessionVersion: 1, user: { id: "user-1" } }),
         subscribe: () => () => undefined,
         persist: undefined,
-    },
+    }),
 }));
 
 const { ModelPicker } = await import("@/components/model-picker");
@@ -62,7 +63,7 @@ test("选择候选项会回调编码后的模型值", async () => {
     expect(changed).toEqual(["platform::txt-1"]);
 });
 
-test("没有可用模型时点击会提示配置渠道", async () => {
+test("普通用户没有可用模型时提示联系管理员", async () => {
     const empty = { ...defaultConfig, platformModels: [], models: [] };
     useConfigStore.setState({ config: empty });
     let missing = 0;
@@ -70,6 +71,7 @@ test("没有可用模型时点击会提示配置渠道", async () => {
     render(<ModelPicker config={empty} value="" onChange={() => undefined} onMissingConfig={() => (missing += 1)} />);
     await user.click(screen.getAllByRole("combobox")[0]);
     expect(missing).toBe(1);
+    expect(screen.getByText("暂无可用模型，请联系管理员开放模型")).toBeInTheDocument();
 });
 
 test("原始 UUID 可以显示名称并选中对应的编码候选", async () => {
@@ -87,11 +89,14 @@ test("模型候选显示服务端简介和单价，并按展示名及原始模�
     const user = userEvent.setup();
     render(<ModelPicker config={platformConfig()} value="img-1" onChange={() => undefined} />);
     await user.click(screen.getByRole("combobox"));
-    expect(await screen.findByText("擅长文字排版和多参考图编辑")).toBeInTheDocument();
-    expect(screen.getByText("¥0.1 / 张")).toBeInTheDocument();
+    expect(await screen.findByText("适用说明：擅长文字排版和多参考图编辑")).toBeInTheDocument();
+    expect(screen.getByText("单价 ¥0.1 / 张")).toBeInTheDocument();
     await user.type(screen.getByRole("combobox"), "GPT-IMAGE");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining("图像模型")]);
     await user.clear(screen.getByRole("combobox"));
     await user.type(screen.getByRole("combobox"), "文本");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining("文本模型")]);
+    await user.clear(screen.getByRole("combobox"));
+    await user.type(screen.getByRole("combobox"), "排版");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining("图像模型")]);
 });

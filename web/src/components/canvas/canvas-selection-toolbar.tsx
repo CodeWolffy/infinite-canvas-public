@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
-import { AlignCenter, AlignLeft, AlignRight, AlignStartVertical, AlignVerticalJustifyCenter, AlignEndVertical, ArrowLeftRight, ArrowUpDown, Grid2X2, Group, Ungroup } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, AlignStartVertical, AlignVerticalJustifyCenter, AlignEndVertical, ArrowLeftRight, ArrowUpDown, Download, Grid2X2, Group, LoaderCircle, Ungroup } from "lucide-react";
 import { Dropdown, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { nodeBounds } from "@/lib/canvas/canvas-node-geometry";
 import { useThemeStore } from "@/stores/use-theme-store";
-import type { CanvasNodeData, ViewportTransform } from "@/types/canvas";
+import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/types/canvas";
+import { useDownloadCanvasSelection } from "@/hooks/use-download-canvas-selection";
 
 import type { ArrangeAction } from "@/lib/canvas/canvas-arrange";
 
@@ -14,7 +15,9 @@ const SELECTION_PAD = 14;
 
 export function CanvasSelectionToolbar({
     nodes,
+    allNodes,
     viewport,
+    readOnly = false,
     showToolbar,
     canGroup,
     canUngroup,
@@ -24,7 +27,9 @@ export function CanvasSelectionToolbar({
     arrangeDisabled,
 }: {
     nodes: CanvasNodeData[];
+    allNodes: CanvasNodeData[];
     viewport: ViewportTransform;
+    readOnly?: boolean;
     showToolbar: boolean;
     canGroup: boolean;
     canUngroup: boolean;
@@ -35,14 +40,15 @@ export function CanvasSelectionToolbar({
 }) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    if (nodes.length < 2) return null;
+    const { downloading, downloadSelection } = useDownloadCanvasSelection();
+    if (nodes.length < 2 && !nodes.some((node) => node.type === CanvasNodeType.Group)) return null;
 
     const bounds = nodeBounds(nodes);
     const left = viewport.x + bounds.left * viewport.k - SELECTION_PAD;
     const top = viewport.y + bounds.top * viewport.k - SELECTION_PAD;
     const width = (bounds.right - bounds.left) * viewport.k + SELECTION_PAD * 2;
     const height = (bounds.bottom - bounds.top) * viewport.k + SELECTION_PAD * 2;
-    const showActions = showToolbar && (canGroup || canUngroup || nodes.length >= 2);
+    const showActions = showToolbar;
 
     return (
         <>
@@ -69,13 +75,14 @@ export function CanvasSelectionToolbar({
                     onMouseDown={(event) => event.stopPropagation()}
                     onPointerDown={(event) => event.stopPropagation()}
                 >
-                    {canGroup ? <SelectionAction title={t("canvas.nodeToolbar.groupTitle")} label={t("canvas.nodeToolbar.group")} icon={<Group className="size-4" />} onClick={onGroup} /> : null}
-                    {canUngroup ? <SelectionAction title={t("canvas.nodeToolbar.ungroupTitle")} label={t("canvas.nodeToolbar.ungroup")} icon={<Ungroup className="size-4" />} onClick={onUngroup} /> : null}
-                    <Dropdown trigger={["click"]} placement="top" menu={{ items: arrangeItems(arrangeDisabled), onClick: ({ key }) => onArrange(key as ArrangeAction) }}>
+                    {!readOnly && canGroup ? <SelectionAction title={t("canvas.nodeToolbar.groupTitle")} label={t("canvas.nodeToolbar.group")} icon={<Group className="size-4" />} onClick={onGroup} /> : null}
+                    {!readOnly && canUngroup ? <SelectionAction title={t("canvas.nodeToolbar.ungroupTitle")} label={t("canvas.nodeToolbar.ungroup")} icon={<Ungroup className="size-4" />} onClick={onUngroup} /> : null}
+                    {!readOnly ? <Dropdown trigger={["click"]} placement="top" menu={{ items: arrangeItems(arrangeDisabled), onClick: ({ key }) => onArrange(key as ArrangeAction) }}>
                         <button type="button" className="group relative flex h-12 items-center whitespace-nowrap px-1.5" aria-label="整理选区" title="整理选区">
                             <span className="flex h-9 items-center gap-2 rounded-lg px-2.5 transition group-hover:bg-black/5 dark:group-hover:bg-white/10"><Grid2X2 className="size-4" /><span>整理</span></span>
                         </button>
-                    </Dropdown>
+                    </Dropdown> : null}
+                    <SelectionAction title="下载选中内容" label={downloading ? "正在打包…" : "下载选中内容"} icon={downloading ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />} disabled={downloading} onClick={() => void downloadSelection(allNodes, nodes.map((node) => node.id))} />
                 </div>
             ) : null}
         </>
@@ -100,10 +107,10 @@ function arrangeItems(disabled: { distributeHorizontal: boolean; distributeVerti
     ];
 }
 
-function SelectionAction({ title, label, icon, onClick }: { title: string; label: string; icon: ReactNode; onClick: () => void }) {
+function SelectionAction({ title, label, icon, onClick, disabled }: { title: string; label: string; icon: ReactNode; onClick: () => void; disabled?: boolean }) {
     return (
         <Tooltip title={title} placement="top" mouseEnterDelay={0.2}>
-            <button type="button" className="group relative flex h-12 items-center whitespace-nowrap px-1.5" onClick={onClick} aria-label={title}>
+            <button type="button" className="group relative flex h-12 items-center whitespace-nowrap px-1.5 disabled:cursor-wait disabled:opacity-50" onClick={onClick} disabled={disabled} aria-label={title}>
                 <span className="flex h-9 items-center gap-2 rounded-lg px-2.5 transition group-hover:bg-black/5 dark:group-hover:bg-white/10">
                     {icon}
                     <span>{label}</span>

@@ -1,6 +1,10 @@
 import ts from "typescript";
-import { expect, test } from "vitest";
+import * as React from "react";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 import { findNode, loadModule, readSource, sourceFile } from "./support/source-loader";
+
+afterEach(cleanup);
 
 const globals = { DOMException, Blob, Headers, Event, File, FormData };
 function load(source: string, context: Record<string, any> = {}, imports: Record<string, any> = {}) {
@@ -58,9 +62,11 @@ test("text attachment preparation cannot submit a request in a replacement sessi
     const auth = session();
     let finish!: (value: any) => void; let requests = 0;
     const source = sourceFile("services/api/image.ts");
-    const declaration = source.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "requestImageQuestion")!;
-    const { requestImageQuestion } = load(declaration.getText(source), {
-        ...auth, textMessageContent: () => "question",
+    const declarations = source.statements.filter((part) => ts.isFunctionDeclaration(part) && ["requestImageQuestion", "platformTextInput", "textMessageContent"].includes(part.name?.text || ""));
+    const { requestImageQuestion } = load(declarations.map((part) => part.getText(source)).join("\n"), {
+        ...auth,
+        findChannelModel: () => undefined,
+        resolveReasoningEffort: load(readSource("lib/model-reasoning.ts"), {}, { "@/i18n": { default: { t: (key: string) => key } } }).resolveReasoningEffort,
         ensureReferenceMedia: () => new Promise((resolve) => { finish = resolve; }),
         resolvePlatformModelId: async () => "model",
         crypto: { randomUUID: () => "new-account-request" },
@@ -153,20 +159,28 @@ for (const cancelAfterSubmission of [false, true]) {
 test("clipboard preparation cannot upload into a replacement account", async () => {
     const auth = session();
     let finish!: (value: any) => void; let uploads = 0;
-    const { run } = load(callback("pages/image/index.tsx", "addReferencesFromClipboard"), {
-        ...auth,
-        captureInputScope: () => { const version = auth.state.sessionVersion; return () => auth.assertCurrentSession(version); },
+    const { useWorkbenchReferenceUploads } = load(readSource("hooks/use-workbench-reference-uploads.ts"), {
         navigator: { clipboard: { read: async () => [{ types: ["image/png"], getType: () => new Promise((resolve) => { finish = resolve; }) }] } },
-        SUPPORTED_IMAGE_TYPES: new Set(["image/png"]),
-        uploadGenerationMedia: async () => { uploads++; return { originalName: "clipboard", mimeType: "image/png", url: "/image", id: "media" }; },
-        nanoid: () => "image", setReferences() {}, message: { error() {}, success() {} }, t: (key: string) => key,
+    }, {
+        react: React,
+        nanoid: { nanoid: () => "image" },
+        "@/services/api/generation": { uploadGenerationMedia: async () => { uploads++; return { originalName: "clipboard", mimeType: "image/png", url: "/image", id: "media" }; } },
+        "@/services/image-storage": { ensureImagePreview: async () => undefined },
     });
-    const pending = run();
-    await new Promise(setImmediate);
+    const { result } = renderHook(() => useWorkbenchReferenceUploads({
+        initialReferences: [],
+        sessionVersion: auth.state.sessionVersion,
+        captureInputScope: () => { const version = auth.state.sessionVersion; return () => auth.assertCurrentSession(version); },
+        supportsType: (type: string) => type === "image/png",
+        unsupportedMessage: "仅支持 PNG 图片",
+    }));
+    await act(async () => { await result.current.addClipboard(); });
+    expect(finish).toBeTypeOf("function");
+    expect(result.current.uploads[0].status).toBe("preparing");
     auth.state.sessionVersion++;
-    finish(new Blob(["private bytes"]));
-    await pending;
+    await act(async () => { finish(new Blob(["private bytes"])); });
     expect(uploads).toBe(0);
+    expect(result.current.references).toHaveLength(0);
 });
 
 test("canvas clipboard reads cannot create images after session replacement", async () => {

@@ -9,15 +9,17 @@ import { selectedPlatformModel } from "./tasks";
 
 const storedAudio = new WeakMap<Blob, UploadedFile>();
 
+export function audioGenerationParameters(config: AiConfig) {
+    return { voice: normalizeAudioVoiceValue(config.audioVoice), response_format: normalizeAudioFormatValue(config.audioFormat), speed: Number(normalizeAudioSpeedValue(config.audioSpeed)), instructions: config.audioInstructions };
+}
+
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: { signal?: AbortSignal; canvasProjectId?: string; onTaskCreated?: (id: string) => void }): Promise<Blob> {
     const session = useUserStore.getState().sessionVersion;
     const models = await fetchPublicModels();
     assertCurrentSession(session);
     if (options?.signal?.aborted) throw new DOMException("已停止准备", "AbortError");
     const modelId = selectedPlatformModel(models, config.model || config.audioModel, "audio");
-    const { batch, tasks } = await createGenerationBatch({ modelId, prompt, count: 1, referenceMediaIds: [], canvasProjectId: options?.canvasProjectId, parameters: {
-        voice: normalizeAudioVoiceValue(config.audioVoice), response_format: normalizeAudioFormatValue(config.audioFormat), speed: Number(normalizeAudioSpeedValue(config.audioSpeed)), instructions: config.audioInstructions,
-    } });
+    const { batch, tasks } = await createGenerationBatch({ modelId, prompt, count: 1, referenceMediaIds: [], canvasProjectId: options?.canvasProjectId, parameters: audioGenerationParameters(config) });
     assertCurrentSession(session);
     options?.onTaskCreated?.(tasks[0].id);
     assertCurrentSession(session);

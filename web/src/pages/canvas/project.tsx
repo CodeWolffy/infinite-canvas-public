@@ -29,6 +29,9 @@ import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
 import { CanvasConfigNodePanel } from "@/components/canvas/canvas-config-node-panel";
+import { canvasGenerationImages, canvasGenerationInputKey, prepareCanvasNodeGeneration, type PreparedCanvasGenerationMedia } from "@/components/canvas/canvas-generation-preparation";
+import { CanvasEmptyGuide } from "@/components/canvas/canvas-empty-guide";
+import { TemplatePickerModal } from "@/pages/canvas/template-picker-modal";
 import { CanvasNodeContextMenu } from "@/components/canvas/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "@/components/canvas/canvas-node-crop-dialog";
@@ -186,7 +189,7 @@ function InfiniteCanvasPage() {
     const openAgentPanel = useAgentStore((state) => state.openPanel);
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
-    const uploadTargetRef = useRef<{ nodeId?: string; position?: Position } | null>(null);
+    const uploadTargetRef = useRef<{ nodeId?: string; position?: Position; projectId: string; sessionVersion: number } | null>(null);
     const historyRef = useRef<{ past: CanvasHistoryEntry[]; future: CanvasHistoryEntry[] }>({ past: [], future: [] });
     const lastHistoryRef = useRef<CanvasHistoryEntry | null>(null);
     const historyCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,6 +242,7 @@ function InfiniteCanvasPage() {
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
     const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+    const [templatesOpen, setTemplatesOpen] = useState(false);
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
     const [connectingParams, setConnectingParams] = useState<ConnectionHandle | null>(null);
     const [connectionTargetNodeId, setConnectionTargetNodeId] = useState<string | null>(null);
@@ -259,7 +263,13 @@ function InfiniteCanvasPage() {
     const loadedReloadVersionRef = useRef(reloadVersion);
     const projectReady = hydrated && projectLoaded && loadedProjectIdRef.current === projectId && loadedSessionVersionRef.current === sessionVersion && loadedReloadVersionRef.current === reloadVersion;
     const canEdit = projectReady && !readOnly;
-    useCanvasPersistence(projectId, canEdit, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport });
+    const localSnapshot: CanvasHistoryEntry = { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo };
+    useCanvasPersistence(projectId, canEdit, { ...localSnapshot, viewport });
+    const savedSnapshot = restoredSnapshotRef.current || currentProject;
+    const hasLocalChanges = canEdit && Boolean(currentProject && savedSnapshot && (
+        Object.entries(localSnapshot).some(([key, value]) => savedSnapshot[key as keyof CanvasHistoryEntry] !== value)
+        || currentProject.viewport.x !== viewport.x || currentProject.viewport.y !== viewport.y || currentProject.viewport.k !== viewport.k
+    ));
     const canEditRef = useRef(false);
     canEditRef.current = canEdit;
     const setNodes: Dispatch<SetStateAction<CanvasNodeData[]>> = useCallback((value) => {
@@ -521,6 +531,7 @@ function InfiniteCanvasPage() {
         setDialogNodeId(null);
         setHistoryModalOpen(false);
         setAssetPickerOpen(false);
+        setTemplatesOpen(false);
         setClearConfirmOpen(false);
     }, [sessionVersion]);
 
@@ -925,8 +936,8 @@ function InfiniteCanvasPage() {
         },
     });
     const createNode = useCallback(
-        (type: CanvasNodeTypeId, position?: Position) => {
-            if (!canEditRef.current) return;
+        (type: CanvasNodeTypeId, position?: Position, prompt?: string) => {
+            if (!canEditRef.current || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
             const targetPosition = position || getCanvasCenter();
             const configMetadata =
                 type === CanvasNodeType.Config
@@ -936,7 +947,7 @@ function InfiniteCanvasPage() {
                           count: getGenerationCount(config.canvasImageCount || config.count),
                       }
                     : undefined;
-            const newNode = createCanvasNode(type, targetPosition, configMetadata);
+            const newNode = createCanvasNode(type, targetPosition, { ...configMetadata, ...(prompt ? { prompt } : {}) });
 
             setNodes((prev) => [...prev, newNode]);
             setSelectedNodeIds(new Set([newNode.id]));
@@ -1514,7 +1525,7 @@ function InfiniteCanvasPage() {
     }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
 
     const { copySelectedNodes, pasteCopiedNodes, pasteSystemClipboard, createImageFileNode, handleDrop } = useCanvasClipboard({
-        canEdit: () => canEditRef.current && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion,
+        canEdit: () => canEditRef.current && loadedProjectIdRef.current === projectId && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion,
         nodesRef,
         connectionsRef,
         selectedNodeIdsRef,
@@ -2096,14 +2107,15 @@ function InfiniteCanvasPage() {
 
     const handleUploadRequest = useCallback((nodeId?: string, position?: Position) => {
         if (!canEditRef.current) return;
-        uploadTargetRef.current = { nodeId, position };
+        uploadTargetRef.current = { nodeId, position, projectId, sessionVersion: useUserStore.getState().sessionVersion };
         imageInputRef.current?.click();
-    }, []);
+    }, [projectId]);
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
-            const sessionVersion = useUserStore.getState().sessionVersion;
-            if (!canEditRef.current) { event.target.value = ""; return; }
+            const target = uploadTargetRef.current;
+            const sessionVersion = target?.sessionVersion;
+            if (!target || !canEditRef.current || target.projectId !== loadedProjectIdRef.current || sessionVersion !== useUserStore.getState().sessionVersion) { event.target.value = ""; uploadTargetRef.current = null; return; }
             const files = Array.from(event.target.files || []).filter(isSupportedCanvasImage);
             if (!files.length) {
                 uploadTargetRef.current = null;
@@ -2111,7 +2123,6 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const target = uploadTargetRef.current;
             const basePosition =
                 target?.position ||
                 screenToCanvas(
@@ -2126,7 +2137,7 @@ function InfiniteCanvasPage() {
 
                 // Replace the target node with the first file.
                 const image = await uploadImage(first);
-                if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
+                if (!canEditRef.current || target.projectId !== loadedProjectIdRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
                 const s = fitNodeSize(image.width, image.height);
                 setNodes((prev) =>
                     prev.map((node) =>
@@ -2198,10 +2209,15 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleGenerateNode = useCallback(
-        async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
+        async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, media?: PreparedCanvasGenerationMedia) => {
             if (!canEditRef.current || accessRoleRef.current === "viewer" || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            const generationConfig = buildGenerationConfig(config, sourceNode, mode);
+            if (!sourceNode) return;
+            const sessionVersion = useUserStore.getState().sessionVersion;
+            const prepared = prepareCanvasNodeGeneration(config, sourceNode, nodesRef.current, connectionsRef.current, mode, prompt);
+            if (media && (media.projectId !== projectId || media.sessionVersion !== sessionVersion || media.inputKey !== canvasGenerationInputKey(sourceNode, mode, prepared))) return;
+            const contextInput = media ? { ...prepared.context, ...media.references } : prepared.context;
+            const generationConfig = prepared.config;
             if (!hasPlatformModel(generationConfig, generationConfig.model)) {
                 message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 return;
@@ -2209,16 +2225,16 @@ function InfiniteCanvasPage() {
 
             // useBuiltinPanel.writeBackToSelf reuses built-in generation while writing the result back to the plugin node.
             // Image mode currently supports display-only nodes such as panoramas, with a useBuiltinPanel.promptPrefix.
-            const builtinPanel = sourceNode ? getNodeDefinition(sourceNode.type)?.useBuiltinPanel : undefined;
-            if (sourceNode && builtinPanel?.writeBackToSelf && builtinPanel.mode === "image") {
+            if (prepared.writeBackToSelf) {
                 const scene = prompt.trim();
                 if (!scene) return;
                 setRunningNodeId(nodeId);
                 const controller = startGenerationRequest(nodeId, nodeId, nodeId);
                 setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: scene, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
                 try {
-                    const fullPrompt = (builtinPanel.promptPrefix || "") + scene;
-                    const context = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, fullPrompt));
+                    const context = await hydrateNodeGenerationContext(contextInput);
+                    assertCurrentSession(sessionVersion);
+                    if (controller.signal.aborted || !canEditRef.current || loadedProjectIdRef.current !== projectId) return;
                     const refs = context.referenceImages;
                     const image = refs.length
                         ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, { signal: controller.signal, canvasProjectId: projectId }).then((items) => items[0])
@@ -2243,13 +2259,21 @@ function InfiniteCanvasPage() {
             setRunningNodeId(nodeId);
             const overwriteExisting = config.nodeRegenerateBehavior === "overwrite";
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
-            const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
-            const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
-            );
+            const { sourceTextContent, editingTextNode } = prepared;
+            let generationContext;
+            try {
+                generationContext = await hydrateNodeGenerationContext(contextInput);
+                assertCurrentSession(sessionVersion);
+            } catch (error) {
+                finishGenerationRequest(nodeId, runController);
+                if (useUserStore.getState().sessionVersion === sessionVersion && loadedProjectIdRef.current === projectId) {
+                    setRunningNodeId(null);
+                    if (!isGenerationCanceled(error)) message.error(error instanceof Error ? error.message : "参考素材读取失败，请重新上传");
+                }
+                return;
+            }
             const effectivePrompt = generationContext.prompt.trim();
-            if (runController.signal.aborted) {
+            if (runController.signal.aborted || !canEditRef.current || loadedProjectIdRef.current !== projectId) {
                 finishGenerationRequest(nodeId, runController);
                 setRunningNodeId(null);
                 return;
@@ -2265,16 +2289,12 @@ function InfiniteCanvasPage() {
 
             try {
                 if (mode === "image") {
-                    const count = getGenerationCount(generationConfig.count);
+                    const count = prepared.count;
                     const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
                     const isImageNode = sourceNode?.type === CanvasNodeType.Image;
                     const isEmptyImageNode = isImageNode && !sourceNode?.metadata?.content;
                     const reuseImageNode = isImageNode && (overwriteExisting || isEmptyImageNode);
-                    const sourceReference =
-                        isImageNode && sourceNode?.metadata?.content && !overwriteExisting
-                            ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
-                            : [];
-                    const referenceImages = [...new Map([...sourceReference, ...generationContext.referenceImages].map((image) => [image.id, image])).values()];
+                    const referenceImages = media?.references.referenceImages || canvasGenerationImages(sourceNode, generationContext, overwriteExisting);
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
                     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
                     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];
@@ -2614,7 +2634,7 @@ function InfiniteCanvasPage() {
                 }
 
                 const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
-                const textCount = getGenerationCount(String(sourceNode?.metadata?.textCount || 1));
+                const textCount = prepared.count;
                 const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : CanvasNodeType.Text];
                 const textConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
                 const parentPosition = sourceNode?.position || { x: 0, y: 0 };
@@ -3176,6 +3196,8 @@ function InfiniteCanvasPage() {
                 <CanvasNodePromptPanel
                     node={panelNode}
                     nodes={nodes}
+                    connections={connections}
+                    readOnly={!canEdit}
                     isRunning={runningNodeId === panelNode.id}
                     mentionReferences={getMentionReferences(panelNode)}
                     connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
@@ -3192,25 +3214,28 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [getConfigInputs, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, getMentionReferences, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
+        [getConfigInputs, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, getMentionReferences, nodes, connections, canEdit, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
     );
 
     const renderNodeContentPanel = useCallback(
         (contentNode: CanvasNodeData) => (
             <CanvasConfigNodePanel
                 node={contentNode}
+                nodes={nodes}
+                connections={connections}
+                readOnly={!canEdit}
                 isRunning={runningNodeId === contentNode.id}
                 inputSummary={getInputSummary(getConfigInputs(contentNode.id))}
                 onConfigChange={handleConfigNodeChange}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                 onStop={confirmStopGeneration}
-                onGenerate={(nodeId) => {
+                onGenerate={(nodeId, media) => {
                     const target = nodesRef.current.find((item) => item.id === nodeId);
-                    void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
+                    void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "", media);
                 }}
             />
         ),
-        [getConfigInputs, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
+        [getConfigInputs, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId, nodes, connections, canEdit],
     );
 
     const hoverPreviewNode = hoverPreviewNodeId ? nodeById.get(hoverPreviewNodeId) || null : null;
@@ -3239,7 +3264,15 @@ function InfiniteCanvasPage() {
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={setPreviewNodeId} onHoverNode={setHoverPreviewNodeId} onInsertAsset={handleAssetInsert} />
             <section className="relative min-w-0 flex-1 overflow-hidden">
+                {canEdit && !nodes.length ? <CanvasEmptyGuide onDescribe={(prompt) => createNode(CanvasNodeType.Image, undefined, prompt)} onUpload={() => handleUploadRequest()} onTemplates={() => setTemplatesOpen(true)} /> : null}
+                <TemplatePickerModal open={templatesOpen && canEdit && !nodes.length} onClose={() => setTemplatesOpen(false)} onCreated={(project) => {
+                    if (!canEditRef.current || loadedProjectIdRef.current !== projectId || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
+                    useCanvasStore.getState().adoptProject(project);
+                    setTemplatesOpen(false);
+                    navigate(`/canvas/${project.id}`);
+                }} />
                 <CanvasTopBar
+                    hasLocalChanges={hasLocalChanges}
                     title={currentProject?.title || t("canvas.projectPage.untitledCanvas")}
                     titleDraft={titleDraft}
                     isTitleEditing={titleEditing}
@@ -3432,8 +3465,10 @@ function InfiniteCanvasPage() {
                     onUngroup={(node) => ungroupSelection(new Set([node.id]))}
                 />
 
-                {!readOnly && hasMultipleSelectedNodes && !selectionBox ? (
+                {!selectionBox && (hasMultipleSelectedNodes || selectedNodes.some((node) => node.type === CanvasNodeType.Group)) ? (
                     <CanvasSelectionToolbar
+                        allNodes={nodes}
+                        readOnly={readOnly}
                         nodes={selectedNodes}
                         viewport={viewport}
                         showToolbar={!isNodeDragging && !isNodeResizing}
@@ -3560,7 +3595,8 @@ function InfiniteCanvasPage() {
                     open={historyModalOpen}
                     onClose={() => setHistoryModalOpen(false)}
                     onRestored={async (restoredRecord) => {
-                        if (!canEditRef.current) return;
+                        const restoringProjectId = loadedProjectIdRef.current;
+                        if (!canEditRef.current || restoringProjectId !== projectId) return;
                         const sessionVersion = useUserStore.getState().sessionVersion;
                         const snapshot = (restoredRecord.snapshot && typeof restoredRecord.snapshot === "object" ? restoredRecord.snapshot : {}) as Partial<{
                             nodes: CanvasNodeData[];
@@ -3576,7 +3612,7 @@ function InfiniteCanvasPage() {
                         const rawSessions = snapshot.chatSessions || [];
                         const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(rawNodes, rawConnections));
                         const restoredSessions = await hydrateAssistantImages(rawSessions);
-                        if (!canEditRef.current || useUserStore.getState().sessionVersion !== sessionVersion) return;
+                        if (!canEditRef.current || loadedProjectIdRef.current !== restoringProjectId || useUserStore.getState().sessionVersion !== sessionVersion) return;
                         if (historyCommitTimerRef.current) clearTimeout(historyCommitTimerRef.current);
                         historyCommitTimerRef.current = null;
                         const entry: CanvasHistoryEntry = { nodes: restoredNodes, connections: rawConnections, chatSessions: restoredSessions, activeChatId: snapshot.activeChatId || null, backgroundMode: snapshot.backgroundMode || "lines", showImageInfo: snapshot.showImageInfo || false };
@@ -3597,7 +3633,7 @@ function InfiniteCanvasPage() {
                         setHistoryState({ canUndo: false, canRedo: false });
 
                         // 服务端已经写入还原后的快照，这里只同步 store，不再触发一次回写。
-                        applyRestoredProject(restoredRecord);
+                        applyRestoredProject({ ...restoredRecord, snapshot: { ...entry, viewport: snapshot.viewport || viewport } });
                     }}
                 />
 

@@ -21,6 +21,7 @@ import { modelPriceLabel } from "@/lib/model-price";
 import { cn } from "@/lib/utils";
 import { resolveCreationDraftModel } from "@/lib/creation-draft-model";
 import { useCreationDraftStore } from "@/stores/use-creation-draft-store";
+import { workbenchExamples } from "@/constant/creation-scenes";
 import type { ReferenceImage } from "@/types/image";
 
 type Conversation = Awaited<ReturnType<typeof getTextConversation>>;
@@ -29,6 +30,7 @@ type PendingFile = { file: File; url: string; reference?: never } | { file?: nev
 type TextInputDraft = { prompt: string; modelId: string; systemPrompt: string; reasoningEffort: ReasoningEffort; files: PendingFile[] };
 const activeStates = ["reviewing", "queued", "running"];
 const maxAttachments = 20;
+const textExamples = workbenchExamples.filter((item) => item.example.capability === "text");
 
 export default function TextPage() {
     const [search] = useSearchParams();
@@ -44,6 +46,8 @@ function TextConversationPage() {
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const session = useUserStore((state) => state.sessionVersion);
     const draft = useCreationDraftStore((state) => state.draft);
+    const isAdmin = useUserStore((state) => state.user?.role === "admin");
+    const setDraft = useCreationDraftStore((state) => state.setDraft);
     const clearDraft = useCreationDraftStore((state) => state.clearDraft);
     const appliedDraftRef = useRef("");
     const copy = useCopyText();
@@ -63,6 +67,7 @@ function TextConversationPage() {
     const [sending, setSending] = useState(false);
     const [canceling, setCanceling] = useState(false);
     const [streamError, setStreamError] = useState("");
+    const [submissionError, setSubmissionError] = useState("");
     const pending = useRef<{ fingerprint: string; id: string; mediaIds?: string[] } | null>(null);
     const scroll = useRef<HTMLDivElement>(null);
     const fileInput = useRef<HTMLInputElement>(null);
@@ -98,7 +103,7 @@ function TextConversationPage() {
     const active = Boolean(latest && activeStates.includes(latest.status));
     const quotedPrompt = useDeferredValue(prompt);
     const parameters = effort === "auto" ? {} : { reasoningEffort: effort };
-    const referenceMediaIds = files.flatMap((item) => item.reference?.storageKey ? [mediaId(item.reference.storageKey)] : []);
+    const referenceMediaIds = [...new Set(files.flatMap((item) => item.reference?.storageKey ? [mediaId(item.reference.storageKey).toLowerCase()] : []))];
     const quote = useQuery({ queryKey: ["text-quote", session, model?.id, conversationId, quotedPrompt, systemPrompt, effort, referenceMediaIds], queryFn: async ({ signal }) => {
         assertCurrentSession(session);
         const result = await quoteGeneration({ modelId: model!.id, count: 1, content: quotedPrompt, conversationId: conversationId || undefined, systemPrompt, parameters, attachmentMediaIds: referenceMediaIds }, signal);
@@ -106,7 +111,22 @@ function TextConversationPage() {
         return result;
     }, enabled: Boolean(model && quotedPrompt.trim()), gcTime: 0 });
     const quoteReady = !quotedPrompt.trim() || Boolean(quote.data && !quote.isFetching && !quote.isError);
-    const canSend = Boolean(model && (prompt.trim() || files.length) && !sending && !active && quotedPrompt === prompt && quoteReady && (!files.length || model?.imageInput) && (!conversationId || !conversation.isPending && !conversation.isError));
+    const noModelsHint = isAdmin ? "暂无可用文本模型，请在管理后台检查模型与渠道配置。" : "暂无可用文本模型，请联系管理员开通。";
+    const sendBlockedReason = sending ? "正在提交消息，请稍候。" : active ? latest?.canCancel ? "当前回复生成中，可取消后再发送。" : "已提交上游，无法取消；请等待当前回复完成后再发送。"
+        : conversationId && conversation.isPending ? "正在读取对话，请稍候。" : conversationId && conversation.isError ? "对话读取失败，请刷新对话后再发送。"
+        : models.isPending ? "正在加载可用模型，请稍候。" : models.isError ? "模型读取失败，请刷新模型列表后再发送。" : !available.length ? noModelsHint
+        : !model ? "请选择可用的文本模型后再发送。" : files.length && !model.imageInput ? "当前模型不支持图片附件，请切换支持图片的模型或移除附件。"
+        : files.length > maxAttachments ? `图片附件超过 ${maxAttachments} 张，请移除多余附件后再发送。` : !prompt.trim() && !files.length ? "输入消息或添加图片后即可发送。"
+        : quote.isError ? "费用报价失败，请重试报价后再发送。" : quotedPrompt !== prompt || !quoteReady ? "正在获取费用报价，完成后即可发送。" : "";
+    const canSend = !sendBlockedReason;
+    const attachmentHint = model && !model.imageInput ? "当前模型仅支持文本；识图请切换支持图片的模型。" : files.length >= maxAttachments ? `图片附件已达 ${maxAttachments} 张上限；请先移除附件再添加。` : "";
+    const retryMessage = latest?.conversationId === conversationId && (latest.status === "failed" || latest.status === "canceled") ? conversation.data?.messages.findLast((item) => item.role === "user") : undefined;
+    const retryBlockedReason = !retryMessage ? "未找到本次请求的消息，请刷新对话后重试。"
+        : (retryMessage.attachments?.length || 0) > maxAttachments ? `本次消息超过 ${maxAttachments} 张图片上限，无法完整恢复；请手动整理后发送。`
+        : retryMessage.attachments?.some((item) => !item.mimeType?.startsWith("image/") || !item.id) ? "本次消息含不可恢复的附件，请刷新对话核对后重试。"
+        : retryMessage.attachments?.length && !model?.imageInput ? "本次消息含图片，请先选择支持图片的模型再恢复输入。" : "";
+    const recovery = useRef({ latest, retryMessage, retryBlockedReason, sending });
+    recovery.current = { latest, retryMessage, retryBlockedReason, sending };
 
     const clearFiles = () => {
         setFiles((current) => {
@@ -180,6 +200,7 @@ function TextConversationPage() {
         const fingerprint = JSON.stringify({ ...input, files: files.map((item) => item.file ? [item.file.name, item.file.size, item.file.lastModified] : item.reference) });
         if (pending.current?.fingerprint !== fingerprint) pending.current = { fingerprint, id: crypto.randomUUID() };
         setSending(true);
+        setSubmissionError("");
         try {
             const mediaIds = pending.current.mediaIds || await Promise.all(files.map((item) => item.file ? uploadMedia(item.file, item.file.name).then((media) => media.id) : ensurePlatformMedia(item.reference)));
             assertCurrentSession(version);
@@ -200,7 +221,7 @@ function TextConversationPage() {
             setSearch({ conversation: accepted.conversationId }, { replace: true });
             await Promise.all([client.invalidateQueries({ queryKey: ["text-conversation", version, accepted.conversationId] }), client.invalidateQueries({ queryKey: ["text-conversations", version] }), client.invalidateQueries({ queryKey: ["wallet", version] })]);
         } catch (error) {
-            if (mounted.current && useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") message.error(error.message);
+            if (mounted.current && useUserStore.getState().sessionVersion === version && error instanceof Error && error.name !== "AbortError") setSubmissionError(error.message);
         } finally {
             if (mounted.current && useUserStore.getState().sessionVersion === version) setSending(false);
         }
@@ -219,7 +240,26 @@ function TextConversationPage() {
             if (useUserStore.getState().sessionVersion === version) setCanceling(false);
         }
     };
-    const resetConversation = (id: string) => { clearWorkbenchDraft(draftKey); currentInput.current = { ...currentInput.current, prompt: "", files: [] }; setSearch(id ? { conversation: id } : {}); setStreamError(""); setPrompt(""); setAmbiguousDraftModel(false); setHistoryOpen(false); if (!id) { setModelId(available[0]?.id || ""); setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
+    const editFailedRequest = () => {
+        const requestId = latest?.id;
+        confirmReplace(Boolean(prompt || files.length), () => {
+            const current = recovery.current;
+            if (current.sending || current.latest?.id !== requestId || !["failed", "canceled"].includes(current.latest?.status || "")) return;
+            if (current.retryBlockedReason || !current.retryMessage) { message.warning(current.retryBlockedReason); return; }
+            const restoredFiles: PendingFile[] = (current.retryMessage.attachments || []).map((item) => ({
+                url: item.url || `/api/media/${item.id}`,
+                reference: { id: item.id, name: item.originalName, type: item.mimeType, dataUrl: "", url: item.url, storageKey: item.id },
+            }));
+            clearFiles();
+            setFiles(restoredFiles);
+            setPrompt(current.retryMessage.content);
+            currentInput.current = { ...currentInput.current, prompt: current.retryMessage.content, files: restoredFiles };
+            pending.current = null;
+            setSubmissionError("");
+            message.success("已恢复本次输入，可修改后发送");
+        });
+    };
+    const resetConversation = (id: string) => { clearWorkbenchDraft(draftKey); currentInput.current = { ...currentInput.current, prompt: "", files: [] }; setSearch(id ? { conversation: id } : {}); setStreamError(""); setSubmissionError(""); setPrompt(""); setAmbiguousDraftModel(false); setHistoryOpen(false); if (!id) { setModelId(available[0]?.id || ""); setSystemPrompt(""); setReasoningEffort("auto"); } restoredConversation.current = ""; pending.current = null; clearFiles(); };
     const selectConversation = (id: string) => {
         if (id === conversationId && id) return;
         if (id !== conversationId) { setSearch(id ? { conversation: id } : {}); return; }
@@ -332,13 +372,16 @@ function TextConversationPage() {
             </header>
             <div ref={scroll} className="thin-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
                 <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
-                    {models.error || conversation.error ? <Alert type="error" title={models.error?.message || conversation.error?.message} /> : null}
+                    {models.error || conversation.error ? <Alert type="error" title={models.error ? "模型列表读取失败，请重试。" : "对话读取失败，请重试。"} description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{models.error?.message || conversation.error?.message}</p></details>} action={<Button size="small" onClick={() => void (models.error ? models.refetch() : conversation.refetch())}>{models.error ? "刷新模型列表" : "刷新对话"}</Button>} /> : null}
                     {unavailableModel ? <Alert type="warning" showIcon title={ambiguousDraftModel ? "草稿名称对应多个模型配置，请明确选择后继续发送" : "已选模型已下线或暂无可用渠道，请明确选择其它模型后继续发送"} /> : null}
                     {conversationId && conversation.isPending ? <Spin className="!block py-10" /> : null}
                     {!conversationId ? <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
                         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">有什么可以帮忙的？</h2>
                         <p className="mt-3 max-w-md text-sm leading-7 text-muted-foreground">输入问题开始对话，对话自动保存；支持图片输入的模型可以直接识图问答。</p>
-                        {!models.isPending && !available.length ? <Empty className="mt-8" description="暂无可用文本模型" /> : null}
+                        <div className="mt-7 grid w-full gap-2 text-left sm:grid-cols-3">
+                            {textExamples.map((item) => <button key={item.id} type="button" disabled={sending} onClick={() => setDraft(item.example)} className="rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/60 disabled:opacity-50"><span className="text-sm font-medium">{item.title}</span><span className="mt-1 block line-clamp-2 text-xs leading-6 text-muted-foreground">{item.example.prompt}</span></button>)}
+                        </div>
+                        {!models.isPending && !models.isError && !available.length ? <Empty className="mt-8" description={noModelsHint} /> : null}
                     </div> : null}
                     {conversation.data?.messages.map((item) => item.role === "user" ? (
                         <div key={item.id} className="group flex flex-col items-end">
@@ -359,15 +402,20 @@ function TextConversationPage() {
                         </div>
                     ))}
                     {latest?.partialText && !latest.responseMessageId ? <div><Streamdown className="agent-streamdown" isAnimating={active}>{latest.partialText}</Streamdown></div> : null}
-                    {active ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Spin size="small" />{latest?.status === "reviewing" ? "等待内容审核，可取消并退回冻结金额" : latest?.canCancel ? "正在等待提交，可取消并全退" : "已提交上游，继续生成并正常结算"}</div> : latest?.status === "failed" || latest?.status === "canceled" ? <Alert type="warning" showIcon title={latest.errorMessage || "本次生成已结束，冻结余额已退回"} /> : latest?.status === "succeeded" ? <p className="text-xs text-muted-foreground">本次实付 ¥{latest.billed}</p> : null}
-                    {streamError ? <Alert type="warning" title={streamError} action={<Button size="small" onClick={() => void conversation.refetch()}>刷新对话</Button>} /> : null}
+                    {active ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Spin size="small" />{latest?.status === "reviewing" ? "等待内容审核，可取消并退回冻结金额" : latest?.canCancel ? "正在等待提交，可取消并全退" : "已提交上游，继续生成并正常结算"}</div> : latest?.status === "failed" || latest?.status === "canceled" ? <Alert type="warning" showIcon title={latest.status === "failed" ? "本次回复未完成" : "本次生成已取消"} description={<div className="space-y-2">
+                        <p>可将本次消息与图片恢复到输入区，检查内容或模型后再次发送。</p>
+                        <p className="text-xs">{latest.billed != null && latest.billed !== "" ? `本次实付 ¥${latest.billed}，结算以钱包账单为准。` : "结算金额尚未返回，请到钱包核对账单。"}</p>
+                        {latest.errorMessage || latest.errorCode ? <details><summary className="cursor-pointer text-xs">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words text-xs">{latest.errorMessage || latest.errorCode}</p></details> : null}
+                        <div className="flex flex-wrap items-center gap-2"><Button size="small" icon={<SquarePen className="size-3.5" />} disabled={sending || Boolean(retryBlockedReason)} onClick={editFailedRequest}>编辑后重发</Button>{retryBlockedReason ? <span className="text-xs">{retryBlockedReason}</span> : null}</div>
+                    </div>} /> : latest?.status === "succeeded" ? <p className="text-xs text-muted-foreground">{latest.billed != null && latest.billed !== "" ? `本次实付 ¥${latest.billed}` : "生成已完成，请到钱包查看结算账单。"}</p> : null}
+                    {streamError ? <Alert type="warning" title="连接已中断，请刷新对话查看最新结果。" description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{streamError}</p></details>} action={<Button size="small" onClick={() => void conversation.refetch()}>刷新对话</Button>} /> : null}
                 </div>
             </div>
             <footer className="px-4 pb-5 pt-3 sm:px-6">
                 <div className="mx-auto max-w-3xl">
                     <div className="rounded-3xl border border-border bg-background p-3 transition-colors focus-within:border-muted-foreground/40">
                         {files.length ? <div className="flex flex-wrap gap-2 px-1 pb-2">
-                            {files.map((item, index) => <div key={item.url} className="relative">
+                            {files.map((item, index) => <div key={`${item.url}:${index}`} className="relative">
                                 <img src={item.url} alt={item.file?.name || item.reference?.name || "图片"} className="size-14 rounded-xl border border-border object-cover" />
                                 <button type="button" aria-label={`移除 ${item.file?.name || item.reference?.name || "图片"}`} onClick={() => removeFile(index)} className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:text-foreground"><X className="size-3" /></button>
                             </div>)}
@@ -381,14 +429,18 @@ function TextConversationPage() {
                                 </Tooltip>
                             </div>
                             <div className="flex min-w-0 items-center justify-end gap-1 sm:gap-2">
-                                <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? ambiguousDraftModel ? "请明确选择模型" : "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }} placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, name: item.name, description: item.description, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">{option.data.price}</div>{option.data.description ? <p className="mt-1 whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>} />
+                                <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? ambiguousDraftModel ? "请明确选择模型" : "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }} placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, name: item.name, description: item.description, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">价格：{option.data.price}</div>{option.data.description ? <p className="mt-1 whitespace-normal text-xs leading-5 text-muted-foreground">适用说明：{option.data.description}</p> : null}</div>} />
                                 <Select<ReasoningEffort> aria-label="思考强度" title="思考强度" variant="borderless" className="!w-24 shrink-0" prefix={<Brain className="size-4" />} suffixIcon={<ChevronDown className="size-3" />} value={effort} onChange={setReasoningEffort} disabled={!model?.reasoningEfforts?.length || sending || active} placement="topRight" options={modelReasoningOptions(model)} />
-                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" title={!model ? "请选择可用模型" : !prompt.trim() && !files.length ? "输入消息或添加图片" : !quoteReady ? "等待费用报价" : "发送消息"} icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
+                                {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" aria-describedby={sendBlockedReason ? "text-send-status" : undefined} title={sendBlockedReason || "发送消息"} icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
                             </div>
                         </div>
                     </div>
+                    {sendBlockedReason ? <p id="text-send-status" role="status" className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{sendBlockedReason}</p> : null}
+                    <p className="mt-1 px-1 text-xs leading-5 text-muted-foreground">未发送的输入按当前对话保留，刷新页面后清空；已发送消息自动保存。</p>
+                    {attachmentHint ? <p className="mt-1 px-1 text-xs leading-5 text-muted-foreground">{attachmentHint}</p> : null}
+                    {submissionError ? <Alert className="mt-2" type="warning" showIcon title="消息提交未完成，输入已保留。" description={<div><p>请展开详情处理问题后再次发送；若网络中断，可先刷新对话核对是否已提交。</p><details className="mt-2"><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{submissionError}</p></details></div>} /> : null}
                     <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">{quote.data && prompt.trim() && quotedPrompt === prompt && !quote.isFetching ? `预计冻结 ¥${quote.data.quote.estimatedHold}${files.some((item) => !item.reference?.storageKey) ? "（提交时另计新附图片预算）" : ""}，实际费用多退少补，欠费后需结清再生成。` : "内容由 AI 生成，请核实重要信息。"} Enter 发送 · Shift + Enter 换行</p>
-                    {quote.error ? <p className="mt-1 text-center text-xs text-destructive">{quote.error.message}</p> : null}
+                    {quote.error ? <div className="mt-1 flex items-start justify-center gap-2 text-xs text-destructive"><details><summary className="cursor-pointer">查看报价错误详情</summary><p className="mt-1 whitespace-pre-wrap break-words">{quote.error.message}</p></details><Button type="link" size="small" className="!h-auto !p-0 !text-xs" onClick={() => void quote.refetch()}>重试报价</Button></div> : null}
                 </div>
             </footer>
         </section>
@@ -399,7 +451,7 @@ function TextConversationPage() {
 function MessageAttachments({ attachments }: { attachments: MediaRecord[] }) {
     return <Image.PreviewGroup>
         <div className="flex flex-wrap justify-end gap-2 pb-1.5">
-            {attachments.map((item) => <Image key={item.id} src={item.url} alt={item.originalName} height={112} className="max-w-48 rounded-xl object-cover" />)}
+            {attachments.map((item, index) => <Image key={`${item.id}:${index}`} src={item.url} alt={item.originalName} height={112} className="max-w-48 rounded-xl object-cover" />)}
         </div>
     </Image.PreviewGroup>;
 }

@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
-import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, LocateFixed, Moon, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { Button, Dropdown, Segmented, Switch } from "antd";
+import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, LocateFixed, Moon, MousePointer2, Music2, Palette, Plus, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video, X } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -63,8 +63,7 @@ export function CanvasToolbar({
     const [tipX, setTipX] = useState(0);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     const [panelX, setPanelX] = useState(0);
-    const [extensionsOpen, setExtensionsOpen] = useState(false);
-    const [extPanelX, setExtPanelX] = useState(0);
+    const [hintVisible, setHintVisible] = useState(() => localStorage.getItem("canvas-operation-hint-dismissed") !== "1");
     // Keep extension plugin nodes synchronized with registry changes.
     useNodeRegistryVersion();
     const extensionDefs = listNodeDefinitions().filter((def) => def.showInCreateMenu !== false && getNodePluginId(def.type) !== "builtin");
@@ -73,26 +72,45 @@ export function CanvasToolbar({
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
     const tip = hovered ? toolLabel(hovered, t) : "";
 
-    // Close extension-node and canvas-appearance popovers when clicking outside the toolbar and its panels.
+    // Close the appearance panel when clicking outside the toolbar.
     useEffect(() => {
-        if (!extensionsOpen && !appearanceOpen) return;
+        if (!appearanceOpen) return;
         const handlePointerDown = (event: PointerEvent) => {
             if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-                setExtensionsOpen(false);
                 setAppearanceOpen(false);
             }
         };
         document.addEventListener("pointerdown", handlePointerDown, true);
         return () => document.removeEventListener("pointerdown", handlePointerDown, true);
-    }, [extensionsOpen, appearanceOpen]);
+    }, [appearanceOpen]);
 
     return (
-        <div ref={rootRef} className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }} data-canvas-bottom-toolbar>
+        <div ref={rootRef} className="pointer-events-none absolute bottom-3 left-3 right-3 z-50 flex justify-center lg:bottom-5 lg:left-[300px] lg:right-4" data-canvas-bottom-toolbar data-canvas-no-zoom onPointerDown={(event) => event.stopPropagation()}>
+            {hintVisible ? <div className="pointer-events-auto absolute bottom-[calc(100%+12px)] hidden max-w-full items-center gap-2 text-xs lg:flex" style={{ color: theme.node.muted }}>
+                <span>{canvasTool === "select" ? "拖动空白处框选 · 空格临时移动 · 滚轮缩放" : "拖动空白处移动 · 空格临时框选 · 滚轮缩放"}</span>
+                <button type="button" className="rounded p-1 hover:bg-black/5 dark:hover:bg-white/10" aria-label="不再显示操作提示" onClick={() => { localStorage.setItem("canvas-operation-hint-dismissed", "1"); setHintVisible(false); }}><X className="size-3.5" /></button>
+            </div> : null}
             {tip ? <DockTip label={tip} x={tipX} theme={theme} /> : null}
             <div ref={wrapRef} className="thin-scrollbar pointer-events-auto flex h-14 max-w-full items-center gap-1 overflow-x-auto rounded-xl border px-2 shadow-lg backdrop-blur [&>*]:shrink-0" style={dockStyle}>
-                <ToolbarButton id={`tool-${canvasTool}`} label={t(`canvas.toolbar.${canvasTool}`)} active hovered={hovered} activeStyle={activeStyle} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onCanvasToolChange(canvasTool === "select" ? "pan" : "select")}>
-                    {canvasTool === "select" ? <MousePointer2 className="size-4.5" /> : <Hand className="size-4.5" />}
-                </ToolbarButton>
+                <div className="flex items-center gap-0.5" role="group" aria-label="画布操作模式">
+                    {(["select", "pan"] as const).map((tool) => <button key={tool} type="button" aria-pressed={canvasTool === tool} onClick={() => onCanvasToolChange(tool)} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-black/5 dark:hover:bg-white/10" style={canvasTool === tool ? activeStyle : { color: theme.toolbar.item }}>
+                        {tool === "select" ? <MousePointer2 className="size-4" /> : <Hand className="size-4" />}{tool === "select" ? "选择" : "移动"}
+                    </button>)}
+                </div>
+                <Dropdown trigger={["click"]} placement="topLeft" onOpenChange={(open) => { if (open) { setAppearanceOpen(false); setHovered(null); } }} menu={{ items: [
+                    { key: "image", icon: <ImageIcon className="size-4" />, label: t("canvas.toolbar.image"), onClick: onAddImage },
+                    { key: "text", icon: <Type className="size-4" />, label: t("canvas.toolbar.text"), onClick: onAddText },
+                    { key: "video", icon: <Video className="size-4" />, label: t("canvas.toolbar.video"), onClick: () => onAddExtensionNode("video") },
+                    { key: "audio", icon: <Music2 className="size-4" />, label: t("canvas.toolbar.audio"), onClick: () => onAddExtensionNode("audio") },
+                    { key: "upload", icon: <Upload className="size-4" />, label: t("canvas.toolbar.upload"), onClick: onUpload },
+                    { type: "divider" },
+                    { key: "config", icon: <Settings2 className="size-4" />, label: t("canvas.toolbar.config"), onClick: onAddConfig },
+                    { key: "group", icon: <Group className="size-4" />, label: t("canvas.toolbar.group"), onClick: onAddGroup },
+                    ...extensionDefs.map((def) => ({ key: `plugin-${def.type}`, icon: def.icon, label: getNodeSpec(def.type).title, onClick: () => onAddExtensionNode(def.type) })),
+                ] }}>
+                    <button type="button" className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.toolbar.item }}><Plus className="size-4" />添加内容</button>
+                </Dropdown>
+                <Divider theme={theme} />
                 <ToolbarButton id="tool-undo" label={t("canvas.undo")} disabled={!canUndo} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUndo}>
                     <Undo2 className="size-4.5" />
                 </ToolbarButton>
@@ -101,44 +119,6 @@ export function CanvasToolbar({
                 </ToolbarButton>
                 <ToolbarButton id="tool-focus" label={t("canvas.toolbar.focus")} disabled={!selectedCount} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onFocusSelected}>
                     <LocateFixed className="size-4.5" />
-                </ToolbarButton>
-                <Divider theme={theme} />
-                <ToolbarButton id="tool-text" label={t("canvas.toolbar.text")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddText}>
-                    <Type className="size-4.5" />
-                </ToolbarButton>
-                <ToolbarButton id="tool-image" label={t("canvas.toolbar.image")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddImage}>
-                    <ImageIcon className="size-4.5" />
-                </ToolbarButton>
-                <ToolbarButton id="tool-video" label={t("canvas.toolbar.video")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onAddExtensionNode("video")}><Video className="size-4.5" /></ToolbarButton>
-                <ToolbarButton id="tool-audio" label={t("canvas.toolbar.audio")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onAddExtensionNode("audio")}><Music2 className="size-4.5" /></ToolbarButton>
-                <ToolbarButton id="tool-config" label={t("canvas.toolbar.config")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
-                    <Settings2 className="size-4.5" />
-                </ToolbarButton>
-                <ToolbarButton id="tool-group" label={t("canvas.toolbar.group")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
-                    <Group className="size-4.5" />
-                </ToolbarButton>
-                {extensionDefs.length ? (
-                    <ToolbarButton
-                        id="tool-extensions"
-                        label={t("canvas.toolbar.extensions")}
-                        active={extensionsOpen}
-                        hovered={hovered}
-                        activeStyle={activeStyle}
-                        hoverStyle={hoverStyle}
-                        wrapRef={wrapRef}
-                        onTipX={setTipX}
-                        onHover={setHovered}
-                        onClick={(event) => {
-                            setExtPanelX(getTipX(wrapRef.current, event.currentTarget));
-                            setAppearanceOpen(false);
-                            setExtensionsOpen((value) => !value);
-                        }}
-                    >
-                        <Puzzle className="size-4.5" />
-                    </ToolbarButton>
-                ) : null}
-                <ToolbarButton id="tool-upload" label={t("canvas.toolbar.upload")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
-                    <Upload className="size-4.5" />
                 </ToolbarButton>
                 <Divider theme={theme} />
                 <ToolbarButton
@@ -153,7 +133,6 @@ export function CanvasToolbar({
                     onHover={setHovered}
                     onClick={(event) => {
                         setPanelX(getTipX(wrapRef.current, event.currentTarget));
-                        setExtensionsOpen(false);
                         setAppearanceOpen((value) => !value);
                     }}
                 >
@@ -172,36 +151,6 @@ export function CanvasToolbar({
                     <Eraser className="size-4.5" />
                 </ToolbarButton>
             </div>
-
-            {extensionsOpen && extensionDefs.length ? (
-                <div
-                    className="thin-scrollbar pointer-events-auto absolute bottom-[72px] z-30 max-h-[50vh] w-[240px] -translate-x-1/2 overflow-y-auto rounded-xl border p-2 shadow-xl backdrop-blur"
-                    style={{ left: extPanelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
-                >
-                    <div className="px-1.5 pb-1.5 text-[11px] font-medium opacity-50">{t("canvas.toolbar.extensions")}</div>
-                    <div className="grid gap-0.5">
-                        {extensionDefs.map((def) => (
-                            <button
-                                key={def.type}
-                                type="button"
-                                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition"
-                                style={{ color: theme.toolbar.item }}
-                                onMouseEnter={(event) => (event.currentTarget.style.background = theme.toolbar.itemHover)}
-                                onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
-                                onClick={() => {
-                                    onAddExtensionNode(def.type);
-                                    setExtensionsOpen(false);
-                                }}
-                            >
-                                <span className="grid size-7 shrink-0 place-items-center rounded-md text-base" style={{ background: theme.toolbar.itemHover }}>
-                                    {def.icon}
-                                </span>
-                                <span className="min-w-0 flex-1 truncate">{getNodeSpec(def.type).title}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            ) : null}
 
             {appearanceOpen ? (
                 <div
@@ -301,6 +250,7 @@ function ToolbarButton({
         <Button
             type="text"
             aria-label={label}
+            title={label}
             className="!h-8 !w-8 !min-w-8 !p-0"
             disabled={disabled}
             style={active ? activeStyle : hovered === id && !disabled ? hoverStyle : { color: danger ? "#f87171" : theme.toolbar.item, opacity: disabled ? 0.35 : 1 }}

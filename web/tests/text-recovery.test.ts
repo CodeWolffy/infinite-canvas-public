@@ -79,7 +79,7 @@ const recoverySource = sourceFile("pages/canvas/hooks/use-canvas-generation-reco
         hydrateNodeGenerationContext: async () => ({ prompt: "question", referenceImages: [] }), buildNodeGenerationContext: () => ({}), isVideoTaskFailed: () => false,
         connections: [{ fromNodeId: "source", toNodeId: "node" }], connectionsRef: { current: [{ fromNodeId: "source", toNodeId: "node" }] }, disposed: false, missingTextRequestsRef: { current: new Map() },
     };
-    const declarations = ["requestImageQuestion", "waitForTextRequest"].map((name) => api.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === name)!.getText(api));
+    const declarations = ["platformTextInput", "requestImageQuestion", "waitForTextRequest"].map((name) => api.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === name)!.getText(api));
     context.requestImageQuestion = loadModule(declarations.join("\n"), {
         ...context, crypto: { randomUUID: () => `request-${++sequence}` }, textMessageContent: (content: any) => content, apiText: (key: string) => key,
         createTextConversation: async () => ({ id: `conversation-${++conversation}` }),
@@ -219,7 +219,7 @@ test("history changes wait for pending saves and stop on save failure or session
     const source = sourceFile("components/canvas/canvas-history-modal.tsx", ts.ScriptKind.TSX);
     const declaration = source.statements.find((part) => ts.isFunctionDeclaration(part) && part.name?.text === "flushBeforeHistoryChange")!;
     const user = { sessionVersion: 1 };
-    const store: any = { saveError: null, flushProject: async () => {} };
+    const store: any = { saveStates: {}, flushProject: async () => {} };
     const { flushBeforeHistoryChange } = loadModule(`${declaration.getText(source)}\nexport { flushBeforeHistoryChange };`, {
         useUserStore: { getState: () => user }, useCanvasStore: { getState: () => store },
         assertCurrentSession: (version: number) => { if (version !== user.sessionVersion) throw new Error("changed session"); },
@@ -231,7 +231,10 @@ test("history changes wait for pending saves and stop on save failure or session
     expect(finished).toBe(false);
     release!();
     await pending;
-    store.flushProject = async () => { store.saveError = { projectId: "project", message: "save failed" }; };
+    store.saveStates.other = { error: { projectId: "other", message: "other save failed" } };
+    store.flushProject = async () => {};
+    await expect(flushBeforeHistoryChange("project")).resolves.toBeUndefined();
+    store.flushProject = async () => { store.saveStates.project = { error: { projectId: "project", message: "save failed" } }; };
     await expect(flushBeforeHistoryChange("project")).rejects.toThrow(/save failed/);
     store.flushProject = async () => { user.sessionVersion++; };
     await expect(flushBeforeHistoryChange("project")).rejects.toThrow(/changed session/);

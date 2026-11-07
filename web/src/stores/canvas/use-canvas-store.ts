@@ -34,6 +34,7 @@ export type CanvasProject = {
 };
 
 export type CanvasSaveError = { projectId: string; message: string; permanent: boolean; conflict?: boolean };
+export type CanvasSaveState = { phase: "pending" | "saving" | "saved"; error: CanvasSaveError | null; sessionVersion: number };
 
 export type CanvasDeletedProject = {
     id: string;
@@ -52,6 +53,7 @@ type CanvasStore = {
     projectTotal: number;
     deletedProjects: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
+    saveStates: Record<string, CanvasSaveState>;
     reloadVersion: number;
     hydrateProjects: (userId: string) => Promise<void>;
     refreshProjectList: (query?: canvasApi.CanvasProjectQuery) => Promise<void>;
@@ -89,6 +91,19 @@ const blockedProjects = new Set<string>();
 const CANVAS_SAVE_DEBOUNCE_MS = 1000;
 const MAX_SAVE_ATTEMPTS = 5;
 let projectListRequestVersion = 0;
+
+function publishSaveState(id: string, error?: CanvasSaveError | null) {
+    useCanvasStore.setState((state) => {
+        const previous = state.saveStates[id];
+        const next: CanvasSaveState = {
+            phase: savingProjects.has(id) ? "saving" : pendingUpdates.has(id) || blockedProjects.has(id) || deletingProjects.has(id) ? "pending" : "saved",
+            error: error === undefined ? previous?.error || null : error,
+            sessionVersion: useUserStore.getState().sessionVersion,
+        };
+        if (previous?.phase === next.phase && previous.error === next.error && previous.sessionVersion === next.sessionVersion) return state;
+        return { saveStates: { ...state.saveStates, [id]: next }, ...(error !== undefined ? { saveError: error || (state.saveError?.projectId === id ? null : state.saveError) } : {}) };
+    });
+}
 
 function retryDelay(attempt: number) {
     return Math.min(2000 * 2 ** (attempt - 1), 30000);
@@ -173,7 +188,7 @@ function mergeProject(project: CanvasProject, preserveLocal = true) {
                 if (current.id !== project.id) return current;
                 const pending = pendingUpdates.get(project.id);
                 // 迟到的详情不能覆盖本地编辑，也不能把远端新版本号套在未保存的旧快照上。
-                if (preserveLocal && (pending || savingProjects.has(project.id) || current.revision > project.revision)) {
+                if (preserveLocal && (pending || savingProjects.has(project.id) || blockedProjects.has(project.id) || current.revision > project.revision)) {
                     next = { ...project, revision: current.revision, title: current.title, updatedAt: current.updatedAt, workspaceId: current.workspaceId, workspaceName: current.workspaceName, accessRole: current.accessRole, canDelete: current.canDelete };
                     if (current.snapshotLoaded) {
                         next = { ...next, ...projectSnapshot(current), nodeCount: current.nodeCount, connectionCount: current.connectionCount };
@@ -208,6 +223,7 @@ function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
     if (state.projects.find((project) => project.id === id)?.accessRole === "viewer") return;
     const merged = mergeUpdates(pendingUpdates.get(id), patch);
     pendingUpdates.set(id, merged);
+    publishSaveState(id);
     // 已知不可恢复：只保留待写入内容，等用户点重试，不再自动发请求。
     if (blockedProjects.has(id)) return;
     const timer = saveTimers.get(id);
@@ -246,9 +262,10 @@ async function flushProjectUpdate(id: string) {
         .then((record) => {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             if (record.revision < (useCanvasStore.getState().projects.find((item) => item.id === id)?.revision ?? 0)) return;
-            if (blockedProjects.has(id) && useCanvasStore.getState().saveError?.conflict) return;
+            if (blockedProjects.has(id) && useCanvasStore.getState().saveStates[id]?.error?.conflict) return;
             saveAttempts.delete(id);
             blockedProjects.delete(id);
+            publishSaveState(id, null);
             useCanvasStore.setState((state) => ({
                 saveError: state.saveError?.projectId === id ? null : state.saveError,
                 projects: state.projects.map((project) =>
@@ -275,20 +292,20 @@ async function flushProjectUpdate(id: string) {
             const permanent = isPermanentFailure(error) || attempt >= MAX_SAVE_ATTEMPTS;
             if (permanent) blockedProjects.add(id);
             else saveTimers.set(id, setTimeout(() => void flushProjectUpdate(id), retryDelay(attempt)));
-            useCanvasStore.setState({
-                saveError: {
-                    projectId: id,
-                    message: error instanceof Error ? error.message : i18n.t("canvas.save.failed"),
-                    permanent,
-                    conflict: error instanceof ApiError && error.status === 409,
-                },
+            publishSaveState(id, {
+                projectId: id,
+                message: error instanceof Error ? error.message : i18n.t("canvas.save.failed"),
+                permanent,
+                conflict: error instanceof ApiError && error.status === 409,
             });
         })
         .finally(() => {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             savingProjects.delete(id);
+            publishSaveState(id);
         });
     savingProjects.set(id, request);
+    publishSaveState(id);
     await request;
     if (useUserStore.getState().sessionVersion === sessionVersion && !failed && pendingUpdates.has(id)) await flushProjectUpdate(id);
 }
@@ -300,6 +317,7 @@ function cancelProjectUpdate(id: string) {
     pendingUpdates.delete(id);
     saveAttempts.delete(id);
     blockedProjects.delete(id);
+    publishSaveState(id, null);
 }
 
 canvasApi.onCanvasWorkspaceMove((record) => {
@@ -311,6 +329,7 @@ canvasApi.onCanvasWorkspaceMove((record) => {
         const timer = saveTimers.get(record.id);
         if (timer) clearTimeout(timer);
         saveTimers.delete(record.id);
+        publishSaveState(record.id, { projectId: record.id, message: "工作区变更期间存在未保存的编辑，请先核对远端画布并处理版本冲突", permanent: true, conflict: true });
     }
     useCanvasStore.setState((state) => ({
         saveError: hasUnsavedChanges ? { projectId: record.id, message: "工作区变更期间存在未保存的编辑，请先核对远端画布并处理版本冲突", permanent: true, conflict: true } : state.saveError,
@@ -331,12 +350,13 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             projectTotal: 0,
             deletedProjects: [],
             saveError: null,
+            saveStates: {},
             reloadVersion: 0,
             hydrateProjects: async (userId) => {
                 const { sessionVersion, user } = useUserStore.getState();
                 if (user?.id !== userId) return;
                 if (get().hydrated && get().hydratedUserId === userId) return;
-                if (get().hydratedUserId !== userId) set({ projects: [], hydrated: false, hydratedUserId: userId, saveError: null });
+                if (get().hydratedUserId !== userId) set({ projects: [], hydrated: false, hydratedUserId: userId, saveError: null, saveStates: {} });
                 let request = hydratePromises.get(userId);
                 if (!request) {
                     request = canvasApi.listCanvasProjects().then((records) => {
@@ -463,10 +483,14 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                         projectTotal: Math.max(0, state.projectTotal - state.projectListIds.filter((id) => removing.has(id)).length),
                         deletedProjects: [...state.deletedProjects.filter((item) => !removing.has(item.id)), ...ids.map((id) => ({ id, deletedAt: now }))],
                         saveError: state.saveError && ids.includes(state.saveError.projectId) ? null : state.saveError,
+                        saveStates: Object.fromEntries(Object.entries(state.saveStates).filter(([id]) => !removing.has(id))),
                     }));
                     void get().refreshProjectList(get().projectQuery).catch(() => undefined);
                 } finally {
-                    if (useUserStore.getState().sessionVersion === sessionVersion) ids.forEach((id) => deletingProjects.delete(id));
+                    if (useUserStore.getState().sessionVersion === sessionVersion) ids.forEach((id) => {
+                        deletingProjects.delete(id);
+                        if (get().projects.some((project) => project.id === id)) publishSaveState(id);
+                    });
                 }
             },
             replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
@@ -495,9 +519,10 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             flushProject: async (id) => flushProject(id),
             retrySave: async (id) => {
                 // 通用“重试”不能擅自把过期的完整快照覆盖到协作者的新版本上；待写入编辑保留到明确解决冲突为止。
-                if (get().saveError?.projectId === id && get().saveError?.conflict) return;
+                if (get().saveStates[id]?.error?.conflict) return;
                 blockedProjects.delete(id);
                 saveAttempts.delete(id);
+                publishSaveState(id, null);
                 set((state) => ({ saveError: state.saveError?.projectId === id ? null : state.saveError }));
                 await flushProjectUpdate(id);
             },
@@ -546,5 +571,5 @@ useUserStore.subscribe((state, previous) => {
     snapshotCaptures.clear();
     saveAttempts.clear();
     blockedProjects.clear();
-    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null });
+    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null, saveStates: {} });
 });

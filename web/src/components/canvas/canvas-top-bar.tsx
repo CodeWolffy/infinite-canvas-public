@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Eye, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Share2, Trash2, TriangleAlert, Undo2, Upload, Users } from "lucide-react";
+import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Share2, Trash2, Undo2, Upload, Users } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
-import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
-import { CanvasSaveConflictModal } from "@/components/canvas/canvas-save-conflict-modal";
+import { CanvasSaveStatus } from "@/components/canvas/canvas-save-status";
 
 export function CanvasTopBar({
     title,
@@ -34,6 +33,7 @@ export function CanvasTopBar({
     compactAgentStatus,
     onToggleAgent,
     readOnly,
+    hasLocalChanges = false,
     workspaceName,
     onShare,
 }: {
@@ -60,6 +60,7 @@ export function CanvasTopBar({
     onToggleAgent: () => void;
     /** 工作区 viewer 只读：禁用改名入口并展示提示徽标。 */
     readOnly?: boolean;
+    hasLocalChanges?: boolean;
     workspaceName?: string | null;
     onShare?: () => void;
 }) {
@@ -82,8 +83,8 @@ export function CanvasTopBar({
 
     return (
         <>
-            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between pl-1 pr-4">
-                <div className="pointer-events-auto flex min-w-0 items-center gap-2">
+            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex min-h-16 flex-wrap items-center justify-between gap-x-2 gap-y-1 py-2 pl-1 pr-3 lg:h-16 lg:flex-nowrap lg:py-0 lg:pr-4">
+                <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2">
                     <Tooltip title={sidePanelOpen ? t("canvas.collapsePanel") : t("canvas.expandPanel")}>
                         <button
                             type="button"
@@ -150,18 +151,12 @@ export function CanvasTopBar({
                                 <span className="truncate">{workspaceName}</span>
                             </span>
                         ) : null}
-                        {readOnly ? (
-                            <span className="flex items-center gap-1 text-xs" style={{ color: theme.node.muted }}>
-                                <Eye className="size-3.5" />
-                                {t("workspace.readOnlyBadge")}
-                            </span>
-                        ) : null}
                     </div>
-                    <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
-                    <CanvasSaveStatus />
+                    <div className="hidden xl:block"><CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /></div>
+                    <CanvasSaveStatus readOnly={readOnly} hasLocalChanges={hasLocalChanges} />
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
+                <div className="pointer-events-auto ml-auto flex max-w-full shrink-0 items-center gap-1.5">
                     {onShare ? (
                         <Tooltip title={t("share.title")}>
                             <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
@@ -211,34 +206,6 @@ function CompactAgentStatus({ status, onClick }: { status: { connected: boolean;
     const label = status.connected ? t("canvas.agentConnected") : status.enabled ? t("canvas.agentConnecting", { activity: status.activity || t("canvas.connecting") }) : t("canvas.agentDisconnected");
     const dotColor = status.connected ? "#22c55e" : status.enabled ? "#f59e0b" : theme.node.muted;
     return <button type="button" className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75" style={{ color: status.connected ? "#16a34a" : status.enabled ? "#d97706" : theme.node.muted }} onClick={onClick} title={t("canvas.openAgent")}><span className="size-2 rounded-full" style={{ background: dotColor }} /><span className="max-w-[140px] truncate">{label}</span></button>;
-}
-
-function CanvasSaveStatus() {
-    const { t } = useTranslation();
-    const [conflictOpen, setConflictOpen] = useState(false);
-    const saveError = useCanvasStore((state) => state.saveError);
-    const retrySave = useCanvasStore((state) => state.retrySave);
-    if (!saveError) return null;
-    if (saveError.conflict) return (
-        <><Tooltip title={saveError.message}>
-            <button type="button" onClick={() => setConflictOpen(true)} className="flex h-8 items-center gap-1.5 rounded px-1 text-xs hover:bg-black/5 dark:hover:bg-white/10" style={{ color: "#dc2626" }}>
-                <TriangleAlert className="size-3.5" />处理画布冲突
-            </button>
-        </Tooltip><CanvasSaveConflictModal projectId={saveError.projectId} open={conflictOpen} onClose={() => setConflictOpen(false)} /></>
-    );
-    return (
-        <Tooltip title={t("canvas.save.retryTip", { message: saveError.message })}>
-            <button
-                type="button"
-                className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75"
-                style={{ color: "#dc2626" }}
-                onClick={() => void retrySave(saveError.projectId)}
-            >
-                <TriangleAlert className="size-3.5" />
-                <span className="max-w-[160px] truncate">{saveError.permanent ? t("canvas.save.blocked") : t("canvas.save.retrying")}</span>
-            </button>
-        </Tooltip>
-    );
 }
 
 function Shortcut({ keys, value }: { keys: string[]; value: string }) {

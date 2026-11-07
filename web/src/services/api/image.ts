@@ -117,6 +117,15 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     return requestPlatformImages(config, requestPrompt, references, n, options);
 }
 
+export function platformTextInput(config: AiConfig, messages: AiTextMessage[], conversationId?: string) {
+    const inputMessages = messages.filter((message) => message.role !== "system");
+    const requestMessages = conversationId ? inputMessages.slice(-1) : inputMessages;
+    const content = requestMessages.map((message) => textMessageContent(message.content)).join("\n\n");
+    const systemPrompt = [config.systemPrompt, ...messages.filter((message) => message.role === "system").map((message) => textMessageContent(message.content))].filter(Boolean).join("\n\n");
+    const effort = resolveReasoningEffort(findChannelModel(config, config.model || config.textModel)?.model, config.reasoningEffort);
+    return { requestMessages, content, systemPrompt, parameters: effort === "auto" ? {} : { reasoningEffort: effort } };
+}
+
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
     const sessionVersion = useUserStore.getState().sessionVersion;
     const throwIfAborted = () => {
@@ -133,10 +142,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         options?.onConversationCreated?.(conversationId);
     }
     throwIfAborted();
-    const inputMessages = messages.filter((message) => message.role !== "system");
-    const requestMessages = options?.conversationId ? inputMessages.slice(-1) : inputMessages;
-    const content = requestMessages.map((message) => textMessageContent(message.content)).join("\n\n");
-    const systemPrompt = [config.systemPrompt, ...messages.filter((message) => message.role === "system").map((message) => textMessageContent(message.content))].filter(Boolean).join("\n\n");
+    const { requestMessages, content, systemPrompt, parameters } = platformTextInput(config, messages, options?.conversationId);
     const [attachmentMediaIds, modelId] = await Promise.all([
         Promise.all(
             requestMessages.flatMap((message) =>
@@ -154,7 +160,6 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     throwIfAborted();
     const requestId = crypto.randomUUID();
     options?.onTextRequestPrepared?.(requestId, conversationId);
-    const effort = resolveReasoningEffort(findChannelModel(config, config.model || config.textModel)?.model, config.reasoningEffort);
     const request = createTextRequest({
         requestId,
         conversationId,
@@ -163,7 +168,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         content,
         systemPrompt,
         attachmentMediaIds,
-        parameters: effort === "auto" ? {} : { reasoningEffort: effort },
+        parameters,
     }, options?.signal, onDelta);
     const response = options?.signal ? await waitForTextRequest(request, options.signal) : await request;
     assertCurrentSession(sessionVersion);

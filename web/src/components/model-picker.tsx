@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
+import { useUserStore } from "@/stores/use-user-store";
 import { findChannelModel, modelOptionLabel, modelOptionName, modelOptionPrice, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
@@ -21,6 +22,7 @@ type ModelPickerProps = {
 
 export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder, unavailableLabel, onMissingConfig }: ModelPickerProps) {
     const { t } = useTranslation();
+    const isAdmin = useUserStore((state) => state.user?.role === "admin");
     const pickerId = useId();
     const [open, setOpen] = useState(false);
     const options = useMemo(() => selectableModelsByCapability(config, capability).map((value) => {
@@ -61,22 +63,21 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 suffixIcon={<ChevronDown className="canvas-select-chevron size-3" />}
                 placeholder={pickerPlaceholder}
                 status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
-                showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""}`.toLowerCase().includes(input.toLowerCase()) }}
+                showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }}
                 popupMatchSelectWidth={false}
                 styles={{ popup: { root: { zIndex: 1200, minWidth: "20rem", maxWidth: "calc(100vw - 24px)" } } }}
                 options={options}
-                notFoundContent={options.length ? "没有匹配的模型" : emptyModelLabel(config, capability)}
+                notFoundContent={options.length ? "没有匹配的模型，试试模型名称或用途关键词" : emptyModelLabel(capability, isAdmin)}
                 labelRender={(option) => <span className="canvas-model-picker-text min-w-0 truncate">{unavailable ? unavailableLabel || "已选模型不可用" : option.label}</span>}
-                optionRender={(option) => <div className="max-w-96 space-y-1 py-1"><div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2"><ModelIcon config={config} model={option.data.value} /><span className="truncate">{option.data.label}</span></span>{option.data.price ? <span className="text-xs tabular-nums text-muted-foreground">{option.data.price}</span> : null}</div>{option.data.description ? <p className="whitespace-normal text-xs leading-5 text-muted-foreground">{option.data.description}</p> : null}</div>}
+                optionRender={(option) => <div className="max-w-96 space-y-1 py-1"><div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2"><ModelIcon config={config} model={option.data.value} /><span className="truncate">{option.data.label}</span></span>{option.data.price ? <span className="text-xs tabular-nums text-muted-foreground">单价 {option.data.price}</span> : null}</div>{option.data.description ? <p className="whitespace-normal text-xs leading-5 text-muted-foreground">适用说明：{option.data.description}</p> : null}</div>}
             />
         </div>
     );
 }
 
-function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
+function emptyModelLabel(capability: ModelCapability | undefined, isAdmin: boolean) {
     const label = capability ? i18n.t(`settingsPanels.model.capabilities.${capability}`) : "";
-    if (capability && config.models.length) return i18n.t("settingsPanels.model.assign", { capability: label });
-    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : i18n.t("settingsPanels.model.addFirst");
+    return `暂无可用${label}模型，${isAdmin ? "请在管理后台检查模型与渠道配置" : "请联系管理员开放模型"}`;
 }
 
 function ModelIcon({ config, model }: { config: AiConfig; model: string }) {

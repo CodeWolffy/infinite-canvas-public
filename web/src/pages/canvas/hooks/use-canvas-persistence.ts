@@ -18,7 +18,9 @@ export function useCanvasPersistence(projectId: string, enabled: boolean, snapsh
         const store = useCanvasStore.getState();
         const project = store.projects.find((item) => item.id === current.projectId);
         if (!current.enabled || current.session !== useUserStore.getState().sessionVersion || !project?.snapshotLoaded || project.accessRole === "viewer") return null;
-        const patch = Object.fromEntries(Object.entries(current.snapshot).filter(([key, value]) => project[key as keyof Snapshot] !== value)) as Partial<Snapshot>;
+        const patch = Object.fromEntries(Object.entries(current.snapshot).filter(([key, value]) => key === "viewport"
+            ? project.viewport.x !== current.snapshot.viewport.x || project.viewport.y !== current.snapshot.viewport.y || project.viewport.k !== current.snapshot.viewport.k
+            : project[key as keyof Snapshot] !== value)) as Partial<Snapshot>;
         return { current, store, patch };
     }, []);
     const dirty = useCallback(() => {

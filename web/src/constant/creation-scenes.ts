@@ -63,3 +63,22 @@ export const creationScenes: CreationScene[] = [
         },
     },
 ];
+
+export const workbenchExamples: { id: string; title: string; example: CreationDraftInput }[] = [
+    ...creationScenes.map(({ id, title, example }) => ({ id, title, example })),
+    {
+        id: "video-landscape",
+        title: "风景短片",
+        example: { capability: "video", prompt: "清晨的山间湖泊，薄雾贴着水面缓缓散开，阳光穿过树林。镜头平稳地向前推进，水面有细小涟漪，画面自然安静，写实电影风格。" },
+    },
+    {
+        id: "video-product",
+        title: "产品展示",
+        example: { capability: "video", prompt: "一只白色陶瓷咖啡杯置于木桌上，热气缓缓升起。镜头从杯口的细节慢慢拉远，露出窗边柔和的晨光与简洁背景，保持主体清晰、运动平稳。" },
+    },
+    {
+        id: "text-copy",
+        title: "写一段文案",
+        example: { capability: "text", prompt: "为一家社区咖啡店写一段周末活动文案：周日下午举办手冲咖啡体验，适合初学者，氛围轻松。请给出三个不同风格的版本，简洁自然，并为活动时间、地点和报名方式留出可填写的位置。" },
+    },
+];

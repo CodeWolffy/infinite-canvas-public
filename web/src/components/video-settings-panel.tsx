@@ -60,13 +60,6 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <ResolutionInput value={resolution} theme={theme} onChange={selectResolution} />
                     </div>
                 </SettingGroup>
-                <SettingGroup title={t("settingsPanels.video.size")} color={theme.node.muted}>
-                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                        <DimensionInput prefix="W" value={dimensions.width} disabled={selectedRatio === "auto"} theme={theme} onChange={(value) => updateDimension("width", value, dimensions, onConfigChange)} />
-                        <span className="text-lg opacity-45">↔</span>
-                        <DimensionInput prefix="H" value={dimensions.height} disabled={selectedRatio === "auto"} theme={theme} onChange={(value) => updateDimension("height", value, dimensions, onConfigChange)} />
-                    </div>
-                </SettingGroup>
                 <SettingGroup title={t("settingsPanels.video.ratio")} color={theme.node.muted}>
                     <div className="grid grid-cols-4 gap-2.5">
                         {videoRatioOptions.map((item) => (
@@ -99,7 +92,20 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </OptionPill>
                         ))}
                     </div>
+                    <p className="text-xs leading-5" style={{ color: theme.node.muted }}>{videoMode === "frames" ? "用参考图片指定起始或结束画面，描述中补充动作与镜头变化。" : "结合参考素材描述主体、动作和风格，素材支持情况以所选模型为准。"}</p>
                 </SettingGroup>
+                <details className="border-t pt-3" style={{ borderColor: theme.node.stroke }}>
+                    <summary className="cursor-pointer text-sm" style={{ color: theme.node.muted }}>高级设置{selectedRatio !== "auto" ? ` · ${dimensions.width} × ${dimensions.height}` : ""}</summary>
+                    <div className="mt-4 space-y-4">
+                        <SettingGroup title={t("settingsPanels.video.size")} color={theme.node.muted}>
+                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
+                                <DimensionInput prefix="W" value={dimensions.width} disabled={selectedRatio === "auto"} theme={theme} onChange={(value) => updateDimension("width", value, dimensions, onConfigChange)} />
+                                <span className="text-lg opacity-45">↔</span>
+                                <DimensionInput prefix="H" value={dimensions.height} disabled={selectedRatio === "auto"} theme={theme} onChange={(value) => updateDimension("height", value, dimensions, onConfigChange)} />
+                            </div>
+                        </SettingGroup>
+                    </div>
+                </details>
             </div>
         </ImageSettingsTheme>
     );

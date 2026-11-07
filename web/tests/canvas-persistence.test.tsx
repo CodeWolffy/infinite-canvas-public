@@ -5,7 +5,9 @@ import { useState } from "react";
 import { transferableAbortController } from "node:util";
 import { createMemoryRouter, RouterProvider, useParams } from "react-router-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import ts from "typescript";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { findNode, loadModule, sourceFile } from "./support/source-loader";
 
 const state = vi.hoisted(() => ({
     sessionVersion: 1, pending: false, enabled: true, projects: [] as CanvasProject[],
@@ -32,6 +34,24 @@ function mount() {
         { path: "/assets", element: <p>素材页面</p> },
     ], { initialEntries: ["/canvas/project"] });
     return render(<App><RouterProvider router={router} /></App>);
+}
+
+function restoreHandler(hydrate = async (nodes: unknown[]) => nodes.map((node) => ({ ...(node as object), hydrated: true })), loadedProjectIdRef = { current: "project" }) {
+    const source = sourceFile("pages/canvas/project.tsx", ts.ScriptKind.TSX);
+    const attribute = findNode(source, (node) => ts.isJsxAttribute(node) && node.name.getText(source) === "onRestored") as ts.JsxAttribute;
+    const handler = (attribute.initializer as ts.JsxExpression).expression!;
+    const replace = (key: keyof typeof value) => (next: unknown) => { value = { ...value, [key]: next }; };
+    return loadModule(`export const restore = ${handler.getText(source)};`, {
+        canEditRef: { current: true }, loadedProjectIdRef, projectId: "project", useUserStore: { getState: () => state },
+        hydrateCanvasImages: hydrate, resetInterruptedGeneration: (nodes: unknown[]) => nodes,
+        hydrateAssistantImages: async (sessions: unknown[]) => sessions.map((session) => ({ ...(session as object), hydrated: true })),
+        historyCommitTimerRef: { current: null }, viewportSaveTimerRef: { current: null }, restoredSnapshotRef: { current: null },
+        lastHistoryRef: { current: null }, restoredViewportRef: { current: null }, historyRef: { current: null }, clearTimeout,
+        setRawNodes: replace("nodes"), setRawConnections: replace("connections"), setChatSessions: replace("chatSessions"),
+        setActiveChatId: replace("activeChatId"), setBackgroundMode: replace("backgroundMode"), setShowImageInfo: replace("showImageInfo"), setViewport: replace("viewport"),
+        viewport: value.viewport, setHistoryState: vi.fn(),
+        applyRestoredProject: (record: { snapshot: object }) => { Object.assign(state.projects[0], record.snapshot); state.pending = false; },
+    }).restore as (record: { snapshot: object }) => Promise<void>;
 }
 
 beforeEach(() => {
@@ -132,4 +152,67 @@ test("viewer 与已切换的登录会话不保存旧快照", async () => {
     act(() => window.dispatchEvent(new Event("beforeunload", { cancelable: true })));
     expect(state.updateProject).not.toHaveBeenCalled();
     expect(state.flushProject).not.toHaveBeenCalled();
+});
+
+test("历史还原采纳已处理的节点与会话，等值视口不触发关页提示或离开保存", async () => {
+    mount();
+    const restore = restoreHandler();
+    await act(async () => restore({ snapshot: { ...snapshot(), nodes: [{ id: "restored-image" }], chatSessions: [{ id: "restored-chat" }], viewport: { x: 23, y: 17, k: 2 } } }));
+    value = { ...value, viewport: { ...value.viewport } };
+    await userEvent.click(screen.getByText("重绘画布"));
+    const event = new Event("beforeunload", { cancelable: true });
+    act(() => window.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(state.updateProject).not.toHaveBeenCalled();
+    expect(state.flushProject).not.toHaveBeenCalled();
+    await act(async () => { await router.navigate("/assets"); });
+    expect(await screen.findByText("素材页面")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(state.updateProject).not.toHaveBeenCalled();
+});
+
+test("历史还原后真实视口编辑仍入队，离开等待保存完成", async () => {
+    mount();
+    await act(async () => restoreHandler()({ snapshot: { ...snapshot(), nodes: [{ id: "restored" }] } }));
+    value = { ...value, viewport: { x: 91, y: 8, k: 2 } };
+    await userEvent.click(screen.getByText("重绘画布"));
+    let finish!: () => void;
+    state.flushProject.mockImplementation(() => new Promise<void>((resolve) => { finish = () => { state.pending = false; resolve(); }; }));
+    await act(async () => { await router.navigate("/assets"); });
+    expect(router.state.location.pathname).toBe("/canvas/project");
+    expect(state.updateProject).toHaveBeenCalledWith("project", { viewport: value.viewport });
+    await act(async () => finish());
+    expect(await screen.findByText("素材页面")).toBeInTheDocument();
+});
+
+test("历史素材准备期间切换账号不采纳旧快照，也不产生离开保存", async () => {
+    mount();
+    const previous = value;
+    let finish!: (nodes: unknown[]) => void;
+    const restore = restoreHandler(() => new Promise((resolve) => { finish = resolve; }));
+    const restoring = restore({ snapshot: { nodes: [{ id: "old-private-image" }], chatSessions: [{ id: "old-private-chat" }] } });
+    state.sessionVersion++;
+    await act(async () => { finish([{ id: "old-private-image" }]); await restoring; });
+    expect(value).toBe(previous);
+    const event = new Event("beforeunload", { cancelable: true });
+    act(() => window.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(state.updateProject).not.toHaveBeenCalled();
+    expect(state.flushProject).not.toHaveBeenCalled();
+});
+
+test("同会话切换画布后不采纳旧项目的迟到历史快照", async () => {
+    const previous = value;
+    const loadedProjectIdRef = { current: "project" };
+    let finish!: (nodes: unknown[]) => void;
+    const hydrate = vi.fn(() => new Promise<unknown[]>((resolve) => { finish = resolve; }));
+    const restore = restoreHandler(hydrate, loadedProjectIdRef);
+    const restoring = restore({ snapshot: { nodes: [{ id: "old-project-image" }], chatSessions: [] } });
+    loadedProjectIdRef.current = "other-project";
+    finish([{ id: "old-project-image" }]); await restoring;
+    expect(value).toBe(previous);
+    expect(state.projects[0].nodes).toBe(previous.nodes);
+    await restore({ snapshot: { nodes: [] } });
+    expect(hydrate).toHaveBeenCalledOnce();
+    expect(state.updateProject).not.toHaveBeenCalled();
 });

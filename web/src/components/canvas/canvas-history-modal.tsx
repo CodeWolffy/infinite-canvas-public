@@ -27,7 +27,7 @@ async function flushBeforeHistoryChange(projectId: string) {
     const sessionVersion = useUserStore.getState().sessionVersion;
     await useCanvasStore.getState().flushProject(projectId);
     assertCurrentSession(sessionVersion);
-    const error = useCanvasStore.getState().saveError;
+    const error = useCanvasStore.getState().saveStates[projectId]?.error;
     if (error?.projectId === projectId) throw new Error(error.message);
 }
 

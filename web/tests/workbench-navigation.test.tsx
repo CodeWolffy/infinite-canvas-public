@@ -6,8 +6,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { GenerationBatchDetail, PublicModel } from "@/services/api/generation";
 import { loadModule, readSource } from "./support/source-loader";
+import { nanoid } from "nanoid";
+import { workbenchExamples } from "@/constant/creation-scenes";
+import { useWorkbenchView } from "@/hooks/use-workbench-view";
 
-const api = vi.hoisted(() => ({ confirm: vi.fn(), getBatch: vi.fn(), create: vi.fn(), ensure: vi.fn(), upload: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+const api = vi.hoisted(() => ({ confirm: vi.fn(), getBatch: vi.fn(), create: vi.fn(), ensure: vi.fn(), upload: vi.fn(), warning: vi.fn(), error: vi.fn(), quote: vi.fn(), refetchQuote: vi.fn() }));
 vi.mock("@/hooks/use-public-models", () => ({ fetchPublicModels: vi.fn() }));
 vi.mock("@/stores/use-user-store", async () => {
     const { create } = await import("zustand");
@@ -42,6 +45,9 @@ const textarea = ({ value, onChange, placeholder }: any) => <textarea value={val
 const image = ({ src, alt }: any) => <img src={src} alt={alt} />;
 const empty = Object.assign(({ description }: any) => <div>{description}</div>, { PRESENTED_IMAGE_SIMPLE: "simple" });
 const imageStorage = { subscribeImagePreviews: () => noop, getImagePreviewRevision: () => 0, previewUrlFor: () => "", ensureImagePreview: async () => undefined, uploadImage: vi.fn() };
+const uploadHook = loadModule(readSource("hooks/use-workbench-reference-uploads.ts"), { navigator, DOMException }, {
+    react: React, nanoid: { nanoid }, "@/services/api/generation": { uploadGenerationMedia: api.upload }, "@/services/image-storage": imageStorage,
+});
 const workbench = { imageCommand: null, videoCommand: null, clearImageCommand: noop, clearVideoCommand: noop, updateTask: noop };
 
 function useBatches(options: any) {
@@ -83,6 +89,11 @@ const imports = {
     "@/components/canvas/asset-picker-modal": { AssetPickerModal: () => null },
     "@/components/generation/log-panel": { LogPanel: () => null },
     "@/components/generation/reference-order-buttons": { ReferenceOrderButtons: () => null },
+    "@/components/generation/reference-upload-feedback": { ReferenceUploadFeedback: () => null },
+    "@/components/generation/generation-failure-card": { GenerationFailureCard: () => null },
+    "@/constant/creation-scenes": { workbenchExamples },
+    "@/hooks/use-workbench-reference-uploads": uploadHook,
+    "@/hooks/use-workbench-view": { useWorkbenchView },
     "@/lib/canvas-theme": { canvasThemes }, "@/lib/creation-draft-model": { resolveCreationDraftModel },
     "@/lib/generation-log": { moveListItem, summaryLogBase }, "@/lib/media-size": { clampVideoSeconds },
     "@/lib/image-reference-prompt": { imageReferenceLabel }, "@/lib/zip": { createZip: noop },
@@ -103,7 +114,7 @@ const imports = {
     "@/hooks/use-confirm-input-replace": { useConfirmInputReplace: () => (dirty: boolean, yes: () => void, no?: () => void) => { if (dirty) api.confirm(yes, no); else yes(); } },
     "@/hooks/use-add-to-canvas": { useAddToCanvas: () => noop },
     "@/hooks/use-save-to-assets": { useSaveToAssets: () => noop },
-    "@/hooks/use-generation-quote": { useGenerationQuote: () => ({ quote: { estimatedHold: "0.1" }, ready: true, isFetching: false, error: null }) },
+    "@/hooks/use-generation-quote": { useGenerationQuote: api.quote },
     "@/hooks/use-generation-batches": { useGenerationBatches: useBatches, useWorkbenchBootstrap: useBootstrap, isActiveGenerationTask: (task: any) => ["queued", "running", "reviewing"].includes(task.status), generationTaskDuration: () => 0 },
 };
 const context = { window, document, navigator, URL, Blob, File, HTMLInputElement, AbortController, DOMException, setTimeout, clearTimeout };
@@ -128,6 +139,8 @@ beforeEach(() => {
     useCreationDraftStore.getState().clearDraft();
     useConfigStore.setState({ config: { ...defaultConfig, platformModels: models.map((model) => ({ ...model, name: model.id, modelName: model.name })), models: models.map((model) => `platform::${model.id}`), model: "platform::image-1", imageModel: "platform::image-1", videoModel: "platform::video-1" } });
     api.getBatch.mockReset(); api.create.mockReset(); api.ensure.mockReset(); api.upload.mockReset(); api.error.mockReset(); api.warning.mockReset();
+    api.refetchQuote.mockReset();
+    api.quote.mockReset().mockReturnValue({ quote: { estimatedHold: "0.1" }, ready: true, isFetching: false, error: null, refetch: api.refetchQuote });
 });
 afterEach(cleanup);
 
@@ -142,6 +155,49 @@ test.each(["image", "video"] as const)("%s 提交批次后立即展示结果，�
     await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/${capability}?batch=created`));
     expect(api.error).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("生成结果")).not.toHaveClass("hidden");
+});
+
+test.each(["image", "video"] as const)("%s 提交失败保留创作视图与输入", async (capability) => {
+    api.getBatch.mockResolvedValue(detail(capability, "a"));
+    api.ensure.mockResolvedValue("uploaded-reference");
+    api.create.mockRejectedValue(new Error("提交失败"));
+    mount(capability);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
+    fireEvent.click(screen.getByRole("button", { name: "workbench.generate" }));
+    await waitFor(() => expect(api.error).toHaveBeenCalled());
+    expect(screen.getByLabelText("创作输入")).not.toHaveClass("hidden");
+    expect(screen.getByRole("textbox")).toHaveValue("a 的提示词");
+});
+
+test.each(["image", "video"] as const)("%s 提交后继续输入时迟到成功不切走创作视图", async (capability) => {
+    api.getBatch.mockResolvedValue(detail(capability, "a"));
+    api.ensure.mockResolvedValue("uploaded-reference");
+    let finish!: (value: unknown) => void;
+    api.create.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    mount(capability);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
+    fireEvent.click(screen.getByRole("button", { name: "workbench.generate" }));
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "下一张的新想法" } });
+    const created = detail(capability, "created");
+    await act(async () => finish({ batch: created.batch, tasks: created.tasks }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/${capability}?batch=created`));
+    expect(screen.getByLabelText("创作输入")).not.toHaveClass("hidden");
+    expect(screen.getByRole("textbox")).toHaveValue("下一张的新想法");
+});
+
+test.each(["image", "video"] as const)("%s 读取历史期间返回创作，迟到历史不改变视图", async (capability) => {
+    let finish!: (value: GenerationBatchDetail) => void;
+    api.getBatch.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    saveWorkbenchDraft(capability, { prompt: "当前草稿", references: [], model: `${capability}-1`, settings: {} }, 1);
+    render(<router.MemoryRouter initialEntries={[`/${capability}?batch=a`]}><Shell /></router.MemoryRouter>);
+    await waitFor(() => expect(api.getBatch).toHaveBeenCalledOnce());
+    expect(screen.getByLabelText("生成结果")).not.toHaveClass("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "创作", exact: true }));
+    await act(async () => finish(detail(capability, "a")));
+    expect(screen.getByLabelText("创作输入")).not.toHaveClass("hidden");
+    expect(screen.getByRole("textbox")).toHaveValue("当前草稿");
 });
 
 test.each(["image", "video"] as const)("%s 同页切换批次恢复输入、模型、参数和参考，迟到旧结果不反写", async (capability) => {
@@ -195,12 +251,38 @@ test.each(["image", "video"] as const)("%s 在 A 上传的延迟结果不会把�
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
     fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(["image"], "A.png", { type: "image/png" })] } });
     await waitFor(() => expect(api.upload).toHaveBeenCalledTimes(1));
+    expect(api.quote.mock.lastCall?.[1]).toBe(false);
+    expect(screen.getByText("素材就绪后计算费用")).toBeInTheDocument();
+    expect(screen.queryByText("¥0.1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "workbench.generate" })).toBeDisabled();
     act(() => navigate(`/${capability}?batch=b&reuse=1`));
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("b 的提示词"));
     await act(async () => finish({ id: "a-upload", url: "/api/media/a-upload", mimeType: "image/png" }));
     expect(screen.getByAltText("reference-1")).toHaveAttribute("src", "/api/media/b-reference");
     expect(screen.queryByAltText("A.png")).not.toBeInTheDocument();
     expect(api.error).not.toHaveBeenCalled();
+});
+
+test.each(["image", "video"] as const)("%s 上传失败后不显示遗漏素材的报价", async (capability) => {
+    api.getBatch.mockResolvedValue(detail(capability, "a"));
+    api.upload.mockRejectedValue(new Error("上传失败"));
+    const view = mount(capability);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(["image"], "A.png", { type: "image/png" })] } });
+    await screen.findByText("请重试或移除失败的参考素材后再生成");
+    expect(api.quote.mock.lastCall?.[1]).toBe(false);
+    expect(screen.queryByText("¥0.1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "workbench.generate" })).toBeDisabled();
+});
+
+test.each(["image", "video"] as const)("%s 报价失败可手动重试，不触发生成", async (capability) => {
+    api.getBatch.mockResolvedValue(detail(capability, "a"));
+    api.quote.mockReturnValue({ ready: false, isFetching: false, error: new Error("报价服务暂不可用"), refetch: api.refetchQuote });
+    mount(capability);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("a 的提示词"));
+    fireEvent.click(screen.getByRole("button", { name: "重试报价" }));
+    expect(api.refetchQuote).toHaveBeenCalledOnce();
+    expect(api.create).not.toHaveBeenCalled();
 });
 
 
