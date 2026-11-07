@@ -46,11 +46,11 @@ export default function AdminSensitivePage() {
             </div>
         <ModerationQueue />
         {query.error ? <Alert className="mb-5" type="error" title={query.error.message} /> : null}
-        <Table<SensitiveWord> rowKey="id" columns={columns} dataSource={query.data?.words || []} loading={query.isPending} pagination={false} />
+        <Table<SensitiveWord> rowKey="id" columns={columns} dataSource={query.data?.words || []} loading={query.isPending} pagination={false} scroll={{ x: "max-content" }} />
         <div className="mb-4 mt-9 flex items-center justify-between"><h2 className="text-lg font-medium">最近命中记录</h2><Button type="text" onClick={() => void events.refetch()}>刷新记录</Button></div>
         <p className="mb-4 text-sm text-muted-foreground">“仅记录”允许继续生成，保留命中规则和用户，不保存完整提示词。</p>
         <Space className="mb-4" wrap><Input.Search className="!w-64" placeholder="搜索关键词或用户" allowClear onSearch={(value) => { setEventSearch(value); setEventPage(1); }} /><Select className="w-32" value={eventAction} onChange={(value) => { setEventAction(value); setEventPage(1); }} options={[{ value: "", label: "全部动作" }, ...Object.entries(actionLabels).map(([value, label]) => ({ value, label }))]} /></Space>
-        {events.error ? <Alert type="error" title={events.error.message} /> : <Table rowKey="id" dataSource={events.data?.events || []} loading={events.isPending} pagination={false} columns={[{ title: "用户", dataIndex: "username" }, { title: "命中规则", render: (_, event) => event.detail.pattern }, { title: "规则动作", render: (_, event) => <Tag>{actionLabels[event.detail.action]}</Tag> }, { title: "时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() }]} />}
+        {events.error ? <Alert type="error" title={events.error.message} /> : <Table rowKey="id" dataSource={events.data?.events || []} loading={events.isPending} pagination={false} scroll={{ x: "max-content" }} columns={[{ title: "用户", dataIndex: "username" }, { title: "命中规则", render: (_, event) => event.detail.pattern }, { title: "规则动作", render: (_, event) => <Tag>{actionLabels[event.detail.action]}</Tag> }, { title: "时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() }]} />}
         <div className="mt-4 flex justify-end gap-2"><Button disabled={eventPage === 1} onClick={() => setEventPage((p) => p - 1)}>上一页</Button><Button disabled={(events.data?.events.length || 0) < 50} onClick={() => setEventPage((p) => p + 1)}>下一页</Button></div>
         <Modal title="添加敏感词" open={open} onCancel={() => setOpen(false)} footer={null} destroyOnHidden>
             <Form form={form} layout="vertical" initialValues={{ action: "block" }} onFinish={(values) => save.mutate(values)}>

@@ -96,11 +96,13 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
     };
 
     return (
-        <div className="absolute bottom-36 left-3 z-50 lg:bottom-24 lg:left-6 overflow-hidden rounded-lg border shadow-2xl backdrop-blur-sm" style={{ width, height, background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
+        <div data-canvas-no-zoom className="absolute bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-50 max-w-[calc(100%-max(0.75rem,env(safe-area-inset-left))-max(0.75rem,env(safe-area-inset-right)))] overflow-hidden rounded-lg border shadow-2xl backdrop-blur-sm @min-[1024px]/canvas:bottom-24 @min-[1024px]/canvas:left-6" style={{ width, height, background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
             <div
                 ref={containerRef}
-                className="relative h-full w-full cursor-crosshair"
+                className="relative h-full w-full touch-none cursor-crosshair"
                 onPointerDown={(event) => {
+                    if (event.button !== 0 || !event.isPrimary) return;
+                    event.stopPropagation();
                     event.preventDefault();
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setIsDragging(true);
@@ -110,6 +112,8 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
                     if (isDragging) updateViewportFromEvent(event);
                 }}
                 onPointerUp={() => setIsDragging(false)}
+                onPointerCancel={() => setIsDragging(false)}
+                onLostPointerCapture={() => setIsDragging(false)}
                 onPointerLeave={() => setIsDragging(false)}
             >
                 {nodes.map((node) => {

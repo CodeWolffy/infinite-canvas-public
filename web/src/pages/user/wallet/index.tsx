@@ -75,18 +75,18 @@ export default function WalletPage() {
             <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-4">
                 <div>
                     <p className="text-xs text-muted-foreground">可用余额 · 人民币</p>
-                    <p className="mt-1 font-mono text-3xl tracking-tight">¥ {wallet?.balance ?? "—"}</p>
+                    <p className="mt-1 break-all font-mono text-3xl tracking-tight">¥ {wallet?.balance ?? "—"}</p>
                     <p className="mt-1 text-xs text-muted-foreground">生成中冻结 ¥{wallet?.frozen ?? "—"}</p>
                 </div>
                 <div className="flex flex-col items-start gap-1.5">
-                    <Space>
+                    <Space wrap>
                         <Button type="primary" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button>
                         <Button icon={<Ticket className="size-4" />} onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>
                     </Space>
                     {!channels.length && !overview.isPending ? <p className="text-xs text-muted-foreground">充值渠道暂未开放</p> : null}
                 </div>
             </div>
-            {summary ? <div className="grid grid-cols-2 border-t border-border sm:grid-cols-4">{[["本月实付", summary.spent], ["本月充值 / 兑换", summary.recharge], ["本月公益 / 邀请", summary.grants], ["本月签到", summary.checkin]].map(([label, value]) => <div key={label} className="px-5 py-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 font-mono text-base">¥{value}</p></div>)}</div> : null}
+            {summary ? <div className="grid grid-cols-2 border-t border-border sm:grid-cols-4">{[["本月实付", summary.spent], ["本月充值 / 兑换", summary.recharge], ["本月公益 / 邀请", summary.grants], ["本月签到", summary.checkin]].map(([label, value]) => <div key={label} className="px-5 py-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 break-all font-mono text-base">¥{value}</p></div>)}</div> : null}
         </div>
         <div className="rounded-xl border border-border px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
@@ -103,7 +103,7 @@ export default function WalletPage() {
                         </div>
                     ) : null}
                 </div>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
                     <span>已邀请 <span className="font-mono font-medium text-foreground">{referral?.summary.invited ?? "—"}</span></span>
                     <span>累计返利 <span className="font-mono font-medium text-foreground">¥{referral?.summary.earned ?? "—"}</span></span>
                     <span>返利比例 <span className="font-mono font-medium text-foreground">{referral ? (referral.enabled ? `${referral.percent}%` : "暂未开放") : "—"}</span></span>

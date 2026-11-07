@@ -64,6 +64,21 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     const closePanel = useCanvasSidePanelStore((state) => state.closePanel);
     const [resizing, setResizing] = useState(false);
 
+    useEffect(() => {
+        const desktop = window.matchMedia("(min-width: 1024px)");
+        const closeOnNarrowScreen = () => { if (!desktop.matches) closePanel(); };
+        const closeOnEscape = (event: KeyboardEvent) => { if (!desktop.matches && event.key === "Escape") closePanel(); };
+        closeOnNarrowScreen();
+        desktop.addEventListener("change", closeOnNarrowScreen);
+        window.addEventListener("keydown", closeOnEscape);
+        return () => {
+            desktop.removeEventListener("change", closeOnNarrowScreen);
+            window.removeEventListener("keydown", closeOnEscape);
+        };
+    }, [closePanel]);
+
+    const closeOnMobile = () => { if (window.innerWidth < 1024) closePanel(); };
+
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
         const startX = event.clientX;
@@ -88,38 +103,38 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
 
     return (
         <>
-        {panelOpen ? <button type="button" className="fixed inset-0 z-[75] opacity-70 md:hidden" style={{ background: theme.canvas.background }} onClick={closePanel} aria-label="关闭画布侧栏遮罩" /> : null}
+        {panelOpen ? <button type="button" className="fixed inset-0 z-[75] opacity-70 lg:hidden" style={{ background: theme.canvas.background }} onClick={closePanel} aria-label="关闭画布侧栏遮罩" /> : null}
         <motion.div
-            className="fixed inset-y-0 left-0 z-[80] flex h-full max-w-[calc(100vw-2rem)] shrink-0 md:relative md:inset-auto md:z-[60] md:max-w-none"
+            className="fixed inset-y-0 left-0 z-[80] flex h-dvh max-w-[calc(100vw-2rem)] shrink-0 lg:relative lg:inset-auto lg:z-[60] lg:h-full lg:max-w-none"
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: panelOpen ? width + 1 : 0, opacity: panelOpen ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
             style={{ overflow: "clip", pointerEvents: panelClosing ? "none" : undefined }}
         >
             <motion.aside
-                className="relative flex h-full shrink-0 flex-col overflow-hidden border-r"
+                className="relative flex h-full shrink-0 flex-col overflow-hidden border-r pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pt-[env(safe-area-inset-top)] lg:pb-0 lg:pl-0 lg:pt-0"
                 initial={{ x: -48 }}
                 animate={{ x: panelClosing ? -28 : 0 }}
                 transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
                 style={{ width, maxWidth: "100%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
-                <div className="flex items-center gap-5 px-4 pt-3.5">
+                <div className="flex items-center gap-3 px-3 pt-2 lg:gap-5 lg:px-4 lg:pt-3.5">
                     <TabButton label={t("canvas.sidePanel.canvas")} active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <TabButton label={t("canvas.sidePanel.assets")} active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <TabButton label={t("canvas.sidePanel.prompts")} active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
-                    <button type="button" onClick={closePanel} className="ml-auto grid size-7 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 md:hidden" aria-label="关闭画布侧栏"><X className="size-4" /></button>
+                    <button type="button" onClick={closePanel} className="ml-auto grid size-10 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 lg:hidden" aria-label="关闭画布侧栏"><X className="size-4" /></button>
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
                     {tab === "canvas" ? (
-                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} onPreviewNode={onPreviewNode} onHoverNode={onHoverNode} theme={theme} />
+                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={(id) => { onFocusNode(id); closeOnMobile(); }} onPreviewNode={onPreviewNode} onHoverNode={onHoverNode} theme={theme} />
                     ) : tab === "assets" ? (
-                        <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} />
+                        <CanvasAssetsTab onInsert={(payload) => { onInsertAsset(payload); closeOnMobile(); }} theme={theme} />
                     ) : (
-                        <CanvasPromptsTab onInsert={onInsertAsset} theme={theme} />
+                        <CanvasPromptsTab onInsert={(payload) => { onInsertAsset(payload); closeOnMobile(); }} theme={theme} />
                     )}
                 </div>
-                <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize md:block" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} />
+                <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize lg:block" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} />
             </motion.aside>
         </motion.div>
         </>
@@ -128,7 +143,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
 
 function TabButton({ label, active, theme, onClick }: { label: string; active: boolean; theme: CanvasTheme; onClick: () => void }) {
     return (
-        <button type="button" onClick={onClick} className="relative pb-1.5 text-sm font-semibold transition-opacity" style={{ color: theme.node.text, opacity: active ? 1 : 0.45 }}>
+        <button type="button" onClick={onClick} className="relative min-h-10 pb-1.5 text-sm font-semibold transition-opacity lg:min-h-0" style={{ color: theme.node.text, opacity: active ? 1 : 0.45 }}>
             {label}
             {active ? <motion.span layoutId="sidePanelTabIndicator" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full" style={{ background: theme.toolbar.activeText }} transition={{ type: "spring", stiffness: 500, damping: 34 }} /> : null}
         </button>
@@ -470,7 +485,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                 <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,audio/*" multiple className="hidden" onChange={(e) => void handleFiles(e.target.files)} />
             </div>
             {allTags.length ? (
-                <div className="flex flex-wrap gap-1.5 px-3 pb-2">
+                <div className="thin-scrollbar flex max-h-24 shrink-0 flex-wrap gap-1.5 overflow-y-auto overscroll-contain px-3 pb-2">
                     <Tag.CheckableTag checked={tagFilter === "all"} className={cn("prompt-filter-tag", tagFilter === "all" && "is-active")} onChange={() => setTagFilter("all")}>
                         {t("common.all")}
                     </Tag.CheckableTag>
@@ -522,11 +537,11 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
     return (
         <div title={asset.title} className="group relative aspect-square overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>
             <AssetCover asset={asset} />
-            <div className="absolute inset-0 flex items-center justify-center gap-2.5 opacity-0 transition duration-200 group-hover:opacity-100">
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 p-1 transition-opacity duration-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
                 <button
                     type="button"
                     onClick={onInsert}
-                    className="grid size-8 place-items-center rounded-full bg-white/90 text-stone-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-stone-900 dark:bg-black/60 dark:text-stone-100 dark:hover:bg-black/80"
+                    className="grid size-8 shrink-0 place-items-center rounded-md transition hover:bg-black/5 dark:hover:bg-white/10 [@media(hover:none)]:size-10"
                     aria-label={t("canvas.sidePanel.inserted")}
                 >
                     <Plus className="size-4" />
@@ -534,7 +549,7 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
                 {asset.editable !== false ? <Popconfirm title={t("canvas.sidePanel.removeAssetTitle")} okText={t("canvas.sidePanel.remove")} cancelText={t("common.cancel")} okButtonProps={{ danger: true }} onConfirm={onRemove}>
                     <button
                         type="button"
-                        className="grid size-8 place-items-center rounded-full bg-white/90 text-stone-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-red-500 dark:bg-black/60 dark:text-stone-100 dark:hover:bg-black/80 dark:hover:text-red-400"
+                        className="grid size-8 shrink-0 place-items-center rounded-md transition hover:bg-black/5 hover:text-red-500 dark:hover:bg-white/10 [@media(hover:none)]:size-10"
                         aria-label={t("canvas.sidePanel.removeAsset")}
                     >
                         <Trash2 className="size-4" />

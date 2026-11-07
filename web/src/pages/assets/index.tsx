@@ -254,10 +254,10 @@ export default function AssetsPage() {
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
-            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
+            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] sm:px-6 sm:py-8 dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
-                        <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("assets.title")}</h1>
+                        <h1 className="text-3xl font-semibold tracking-tight text-stone-950 sm:text-4xl dark:text-stone-100">{t("assets.title")}</h1>
                         <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
                     </div>
 
@@ -342,6 +342,7 @@ export default function AssetsPage() {
 
                     <div className="flex justify-center">
                         <Pagination
+                            responsive
                             current={page}
                             pageSize={pageSize}
                             total={total}
@@ -509,10 +510,10 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMove
                                 {asset.source || t("assets.unknownSource")}
                             </Typography.Text>
                         </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
+                        <div className="flex max-w-[50%] shrink-0 flex-col items-end gap-1">
                             <Tag className="m-0 text-[11px]">{t(`assets.kinds.${asset.kind}`)}</Tag>
                             {asset.workspaceName ? (
-                                <Tag className="m-0 text-[11px]" icon={<Users className="size-3" />}>
+                                <Tag className="m-0 max-w-full truncate text-[11px]" title={asset.workspaceName} icon={<Users className="size-3" />}>
                                     {asset.workspaceName}
                                 </Tag>
                             ) : null}
@@ -531,7 +532,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete, onMove
                     </div>
                 </div>
             </button>
-            <div className="flex items-center gap-1 px-3 pb-3">
+            <div className="flex flex-wrap items-center gap-1 px-3 pb-3">
                 <Button type="text" size="small" onClick={onOpen}>{t("common.view")}</Button>
                 <Dropdown trigger={["click"]} menu={{ items: creationItems }}>
                     <Button type="text" size="small" icon={<ArrowUpRight className="size-3.5" />}>使用素材</Button>
@@ -585,7 +586,7 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                         {asset.kind === "text" ? (
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
                         ) : asset.kind === "audio" ? <audio src={asset.data.url} controls className="mt-3 w-full" /> : asset.kind === "video" ? (
-                            <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
+                            <video src={asset.data.url} controls playsInline className="mt-2 aspect-video w-full rounded-lg bg-black" />
                         ) : (
                             <Typography.Text className="mt-2 block">
                                 {asset.data.width}x{asset.data.height} · {formatBytes(asset.data.bytes)} · {asset.data.mimeType}

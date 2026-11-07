@@ -44,7 +44,7 @@ export default function AdminStatsPage() {
             </div>
             <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => setPreset(Number(value))} />
-                <DatePicker.RangePicker value={filters.range} allowClear={false} onChange={(range) => range && updateFilters("range", range as [Dayjs, Dayjs])} />
+                <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={filters.range} allowClear={false} onChange={(range) => range && updateFilters("range", range as [Dayjs, Dayjs])} />
                 <Select allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => updateFilters("userId", userId)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
                 <Select allowClear placeholder="全部模型" className="min-w-44" value={filters.modelId} onChange={(modelId) => updateFilters("modelId", modelId)} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
                 <Select allowClear placeholder="全部渠道" className="min-w-40" value={filters.channelId} onChange={(channelId) => updateFilters("channelId", channelId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />

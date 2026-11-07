@@ -86,7 +86,7 @@ export default function AdminRequestLogsPage() {
             </div>
             <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => { const days = Number(value); setPreset(days); setPage(1); setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs()] })); }} />
-                <DatePicker.RangePicker value={filters.range} allowClear={false} showTime={{ format: "HH:mm" }} onChange={(range) => range && setFilter("range", range as [Dayjs, Dayjs])} />
+                <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={filters.range} allowClear={false} showTime={{ format: "HH:mm" }} onChange={(range) => range && setFilter("range", range as [Dayjs, Dayjs])} />
                 <Select allowClear placeholder="全部用户" className="min-w-36" value={filters.userId} onChange={(value) => setFilter("userId", value)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
                 <Select allowClear placeholder="全部模型" className="min-w-40" value={filters.modelId} onChange={(value) => setFilter("modelId", value)} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
                 <Select allowClear placeholder="全部渠道" className="min-w-36" value={filters.channelId} onChange={(value) => setFilter("channelId", value)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />

@@ -98,7 +98,7 @@ export function NotificationCenter() {
     };
 
     const popoverContent = (
-        <div className="w-[380px] sm:w-[440px]">
+        <div className="w-[min(440px,calc(100vw-48px))]">
             <div className="flex items-center justify-between border-b border-stone-200 pb-2.5 dark:border-stone-800">
                 <span className="text-sm font-semibold text-stone-950 dark:text-stone-100">通知中心</span>
                 <div className="flex items-center gap-1">
@@ -148,7 +148,7 @@ export function NotificationCenter() {
                             </span>
                         ),
                         children: (
-                            <div className="max-h-[380px] overflow-y-auto pr-1">
+                            <div className="max-h-[min(380px,calc(100dvh-200px))] overflow-y-auto overscroll-contain pr-1">
                                 {notificationsQuery.error ? (
                                     <Alert type="error" showIcon message={notificationsQuery.error.message} className="my-2" />
                                 ) : entries.length ? (
@@ -159,7 +159,7 @@ export function NotificationCenter() {
                                                     <h4 className="text-xs font-medium text-stone-900 dark:text-stone-100">{entry.title}</h4>
                                                     {entry.read ? null : <Tag color="blue" className="!mr-0 text-[10px] scale-90">未读</Tag>}
                                                 </div>
-                                                <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-stone-600 dark:text-stone-300">{entry.content}</p>
+                                                <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-stone-600 dark:text-stone-300">{entry.content}</p>
                                                 <div className="mt-2 flex items-center justify-between gap-2">
                                                     <time className="text-[11px] text-stone-400">{new Date(entry.createdAt).toLocaleString()}</time>
                                                     {entry.read ? null : (
@@ -193,7 +193,7 @@ export function NotificationCenter() {
                             </span>
                         ),
                         children: (
-                            <div className="max-h-[380px] overflow-y-auto pr-1">
+                            <div className="max-h-[min(380px,calc(100dvh-200px))] overflow-y-auto overscroll-contain break-words pr-1">
                                 {hasAnnouncementContent && announcement ? (
                                     <div className="py-2 text-xs">
                                         {announcement.title ? (
@@ -241,7 +241,7 @@ export function NotificationCenter() {
             onOpenChange={handleOpenChange}
             placement="bottomRight"
             arrow={false}
-            overlayInnerStyle={{ padding: "12px 14px", borderRadius: 12 }}
+            styles={{ container: { padding: "12px 14px", borderRadius: 12 } }}
         >
             <Badge dot={totalHasUnread} offset={[-2, 4]}>
                 <button
@@ -249,7 +249,7 @@ export function NotificationCenter() {
                     aria-label="通知中心"
                     title="通知中心"
                     style={{ color: canvasThemes[theme].node.text }}
-                    className="inline-flex size-7 items-center justify-center rounded-md hover:bg-black/5 dark:hover:bg-white/10"
+                    className="inline-flex size-10 items-center justify-center rounded-md hover:bg-black/5 sm:size-7 dark:hover:bg-white/10"
                 >
                     <Bell className="size-4" />
                 </button>

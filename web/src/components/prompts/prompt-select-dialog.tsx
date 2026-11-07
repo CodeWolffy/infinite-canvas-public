@@ -35,8 +35,8 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
 
     return (
         <Modal title={t("prompts.library")} open={open} onCancel={() => onOpenChange(false)} footer={null} width={880} centered>
-            <div className="grid h-[62dvh] min-h-0 gap-5 sm:grid-cols-[200px_minmax(0,1fr)]" data-canvas-no-zoom onWheelCapture={(event) => event.stopPropagation()}>
-                <aside className="thin-scrollbar min-h-0 overflow-y-auto border-r border-stone-200 pr-4 dark:border-stone-800">
+            <div className="grid h-[62dvh] min-h-0 grid-rows-[minmax(0,1fr)_minmax(0,2fr)] gap-4 sm:grid-cols-[200px_minmax(0,1fr)] sm:grid-rows-1 sm:gap-5" data-canvas-no-zoom onWheelCapture={(event) => event.stopPropagation()}>
+                <aside className="thin-scrollbar min-h-0 overflow-y-auto border-b border-stone-200 pb-3 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-4 dark:border-stone-800">
                     <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-stone-400 dark:text-stone-500">{t("prompts.category")}</div>
                     <div className="flex flex-wrap gap-1.5">
                         {promptCategories.map((category) => (
@@ -65,7 +65,7 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                                 <Spin />
                             </div>
                         ) : null}
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                             {items.map((item) => (
                                 <PromptCard key={item.id} item={item} onOpen={() => selectPrompt(item.prompt)} onCopy={() => selectPrompt(item.prompt)} compact />
                             ))}

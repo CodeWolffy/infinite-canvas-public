@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Share2, Trash2, Undo2, Upload, Users } from "lucide-react";
+import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Redo2, Share2, Trash2, Undo2, Upload, Users } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -84,14 +84,14 @@ export function CanvasTopBar({
 
     return (
         <>
-            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex min-h-16 flex-wrap items-center justify-between gap-x-2 gap-y-1 py-2 pl-1 pr-3 lg:h-16 lg:flex-nowrap lg:py-0 lg:pr-4">
-                <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2">
+            <div data-canvas-top-bar data-canvas-no-zoom className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-1 pl-[max(0.25rem,env(safe-area-inset-left))] pr-[max(0.25rem,env(safe-area-inset-right))] pt-[env(safe-area-inset-top)] @min-[1024px]/canvas:h-16 @min-[1024px]/canvas:gap-2 @min-[1024px]/canvas:pt-0 @min-[1024px]/canvas:pr-4">
+                <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-0.5 @min-[1024px]/canvas:gap-2">
                     <Tooltip title={sidePanelOpen ? t("canvas.collapsePanel") : t("canvas.expandPanel")}>
                         <button
                             type="button"
                             onClick={toggleSidePanel}
                             aria-label={sidePanelOpen ? t("canvas.collapsePanel") : t("canvas.expandPanel")}
-                            className="grid size-7 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10"
+                            className="grid size-10 shrink-0 place-items-center rounded-md transition hover:bg-black/5 @min-[1024px]/canvas:size-8 dark:hover:bg-white/10"
                             style={{ color: theme.node.text }}
                         >
                             {sidePanelOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
@@ -99,74 +99,82 @@ export function CanvasTopBar({
                     </Tooltip>
                     <Dropdown
                         trigger={["click"]}
+                        styles={{ root: { maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100dvh - 72px)", overflowY: "auto" } }}
                         menu={{
+                            className: "[&_.ant-dropdown-menu-item]:min-h-11 [@media(pointer:fine)]:[&_.ant-dropdown-menu-item]:min-h-0",
                             items: [
                                 { key: "home", icon: <Home className="size-4" />, label: t("canvas.home"), onClick: onHome },
                                 { key: "docs", icon: <BookOpen className="size-4" />, label: t("canvas.docs"), onClick: () => window.open(DOCS_URL, "_blank", "noopener,noreferrer") },
                                 { key: "projects", icon: <Images className="size-4" />, label: t("canvas.projects"), onClick: onProjects },
+                                { key: "rename", disabled: readOnly, icon: <Pencil className="size-4" />, label: "重命名画布", onClick: onStartTitleEditing },
+                                ...(onShare ? [{ key: "share", icon: <Share2 className="size-4" />, label: "分享与协作", onClick: onShare }] : []),
+                                { key: "agent", icon: <Bot className="size-4" />, label: agentOpen ? "关闭 Agent" : "打开 Agent", onClick: onToggleAgent },
                                 { type: "divider" },
                                 { key: "new", icon: <Plus className="size-4" />, label: t("canvas.create"), onClick: onCreateProject },
-                                { key: "delete", danger: true, icon: <Trash2 className="size-4" />, label: t("canvas.deleteCurrent"), onClick: onDeleteProject },
+                                { key: "delete", disabled: readOnly, danger: true, icon: <Trash2 className="size-4" />, label: t("canvas.deleteCurrent"), onClick: onDeleteProject },
                                 { type: "divider" },
-                                { key: "import", icon: <Upload className="size-4" />, label: t("canvas.importAsset"), onClick: onImportImage },
+                                { key: "import", disabled: readOnly, icon: <Upload className="size-4" />, label: t("canvas.importAsset"), onClick: onImportImage },
                                 { key: "export", icon: <Download className="size-4" />, label: t("canvas.exportCurrent"), onClick: onExportProject },
-                                { key: "history", icon: <History className="size-4" />, label: t("canvas.versionHistory", "版本历史"), onClick: onOpenHistory },
+                                { key: "history", disabled: !onOpenHistory, icon: <History className="size-4" />, label: t("canvas.versionHistory", "版本历史"), onClick: onOpenHistory },
                                 { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text={t("canvas.undo")} shortcut="⌘ Z" />, onClick: onUndo },
                                 { key: "redo", disabled: !canRedo, icon: <Redo2 className="size-4" />, label: <MenuLabel text={t("canvas.redo")} shortcut="⌘ ⇧ Z / ⌘ Y" />, onClick: onRedo },
                             ],
                         }}
                     >
-                        <button type="button" className="grid size-7 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={t("canvas.openMenu")}>
+                        <button type="button" className="grid size-10 shrink-0 place-items-center rounded-md transition hover:bg-black/5 @min-[1024px]/canvas:size-8 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={t("canvas.openMenu")}>
                             <Menu className="size-4" />
                         </button>
                     </Dropdown>
 
-                    <div ref={titleRef} className="flex min-w-0 items-center gap-2">
-                        {isTitleEditing ? (
-                            <input
-                                autoFocus
-                                value={titleDraft}
-                                onChange={(event) => onTitleDraftChange(event.target.value)}
-                                onBlur={onFinishTitleEditing}
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter") onFinishTitleEditing();
-                                    if (event.key === "Escape") onCancelTitleEditing();
-                                }}
-                                className="max-w-[280px] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none"
-                                style={{ color: theme.node.text }}
-                            />
-                        ) : (
-                            <button
-                                type="button"
-                                className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
-                                onDoubleClick={readOnly ? undefined : onStartTitleEditing}
-                                title={readOnly ? undefined : t("canvas.renameHint")}
-                            >
-                                {title}
-                            </button>
-                        )}
-                        {workspaceName ? (
-                            <span className="hidden max-w-[140px] items-center gap-1 truncate text-xs sm:flex" style={{ color: theme.node.muted }} title={workspaceName}>
-                                <Users className="size-3.5 shrink-0" />
-                                <span className="truncate">{workspaceName}</span>
-                            </span>
-                        ) : null}
+                    <div className="flex min-w-0 flex-1 flex-col @min-[1024px]/canvas:flex-row @min-[1024px]/canvas:items-center @min-[1024px]/canvas:gap-2">
+                        <div ref={titleRef} className="flex min-w-0 items-center gap-2">
+                            {isTitleEditing ? (
+                                <input
+                                    autoFocus
+                                    value={titleDraft}
+                                    onChange={(event) => onTitleDraftChange(event.target.value)}
+                                    onBlur={onFinishTitleEditing}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter") onFinishTitleEditing();
+                                        if (event.key === "Escape") onCancelTitleEditing();
+                                    }}
+                                    className="w-full min-w-0 max-w-[280px] bg-transparent p-0 text-left text-base font-semibold tracking-normal outline-none @min-[1024px]/canvas:text-lg"
+                                    aria-label="画布名称"
+                                    style={{ color: theme.node.text }}
+                                />
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-sm font-semibold tracking-normal transition hover:border-current @min-[1024px]/canvas:text-lg"
+                                    onDoubleClick={readOnly ? undefined : onStartTitleEditing}
+                                    title={readOnly ? undefined : t("canvas.renameHint")}
+                                >
+                                    {title}
+                                </button>
+                            )}
+                            {workspaceName ? (
+                                <span className="hidden max-w-[140px] items-center gap-1 truncate text-xs @min-[1024px]/canvas:flex" style={{ color: theme.node.muted }} title={workspaceName}>
+                                    <Users className="size-3.5 shrink-0" />
+                                    <span className="truncate">{workspaceName}</span>
+                                </span>
+                            ) : null}
+                        </div>
+                        <CanvasSaveStatus readOnly={readOnly} hasLocalChanges={hasLocalChanges} />
                     </div>
-                    <div className="hidden xl:block"><CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /></div>
-                    <CanvasSaveStatus readOnly={readOnly} hasLocalChanges={hasLocalChanges} />
+                    <div className="hidden @min-[1440px]/canvas:block"><CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /></div>
                 </div>
 
-                <div className="pointer-events-auto ml-auto flex max-w-full shrink-0 items-center gap-1.5">
-                    <CanvasCollaborationStatus />
+                <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-0.5 @min-[1024px]/canvas:gap-1.5">
+                    <div className="hidden @min-[1440px]/canvas:block"><CanvasCollaborationStatus /></div>
                     {onShare ? (
                         <Tooltip title="分享与协作">
-                            <Button type="text" aria-label="分享与协作" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
+                            <Button type="text" aria-label="分享与协作" className="!hidden !h-9 !rounded-lg !px-2.5 !font-medium @min-[1024px]/canvas:!inline-flex" style={{ color: theme.node.text }} icon={<Share2 className="size-4" />} onClick={onShare} />
                         </Tooltip>
                     ) : null}
                     <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} />
-                    <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                    <Button type="text" className="!h-9 !rounded-lg !px-2.5 !font-medium" style={{ background: agentOpen ? theme.toolbar.activeBg : "transparent", color: theme.node.text }} icon={<Bot className="size-4" />} onClick={onToggleAgent}>Agent</Button>
+                    <span className="hidden h-6 w-px @min-[1024px]/canvas:block" style={{ background: theme.toolbar.border }} />
+                    <Button type="text" className="!hidden !h-9 !rounded-lg !px-2.5 !font-medium @min-[1024px]/canvas:!inline-flex" style={{ background: agentOpen ? theme.toolbar.activeBg : "transparent", color: theme.node.text }} icon={<Bot className="size-4" />} onClick={onToggleAgent}>Agent</Button>
                 </div>
             </div>
             <Modal title={t("canvas.shortcuts")} open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button, Tooltip } from "antd";
 import dayjs from "dayjs";
-import { Bot, History, MessageSquare, PanelRightClose, PlugZap, Plus, Sparkles, Terminal } from "lucide-react";
+import { Bot, History, MessageSquare, PanelRightClose, PlugZap, Plus, Sparkles, Terminal, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
@@ -474,7 +474,7 @@ export function LocalAgentPanel({ embedded, headless }: { embedded?: boolean; he
                 theme={theme}
                 leading={
                     <div className="flex items-center gap-1">
-                        <span className="grid size-8 place-items-center">
+                        <span className="hidden size-8 place-items-center min-[992px]:grid">
                             <Bot className="size-4" />
                         </span>
                         <div className="hidden text-base font-semibold leading-5 @min-[560px]:block">Agent</div>
@@ -503,7 +503,7 @@ export function LocalAgentPanel({ embedded, headless }: { embedded?: boolean; he
                             </Button>
                         </Tooltip>
                         <Tooltip title={t("agent.panel.collapse")}>
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" aria-label={t("agent.panel.collapseLabel")} style={{ color: theme.node.muted }} icon={<PanelRightClose className="size-4" />} onClick={closePanel} />
+                            <Button type="text" shape="circle" className="!h-10 !w-10 !min-w-10 min-[992px]:!h-8 min-[992px]:!w-8 min-[992px]:!min-w-8" aria-label={t("agent.panel.collapseLabel")} style={{ color: theme.node.muted }} icon={<><X className="size-4 min-[992px]:hidden" /><PanelRightClose className="hidden size-4 min-[992px]:block" /></>} onClick={closePanel} />
                         </Tooltip>
                     </>
                 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Table, Tag } from "antd";
+import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Table, Tag } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { saveAs } from "file-saver";
 
@@ -34,14 +34,14 @@ export default function CostReport() {
         saveAs(new Blob([`\ufeff${lines.join("\n")}`], { type: "text/csv;charset=utf-8" }), `成本核对-${dayjs().format("YYYYMMDD")}.csv`);
     };
     return <div className="space-y-5">
-        <Space wrap>
-            <DatePicker.RangePicker value={filters.range} allowClear={false} onChange={(range) => range && (setFilters((current) => ({ ...current, range: range as [Dayjs, Dayjs] })), setPage(1))} />
+        <div className="flex flex-wrap items-center gap-2">
+            <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={filters.range} allowClear={false} onChange={(range) => range && (setFilters((current) => ({ ...current, range: range as [Dayjs, Dayjs] })), setPage(1))} />
             <Select allowClear placeholder="全部来源" className="w-36" value={filters.source} onChange={(source) => { setFilters((current) => ({ ...current, source })); setPage(1); }} options={Object.entries(sources).map(([value, label]) => ({ value, label }))} />
             <Select allowClear placeholder="全部模型" className="min-w-40" value={filters.modelId} onChange={(modelId) => { setFilters((current) => ({ ...current, modelId })); setPage(1); }} options={(models.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
             <Select allowClear placeholder="全部渠道" className="min-w-40" value={filters.channelId} onChange={(channelId) => { setFilters((current) => ({ ...current, channelId })); setPage(1); }} options={(channels.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />
             <Button onClick={() => { setFilters((current) => ({ ...current, source: "unknown" })); setPage(1); }}>只看未知成本</Button>
             <Button disabled={!entries.length} onClick={exportRows}>导出当前页 CSV</Button>
-        </Space>
+        </div>
         <div className="grid grid-cols-2 gap-6 border-y border-border py-6 lg:grid-cols-4">{[["用户实付", totals?.userPaid], ["已知上游成本", totals?.knownCost], ["成本超过实付的部分", totals?.subsidy], ["已发签到、邀请与公益赠送", totals?.grants]].map(([label, value]) => <div key={label}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 break-all font-mono text-xl">¥{value || "0.000000"}</p></div>)}</div>
         <Alert type="info" showIcon title={`另有 ${totals?.unknownCount || 0} 次调用的成本未知`} description="用户实付来自余额账本。上游成本优先使用人工核对值，其余按模型渠道配置估算；未知不按零费用处理。成本差额只基于已知成本，不代表最终账单。在线调试产生的费用也会记录。" />
         {query.error ? <Alert type="error" title={query.error.message} /> : null}

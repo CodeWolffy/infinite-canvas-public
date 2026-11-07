@@ -41,10 +41,10 @@ export function CanvasConfigNodePanel({ node, nodes, connections, readOnly = fal
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
 
     return (
-        <div className="thin-scrollbar flex h-full w-full cursor-move flex-col overflow-y-auto px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
-            <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="shrink-0 text-sm font-semibold">{t("canvas.configNode.title")}</div>
-                <div className="cursor-default" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="thin-scrollbar flex h-full w-full cursor-default flex-col overflow-y-auto overscroll-contain px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div data-canvas-node-drag-handle className="flex min-h-10 shrink-0 touch-none cursor-move items-center text-sm font-semibold">{t("canvas.configNode.title")}</div>
+                <div data-canvas-no-zoom className="cursor-default" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
                     <Segmented
                         size="small"
                         className="canvas-config-mode !rounded-md !p-0.5"
@@ -85,7 +85,7 @@ export function CanvasConfigNodePanel({ node, nodes, connections, readOnly = fal
                 </button>
             </div>
 
-            <div className="mb-2 grid min-w-0 cursor-default grid-cols-[minmax(0,1fr)_148px] items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>
+            <div data-canvas-no-zoom className="mb-2 grid min-w-0 cursor-default grid-cols-1 items-center gap-2 md:grid-cols-[minmax(0,1fr)_148px]" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
                 <ModelPicker className="canvas-compact-control h-10" config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability={mode} onMissingConfig={() => message.warning("平台模型渠道未就绪，请联系管理员配置渠道")} fullWidth />
                 {mode === "video" ? (
                     <CanvasVideoSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
@@ -105,6 +105,7 @@ export function CanvasConfigNodePanel({ node, nodes, connections, readOnly = fal
                 disabled={!isRunning && !quote.canGenerate}
                 title={quote.reason || "开始生成"}
                 onMouseDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
                 onClick={() => (isRunning ? onStop(node.id) : onGenerate(node.id, quote.preparedMedia))}
             >
                 <span className="inline-flex items-center gap-1.5">

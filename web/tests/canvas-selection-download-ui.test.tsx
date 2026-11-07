@@ -41,8 +41,11 @@ const node = (id: string, type = CanvasNodeType.Text, groupId?: string): CanvasN
 const nodes = [node("组", CanvasNodeType.Group), node("图片", CanvasNodeType.Image, "组"), node("文案", CanvasNodeType.Text, "组"), node("其他")];
 const toolbarProps = { viewport: { x: 0, y: 0, k: 1 }, showToolbar: true, canGroup: true, canUngroup: true, onGroup: noop, onUngroup: noop, onArrange: noop, arrangeDisabled: { distributeHorizontal: true, distributeVertical: true } };
 
-beforeEach(() => { api.session = 1; api.export.mockReset().mockResolvedValue(undefined); api.info.mockReset(); api.success.mockReset(); api.error.mockReset(); api.loading.mockReset().mockReturnValue(noop); panelState.closePanel.mockReset(); });
-afterEach(cleanup);
+beforeEach(() => {
+    api.session = 1; api.export.mockReset().mockResolvedValue(undefined); api.info.mockReset(); api.success.mockReset(); api.error.mockReset(); api.loading.mockReset().mockReturnValue(noop); panelState.closePanel.mockReset();
+    vi.stubGlobal("matchMedia", (media: string) => ({ matches: true, media, addEventListener: noop, removeEventListener: noop }));
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 test("选区包含组和组内成员时完整下载并按节点去重", async () => {
     render(<CanvasSelectionToolbar {...toolbarProps} nodes={[nodes[0], nodes[1]]} allNodes={nodes} />);
@@ -129,5 +132,5 @@ test("手机侧栏关闭按钮与遮罩共用现有关闭动作，桌面调整�
     fireEvent.click(screen.getByRole("button", { name: "关闭画布侧栏" }));
     fireEvent.click(screen.getByRole("button", { name: "关闭画布侧栏遮罩" }));
     expect(panelState.closePanel).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("button", { name: "canvas.sidePanel.resize" })).toHaveClass("hidden", "md:block");
+    expect(screen.getByRole("button", { name: "canvas.sidePanel.resize" })).toHaveClass("hidden", "lg:block");
 });

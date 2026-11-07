@@ -77,7 +77,7 @@ export default function AdminPlaygroundPage() {
     const selectedChannel = activeChannels.find((c) => c.id === selectedChannelId);
 
     return (
-        <div className="flex h-full min-h-full w-full flex-col p-4 sm:p-5 lg:p-6 lg:overflow-hidden">
+        <div className="flex min-h-full w-full min-w-0 flex-col p-4 sm:p-5 lg:h-full lg:p-6 lg:overflow-hidden">
             {/* 顶部标题栏 */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3.5 dark:border-stone-800 shrink-0">
                 <div>
@@ -104,9 +104,9 @@ export default function AdminPlaygroundPage() {
             </div>
 
             {/* 主体两栏自适应撑满容器 */}
-            <div className="mt-4 grid flex-1 min-h-0 gap-5 lg:grid-cols-12 lg:overflow-hidden">
+            <div className="mt-4 grid min-h-0 min-w-0 flex-1 gap-5 lg:grid-cols-12 lg:overflow-hidden">
                 {/* 左侧表单配置面板 */}
-                <div className="flex flex-col h-full overflow-hidden rounded-xl border border-stone-200 bg-background lg:col-span-5 xl:col-span-4 dark:border-stone-800 shadow-sm">
+                <div className="flex min-w-0 flex-col overflow-hidden rounded-xl lg:h-full border border-stone-200 bg-background lg:col-span-5 xl:col-span-4 dark:border-stone-800 shadow-sm">
                     <div className="border-b border-stone-200 px-4 py-3 dark:border-stone-800 flex items-center justify-between">
                         <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">请求参数</span>
                         {selectedChannel ? (
@@ -249,7 +249,7 @@ export default function AdminPlaygroundPage() {
                 </div>
 
                 {/* 右侧结果交互主面板 */}
-                <div className="flex flex-col h-full overflow-hidden rounded-xl border border-stone-200 bg-background lg:col-span-7 xl:col-span-8 dark:border-stone-800 shadow-sm">
+                <div className="flex min-w-0 flex-col overflow-hidden rounded-xl lg:h-full border border-stone-200 bg-background lg:col-span-7 xl:col-span-8 dark:border-stone-800 shadow-sm">
                     <div className="border-b border-stone-200 px-5 py-3 dark:border-stone-800 flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-2">
                             <Sparkles className="size-4 text-emerald-500" />
@@ -331,7 +331,7 @@ export default function AdminPlaygroundPage() {
                                 ) : null}
                                 {result.ok && result.text ? (
                                     <div className="rounded-xl border border-stone-200 bg-stone-50/40 p-4 dark:border-stone-800 dark:bg-stone-900/30">
-                                        <div className="mb-2 flex items-center justify-between">
+                                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                             <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">文本输出 (Formatted Output)</span>
                                             <Button
                                                 type="text"
@@ -343,7 +343,7 @@ export default function AdminPlaygroundPage() {
                                                 复制内容
                                             </Button>
                                         </div>
-                                        <div className="rounded-lg border border-stone-200 bg-white p-4 font-sans text-sm leading-relaxed text-stone-900 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 whitespace-pre-wrap select-text">
+                                        <div className="rounded-lg border border-stone-200 bg-white p-4 font-sans text-sm leading-relaxed text-stone-900 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 whitespace-pre-wrap break-words select-text">
                                             {result.text}
                                         </div>
                                     </div>

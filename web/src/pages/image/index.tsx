@@ -533,7 +533,7 @@ export default function ImagePage() {
                             <p className="mt-2 text-xs leading-5 text-muted-foreground">输入在当前会话跨页面保留，刷新页面后清空。</p>
                             <div className="mt-6 space-y-5">
                                 <div>
-                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                         <span className="text-base font-semibold">{t("workbench.prompt")}</span>
                                         <div className="flex gap-2">
                                             <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
@@ -548,7 +548,7 @@ export default function ImagePage() {
                                 </div>
 
                                 <div className="min-w-0">
-                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                         <span className="text-base font-semibold">{t("imageWorkbench.references")}</span>
                                         <div className="flex gap-2">
                                             <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
@@ -627,13 +627,13 @@ export default function ImagePage() {
                         </div>
                     </div>
 
-                    <div className={`thin-scrollbar min-h-0 min-w-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 ${workbenchView.view === "results" ? "block" : "hidden"} @min-[1024px]/workbench:block @min-[1024px]/workbench:p-5`} aria-label="生成结果">
-                        <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className={`@container/results thin-scrollbar min-h-0 min-w-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 ${workbenchView.view === "results" ? "block" : "hidden"} @min-[1024px]/workbench:block @min-[1024px]/workbench:p-5`} aria-label="生成结果">
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
                                 {previewLog ? <Button type="text" size="small" disabled={generating} onClick={() => void loadBatchRef.current(previewLog.id, true)}>用此批次再创作</Button> : null}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                                 {failedResultIndexes.length > 1 ? (
                                     <Button size="small" danger icon={<RefreshCw className="size-3.5" />} onClick={() => void retryResults(failedResultIndexes)}>
                                         {t("imageWorkbench.retryFailed", { count: failedResultIndexes.length })}
@@ -649,7 +649,7 @@ export default function ImagePage() {
                         </div>
                         <Button type="text" className="!mb-3 !px-0 @min-[1024px]/workbench:!hidden" onClick={() => workbenchView.selectView("create")}>继续调整</Button>
                         {results.length ? (
-                            <div className="grid gap-4 sm:grid-cols-2 @min-[1536px]/workbench:grid-cols-3">
+                            <div className="grid gap-4 @min-[520px]/results:grid-cols-2 @min-[800px]/results:grid-cols-3">
                                 {results.map((result, index) =>
                                     result.status === "success" && result.image ? (
                                         <ResultImageCard key={result.id} image={result.image} index={index} onEdit={addResultToReferences} onDownload={downloadImage} onSaveAsset={saveResultToAssets} />
@@ -684,7 +684,7 @@ export default function ImagePage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title={t("workbench.logs")} placement="bottom" size="min(82dvh, 736px)" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel
                     logs={logs}
                     variant="image"
@@ -696,7 +696,7 @@ export default function ImagePage() {
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
             </Drawer>
-            <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title={t("workbench.settings")} placement="bottom" size="82dvh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="space-y-4 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} />
                 </div>
@@ -743,7 +743,7 @@ function ResultImageCard({
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             <Image src={previewUrlFor(image.storageKey) || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
-                <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
+                <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     {image.width && image.height ? <span>{image.width}x{image.height}</span> : null}
                     {image.bytes ? <span>{formatBytes(image.bytes)}</span> : null}
                     <span>{formatDuration(image.durationMs)}</span>

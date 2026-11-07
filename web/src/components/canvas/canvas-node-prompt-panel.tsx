@@ -86,15 +86,15 @@ export function CanvasNodePromptPanel({ node, nodes, connections, readOnly = fal
                 references={mentionReferences}
                 onChange={updatePrompt}
                 onSubmit={submit}
-                className="thin-scrollbar h-40 w-full cursor-text resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
+                className="thin-scrollbar h-24 w-full cursor-text resize-none overflow-y-auto overscroll-contain rounded-xl px-3 py-2 text-base leading-6 outline-none md:h-40 md:text-sm md:leading-5"
                 style={{ background: "transparent", color: theme.node.text }}
                 placeholder={t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`)}
             />
 
-            <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
+            <div className="mt-2 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 md:gap-2">
                     <Tooltip title={t("canvas.promptPanel.expandEditor")}>
-                        <Button type="text" className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-3.5" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
+                        <Button type="text" className="!h-10 !w-10 !min-w-10 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-3.5" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
                     </Tooltip>
                     <CanvasPromptLibrary onSelect={updatePrompt} />
                     {mode === "image" ? (
@@ -156,7 +156,7 @@ export function CanvasNodePromptPanel({ node, nodes, connections, readOnly = fal
                         value={prompt}
                         references={mentionReferences}
                         onChange={updatePrompt}
-                        className="thin-scrollbar h-[52dvh] min-h-80 w-full cursor-text overflow-y-auto rounded-xl border p-4 text-[15px] leading-6 outline-none"
+                        className="thin-scrollbar h-[52dvh] min-h-0 w-full cursor-text overflow-y-auto overscroll-contain rounded-xl border p-3 text-base leading-6 outline-none sm:p-4"
                         style={{ background: "transparent", borderColor: theme.toolbar.border, color: theme.node.text }}
                         placeholder={t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`)}
                     />

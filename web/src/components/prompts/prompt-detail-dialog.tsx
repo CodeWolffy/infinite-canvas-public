@@ -45,8 +45,8 @@ export function PromptDetailDialog({ prompt, onClose }: { prompt: Prompt | null;
                                 <h3 className="text-sm font-medium text-foreground">提示词</h3>
                                 <Button type="text" size="small" icon={<Copy className="size-3.5" />} onClick={() => copyText(prompt.prompt, t("common.promptCopied"))}>{t("common.copy")}</Button>
                             </div>
-                            {prompt.preview ? <pre className="mb-3 whitespace-pre-wrap rounded-lg bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">{prompt.preview}</pre> : null}
-                            <p className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm leading-7 text-foreground">{prompt.prompt}</p>
+                            {prompt.preview ? <pre className="mb-3 whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">{prompt.preview}</pre> : null}
+                            <p className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-7 text-foreground">{prompt.prompt}</p>
                         </section>
                         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-border pt-4 text-xs">
                             <dt className="text-muted-foreground">模型</dt><dd className="break-words text-right text-foreground">{prompt.imageModel || "创作时选择"}</dd>

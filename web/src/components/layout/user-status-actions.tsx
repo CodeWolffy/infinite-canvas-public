@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, type CSSProperties } from "react";
 import { Dropdown } from "antd";
-import { Activity, BookOpen, CircleUserRound, Ellipsis, Keyboard, ListTodo, LogOut, Puzzle, Settings2, ShieldCheck } from "lucide-react";
+import { Activity, BookOpen, CircleUserRound, Ellipsis, History, Keyboard, ListTodo, LogOut, Moon, Puzzle, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -34,9 +34,12 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const sessionVersion = useUserStore((state) => state.sessionVersion);
     const [preferencesOpen, setPreferencesOpen] = useState(false);
     const [moreOpen, setMoreOpen] = useState(false);
+    const [versionOpen, setVersionOpen] = useState(false);
     const [tasksSession, setTasksSession] = useState<number | null>(null);
     const [pluginsSession, setPluginsSession] = useState<number | null>(null);
-    const naturalIconClass = "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
+    const naturalIconClass = "inline-flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 sm:size-7 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
+    const secondaryActionClass = variant === "canvas" ? "hidden @min-[1024px]/canvas:inline-flex" : "hidden sm:inline-flex";
+    const compactMenuClass = variant === "canvas" ? undefined : "sm:!hidden";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
     const versionStyle = iconStyle;
     const locale = i18n.resolvedLanguage as AppLocale;
@@ -45,40 +48,47 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const modelStatusLabel = t("topNav.modelStatus");
 
     return (
-        <div className="inline-flex shrink-0 items-center gap-1">
-            <Link to="/status" className={cn(naturalIconClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} aria-label={modelStatusLabel} title={modelStatusLabel}>
+        <div className="inline-flex shrink-0 items-center gap-0.5 sm:gap-1">
+            <Link to="/status" className={cn(naturalIconClass, secondaryActionClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} aria-label={modelStatusLabel} title={modelStatusLabel}>
                 <Activity className="size-4" /><span className="hidden text-xs md:inline">{modelStatusLabel}</span>
             </Link>
             {user ? (
-                <button type="button" className={cn(naturalIconClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} onClick={() => setTasksSession(sessionVersion)} aria-label="我的任务" title="我的任务">
+                <button type="button" className={cn(naturalIconClass, secondaryActionClass, "!w-auto gap-1.5 px-1.5")} style={iconStyle} onClick={() => setTasksSession(sessionVersion)} aria-label="我的任务" title="我的任务">
                     <ListTodo className="size-4" /><span className="hidden text-xs md:inline">我的任务</span>
                 </button>
             ) : null}
             {user && tasksSession === sessionVersion ? <Suspense fallback={null}><GenerationTaskCenter key={sessionVersion} onClose={() => setTasksSession(null)} /></Suspense> : null}
             {variant === "canvas" ? (
-                <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => setPluginsSession(sessionVersion)} aria-label={t("topNav.plugins")} title={t("topNav.plugins")}>
+                <button type="button" className={cn(naturalIconClass, secondaryActionClass)} style={iconStyle} onClick={() => setPluginsSession(sessionVersion)} aria-label={t("topNav.plugins")} title={t("topNav.plugins")}>
                     <Puzzle className="size-4" />
                 </button>
             ) : null}
             {variant === "canvas" && pluginsSession === sessionVersion ? <Suspense fallback={null}><CanvasPluginManagerModal key={sessionVersion} open onClose={() => setPluginsSession(null)} /></Suspense> : null}
-            <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} title={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} />
+            <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={cn(naturalIconClass, secondaryActionClass)} style={iconStyle} aria-label={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} title={t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme")} />
             <NotificationCenter />
-            <VersionReleaseModal style={versionStyle} />
-            <Dropdown trigger={["click"]} open={moreOpen} onOpenChange={setMoreOpen} placement="bottomRight" menu={{ items: [
+            <VersionReleaseModal className={cn(secondaryActionClass, "shrink-0 cursor-pointer text-xs font-medium text-stone-500 transition hover:text-stone-950 dark:text-stone-400 dark:hover:text-white")} style={versionStyle} open={versionOpen} onOpenChange={setVersionOpen} />
+            <Dropdown trigger={["click"]} open={moreOpen} onOpenChange={setMoreOpen} placement="bottomRight" styles={{ root: { maxHeight: "calc(100dvh - 72px)", overflowY: "auto" } }} menu={{ className: "[&_.ant-dropdown-menu-item]:min-h-11 sm:[&_.ant-dropdown-menu-item]:min-h-0", onClick: () => setMoreOpen(false), items: [
+                { key: "status", className: compactMenuClass, icon: <Activity className="size-4" />, label: modelStatusLabel, onClick: () => navigate("/status") },
+                ...(user ? [{ key: "tasks", className: compactMenuClass, icon: <ListTodo className="size-4" />, label: "我的任务", onClick: () => setTasksSession(sessionVersion) }] : []),
+                ...(variant === "canvas" ? [{ key: "plugins", className: compactMenuClass, icon: <Puzzle className="size-4" />, label: t("topNav.plugins"), onClick: () => setPluginsSession(sessionVersion) }] : []),
+                { key: "theme", className: compactMenuClass, icon: theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />, label: t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme"), onClick: () => setTheme(theme === "dark" ? "light" : "dark") },
+                { key: "version", className: compactMenuClass, icon: <History className="size-4" />, label: t("version.viewUpdates"), onClick: () => setVersionOpen(true) },
+                ...(onOpenShortcuts ? [{ key: "shortcuts", className: compactMenuClass, icon: <Keyboard className="size-4" />, label: t("topNav.shortcuts"), onClick: onOpenShortcuts }] : []),
                 { key: "preferences", icon: <Settings2 className="size-4" />, label: t("config.preferences.generation"), onClick: () => setPreferencesOpen(true) },
                 { key: "docs", icon: <BookOpen className="size-4" />, label: <a href={DOCS_URL} target="_blank" rel="noopener noreferrer">{t("topNav.docs")}</a> },
                 { key: "language", label: languageLabel, onClick: () => void changeAppLocale(nextLocale) },
                 { key: "github", label: <a href="https://github.com/basketikun/infinite-canvas" target="_blank" rel="noopener noreferrer">GitHub</a> },
             ] }}>
-                <button type="button" className={naturalIconClass} style={iconStyle} aria-label="更多工具" title="更多工具"><Ellipsis className="size-4" /></button>
+                <button type="button" className={naturalIconClass} style={iconStyle} aria-label="更多工具" title="更多工具" aria-expanded={moreOpen}><Ellipsis className="size-4" /></button>
             </Dropdown>
             {preferencesOpen ? <Suspense fallback={null}><GenerationPreferencesModal key={sessionVersion} onClose={() => setPreferencesOpen(false)} /></Suspense> : null}
             <Dropdown
                 trigger={["click"]}
                 placement="bottomRight"
                 menu={{
+                    className: "[&_.ant-dropdown-menu-item]:min-h-11 sm:[&_.ant-dropdown-menu-item]:min-h-0",
                     items: [
-                        { key: "identity", disabled: true, label: <div className="min-w-32"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
+                        { key: "identity", disabled: true, label: <div className="min-w-32 max-w-[calc(100vw-80px)]"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
                         { type: "divider" as const },
                         { key: "userCenter", icon: <CircleUserRound className="size-4" />, label: t("userCenter.title"), onClick: () => navigate("/user/generations") },
                         ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: t("topNav.admin"), onClick: () => navigate("/admin/stats") }] : []),
@@ -89,7 +99,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
                 <button type="button" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.accountMenu")} title={user?.displayName || t("topNav.accountMenu")}><CircleUserRound className="size-4" /></button>
             </Dropdown>
             {onOpenShortcuts ? (
-                <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>
+                <button type="button" className={cn(naturalIconClass, secondaryActionClass)} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>
                     <Keyboard className="size-4" />
                 </button>
             ) : null}

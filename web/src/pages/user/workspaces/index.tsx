@@ -205,14 +205,14 @@ export default function WorkspacesPage() {
     };
 
     return (
-        <div className="mx-auto flex h-full max-w-6xl flex-col gap-6 overflow-auto px-6 py-8">
+        <div className="mx-auto flex h-full min-w-0 max-w-6xl flex-col gap-6 overflow-auto px-4 py-6 sm:px-6 sm:py-8">
             <header className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                     <p className="text-xs text-stone-500">{t("userCenter.navWorkspaces")}</p>
                     <h1 className="mt-1 text-2xl font-semibold">{t("workspace.title")}</h1>
                 </div>
-                <div className="flex items-center gap-2">
-                    <Input value={name} onChange={(event) => setName(event.target.value)} onPressEnter={() => void create()} placeholder={t("workspace.namePlaceholder")} className="w-56" maxLength={80} />
+                <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+                    <Input value={name} onChange={(event) => setName(event.target.value)} onPressEnter={() => void create()} placeholder={t("workspace.namePlaceholder")} className="min-w-0 flex-1 sm:w-56" maxLength={80} />
                     <Button type="primary" icon={<Plus className="size-4" />} loading={creating} onClick={() => void create()}>
                         {t("workspace.create")}
                     </Button>
@@ -254,8 +254,8 @@ export default function WorkspacesPage() {
                             <div className="flex flex-col gap-8">
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div>
-                                        <h2 className="flex items-center gap-2 text-xl font-semibold">
-                                            <Users className="size-5" />
+                                        <h2 className="flex items-center gap-2 break-all text-xl font-semibold">
+                                            <Users className="size-5 shrink-0" />
                                             {detail.workspace.name}
                                         </h2>
                                         <p className="mt-1 text-xs text-stone-500">{t("workspace.myRole", { role: t(ROLE_LABEL[detail.workspace.myRole || "viewer"]) })}</p>
@@ -288,6 +288,7 @@ export default function WorkspacesPage() {
                                         size="small"
                                         rowKey="userId"
                                         pagination={false}
+                                        scroll={{ x: "max-content" }}
                                         dataSource={detail.members}
                                         columns={[
                                             { title: t("workspace.member"), render: (_, member) => `${member.displayName || member.username || member.userId}${member.username ? ` @${member.username}` : ""}` },
@@ -343,8 +344,8 @@ export default function WorkspacesPage() {
                                         ]}
                                     />
                                     {isOwner ? (
-                                        <div className="mt-3 flex items-center gap-2">
-                                            <Input value={memberName} onChange={(event) => setMemberName(event.target.value)} onPressEnter={() => void addMember()} placeholder={t("workspace.usernamePlaceholder")} className="w-56" maxLength={64} />
+                                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                                            <Input value={memberName} onChange={(event) => setMemberName(event.target.value)} onPressEnter={() => void addMember()} placeholder={t("workspace.usernamePlaceholder")} className="w-full sm:w-56" maxLength={64} />
                                             <Select
                                                 value={memberRole}
                                                 className="w-28"

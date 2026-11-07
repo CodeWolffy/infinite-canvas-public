@@ -159,6 +159,7 @@ export default function UserLogsPage() {
             <Card className="border-stone-200 dark:border-stone-800" bodyStyle={{ padding: "1rem" }}>
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                     <DatePicker.RangePicker
+                        className="w-full min-w-0 sm:w-auto"
                         showTime
                         value={range}
                         presets={[

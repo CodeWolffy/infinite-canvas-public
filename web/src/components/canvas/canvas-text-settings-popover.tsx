@@ -73,23 +73,26 @@ function TextSettingsPortal({ buttonRect, panelRef, placement, theme, config, co
     onCountChange?: (count: number) => void;
 }) {
     const { t } = useTranslation();
-    const width = 356;
+    const width = Math.min(356, window.innerWidth - 24);
     const gap = 8;
     const margin = 12;
     const alignRight = placement?.endsWith("Right");
     const alignCenter = placement === "top" || placement === "bottom";
     const left = alignCenter ? buttonRect.left + buttonRect.width / 2 - width / 2 : alignRight ? buttonRect.right - width : buttonRect.left;
-    const topPlacement = placement?.startsWith("top");
+    const spaceAbove = Math.max(0, buttonRect.top - gap - margin);
+    const spaceBelow = Math.max(0, window.innerHeight - buttonRect.bottom - gap - margin);
+    const topPlacement = placement?.startsWith("top") ? spaceAbove >= Math.min(260, spaceBelow) : spaceBelow < Math.min(260, spaceAbove);
     const style = {
         position: "fixed",
         zIndex: 1200,
         width,
         left: Math.max(margin, Math.min(window.innerWidth - width - margin, left)),
-        ...(topPlacement ? { bottom: window.innerHeight - buttonRect.top + gap } : { top: buttonRect.bottom + gap }),
+        ...(topPlacement ? { bottom: window.innerHeight - buttonRect.top + gap, maxHeight: spaceAbove } : { top: buttonRect.bottom + gap, maxHeight: spaceBelow }),
         background: theme.toolbar.panel,
         borderRadius: 18,
         boxShadow: "0 18px 54px rgba(28, 25, 23, 0.16)",
         padding: 18,
+        overflowY: "auto",
         color: theme.node.text,
     } as const;
 

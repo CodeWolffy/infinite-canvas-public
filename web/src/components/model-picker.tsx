@@ -65,7 +65,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
                 showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }}
                 popupMatchSelectWidth={false}
-                styles={{ popup: { root: { zIndex: 1200, minWidth: "20rem", maxWidth: "calc(100vw - 24px)" } } }}
+                styles={{ popup: { root: { zIndex: 1200, minWidth: "min(20rem, calc(100vw - 24px))", maxWidth: "calc(100vw - 24px)" } } }}
                 options={options}
                 notFoundContent={options.length ? "没有匹配的模型，试试模型名称或用途关键词" : emptyModelLabel(capability, isAdmin)}
                 labelRender={(option) => <span className="canvas-model-picker-text min-w-0 truncate">{unavailable ? unavailableLabel || "已选模型不可用" : option.label}</span>}

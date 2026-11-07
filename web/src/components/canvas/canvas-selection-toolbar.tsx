@@ -70,7 +70,8 @@ export function CanvasSelectionToolbar({
             </svg>
             {showActions ? (
                 <div
-                    className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border text-[15px] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+                    className="thin-scrollbar absolute z-[70] flex h-12 max-w-[calc(100%-1rem)] items-center overflow-x-auto overscroll-x-contain rounded-xl border text-sm shadow-lg @max-[1024px]/canvas:!left-[max(0.5rem,env(safe-area-inset-left))] @max-[1024px]/canvas:right-[max(0.5rem,env(safe-area-inset-right))] @max-[1024px]/canvas:!top-[calc(3.5rem+env(safe-area-inset-top))] @min-[1024px]/canvas:-translate-x-1/2 @min-[1024px]/canvas:-translate-y-full @min-[1024px]/canvas:text-[15px] [&>*]:shrink-0"
+                    data-canvas-no-zoom
                     style={{ left: left + width / 2, top: top - 8, borderColor: theme.toolbar.border, background: theme.toolbar.panel, color: theme.toolbar.item }}
                     onMouseDown={(event) => event.stopPropagation()}
                     onPointerDown={(event) => event.stopPropagation()}

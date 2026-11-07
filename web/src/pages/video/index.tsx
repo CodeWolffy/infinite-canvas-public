@@ -504,7 +504,7 @@ export default function VideoPage() {
                             <p className="mt-2 text-xs leading-5 text-muted-foreground">输入在当前会话跨页面保留，刷新页面后清空。</p>
                             <div className="mt-6 space-y-5">
                                 <div>
-                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                         <span className="text-base font-semibold">{t("workbench.prompt")}</span>
                                         <div className="flex gap-2">
                                             <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
@@ -519,7 +519,7 @@ export default function VideoPage() {
                                 </div>
 
                                 <div className="min-w-0">
-                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                         <span className="text-base font-semibold">{t("videoWorkbench.references")}</span>
                                         <div className="flex gap-2">
                                             <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
@@ -576,7 +576,7 @@ export default function VideoPage() {
                     </div>
 
                     <div className={`thin-scrollbar min-h-0 min-w-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 ${workbenchView.view === "results" ? "block" : "hidden"} @min-[1024px]/workbench:block @min-[1024px]/workbench:p-5`} aria-label="生成结果">
-                        <div className="mb-4 flex items-center justify-between gap-3">
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                             <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
                                 {previewLog ? <Button type="text" size="small" disabled={generating} onClick={() => void loadBatchRef.current(previewLog.id, true)}>用此批次再创作</Button> : null}
                             {activeBatchIds.length || generating ? <Tag className="m-0 px-2 py-1">{t("workbench.generating")}</Tag> : null}
@@ -610,10 +610,10 @@ export default function VideoPage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title={t("workbench.logs")} placement="bottom" size="min(82dvh, 736px)" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel logs={logs} variant="video" selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={deleteSelectedLogs} onPreviewLog={previewGenerationLog} />
             </Drawer>
-            <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title={t("workbench.settings")} placement="bottom" size="82dvh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="space-y-4 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateGenerationConfig} unavailableLabel={ambiguousDraftModel ? "请明确选择模型" : undefined} />
                 </div>
@@ -645,7 +645,7 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
     const addToCanvas = useAddToCanvas();
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <video src={video.url} controls className="aspect-video w-full bg-black object-contain" />
+            <video src={video.url} controls playsInline className="aspect-video w-full bg-black object-contain" />
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     <span>

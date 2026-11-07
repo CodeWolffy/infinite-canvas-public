@@ -54,7 +54,7 @@ export default function PlatformSettingsPage() {
                         })
                     }
                 >
-                    <div className="grid gap-8 border-t border-border py-7 md:grid-cols-[220px_1fr]">
+                    <div className="grid gap-8 border-t border-border py-7 lg:grid-cols-[220px_minmax(0,1fr)]">
                         <div>
                             <h2 className="font-medium">每日签到</h2>
                             <p className="mt-2 text-sm leading-6 text-muted-foreground">奖励直接入账。每天按北京时间计算，每位用户只能领取一次，到账金额永久保留。</p>
@@ -63,7 +63,7 @@ export default function PlatformSettingsPage() {
                             <Form.Item name="checkinEnabled" label="开启签到奖励" valuePropName="checked">
                                 <Switch />
                             </Form.Item>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid gap-4 sm:grid-cols-2">
                                 <Form.Item name="rewardMin" label="最少奖励（元）" rules={[{ required: true }]}>
                                     <InputNumber<string> stringMode min="0" precision={6} className="!w-full" />
                                 </Form.Item>
@@ -86,7 +86,7 @@ export default function PlatformSettingsPage() {
                             </div>
                         </div>
                     </div>
-                    <div className="grid gap-8 border-t border-border py-7 md:grid-cols-[220px_1fr]">
+                    <div className="grid gap-8 border-t border-border py-7 lg:grid-cols-[220px_minmax(0,1fr)]">
                         <div>
                             <h2 className="font-medium">邀请充值返利</h2>
                             <p className="mt-2 text-sm leading-6 text-muted-foreground">好友注册后建立邀请关系，每次真实充值到账时，按当时配置的比例返给邀请人，返利余额永久有效。</p>
@@ -105,7 +105,7 @@ export default function PlatformSettingsPage() {
                             </Form.Item>
                         </div>
                     </div>
-                    <div className="grid gap-8 border-t border-border py-7 md:grid-cols-[220px_1fr]">
+                    <div className="grid gap-8 border-t border-border py-7 lg:grid-cols-[220px_minmax(0,1fr)]">
                         <div>
                             <h2 className="font-medium">生成与频控</h2>
                             <p className="mt-2 text-sm leading-6 text-muted-foreground">限制对全部服务实例生效。超限不扣款；填 0 代表取消对应限制。</p>
@@ -114,7 +114,7 @@ export default function PlatformSettingsPage() {
                             <Form.Item name="generationEnabled" label="接受新的生成任务" valuePropName="checked">
                                 <Switch />
                             </Form.Item>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid gap-4 sm:grid-cols-2">
                                 <Form.Item name="userRPM" label="每账号每分钟提交次数" rules={[{ required: true }]}>
                                     <InputNumber min={0} precision={0} className="!w-full" />
                                 </Form.Item>
@@ -148,7 +148,7 @@ export default function PlatformSettingsPage() {
                             </Form.Item>
                         </div>
                     </div>
-                    <div className="grid gap-8 border-t border-border py-7 md:grid-cols-[220px_1fr]">
+                    <div className="grid gap-8 border-t border-border py-7 lg:grid-cols-[220px_minmax(0,1fr)]">
                         <div>
                             <h2 className="font-medium">充值订单</h2>
                             <p className="mt-2 text-sm leading-6 text-muted-foreground">修改后仅影响新订单。过期订单会先查单确认，再关闭。</p>

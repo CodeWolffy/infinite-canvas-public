@@ -26,7 +26,7 @@ function tagClass(tag: string) {
     return TAG_CLASS[tag.trim().toLowerCase()] || "border-stone-200 bg-stone-100 text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300";
 }
 
-export function AnnouncementCenter() {
+export function AnnouncementCenter({ className }: { className?: string }) {
     const { t } = useTranslation();
     const [announcement, setAnnouncement] = useState<Announcement | null>(null);
     const [open, setOpen] = useState(false);
@@ -111,8 +111,8 @@ export function AnnouncementCenter() {
     return (
         <>
             <Tooltip title={t("announcement.open")}>
-                <Badge dot offset={[-4, 4]} count={unread ? 1 : 0}>
-                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bell className="size-4" />} onClick={handleOpen} aria-label={t("announcement.open")} />
+                <Badge className={className} dot offset={[-4, 4]} count={unread ? 1 : 0}>
+                    <Button type="text" shape="circle" className="!h-10 !w-10 !min-w-10 sm:!h-8 sm:!w-8 sm:!min-w-8" icon={<Bell className="size-4" />} onClick={handleOpen} aria-label={t("announcement.open")} />
                 </Badge>
             </Tooltip>
             <Modal
@@ -122,6 +122,7 @@ export function AnnouncementCenter() {
                 width={580}
                 centered
                 destroyOnHidden
+                styles={{ body: { maxHeight: "65dvh", overflowY: "auto" } }}
                 footer={
                     <div className="flex items-center justify-end">
                         <Button type="primary" onClick={close}>{t("announcement.confirm")}</Button>

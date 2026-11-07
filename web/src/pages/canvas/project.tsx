@@ -3,6 +3,7 @@ import type { ChangeEvent as ReactChangeEvent, Dispatch, MouseEvent as ReactMous
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { getGenerationBatch, retryGenerationTask, type GenerationTask } from "@/services/api/generation";
@@ -67,6 +68,7 @@ import { buildCanvasGraph } from "@/lib/canvas/canvas-graph";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import { applyGroupSelection, applyUngroupSelection, canGroupSelectedNodes, canUngroupSelectedNodes, collectGroupMemberNodes, findContainingGroupId, findGroupDropTarget, focusViewportForNode, getConnectionTargetAnchor, getGroupWrapRect, normalizeConnection, snapNodesIntoGroup } from "@/lib/canvas/canvas-node-geometry";
+import { measureFocusFrame } from "@/lib/canvas/canvas-focus-frame";
 import {
     audioExtension,
     buildAngleLabel,
@@ -160,18 +162,6 @@ export default function CanvasPage() {
     return <InfiniteCanvasPage />;
 }
 
-function measureFocusFrame(container: HTMLDivElement | null, nodeId: string) {
-    if (!container) return {};
-    const id = CSS.escape(nodeId);
-    const nodeRect = container.querySelector<HTMLElement>(`[data-node-id="${id}"]`)?.getBoundingClientRect();
-    const panelRect = container.querySelector<HTMLElement>(`[data-node-id="${id}"] [data-node-panel]`)?.getBoundingClientRect();
-    const toolbarRect = document.querySelector<HTMLElement>(`[data-node-toolbar="${id}"]`)?.getBoundingClientRect();
-    const dockRect = document.querySelector<HTMLElement>("[data-canvas-bottom-toolbar]")?.getBoundingClientRect();
-    const below = nodeRect && panelRect ? panelRect.bottom - nodeRect.bottom : 0;
-    const above = nodeRect && toolbarRect ? nodeRect.top - toolbarRect.top : 0;
-    return { above, below, bottomInset: dockRect && below > 0 ? Math.max(0, container.getBoundingClientRect().bottom - dockRect.top) : 0 };
-}
-
 function InfiniteCanvasPage() {
     const { message, modal } = App.useApp();
     const { t } = useTranslation();
@@ -204,6 +194,7 @@ function InfiniteCanvasPage() {
     const restoredViewportRef = useRef<ViewportTransform | null>(null);
     const rafRef = useRef<number | null>(null);
     const nodeDraggingRef = useRef(false);
+    const interactionPointerRef = useRef<{ id: number; element: Element } | null>(null);
     const dragRef = useRef<{
         isDraggingNode: boolean;
         hasMoved: boolean;
@@ -637,6 +628,9 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (canEdit) return;
         canEditRef.current = false;
+        const pointer = interactionPointerRef.current;
+        interactionPointerRef.current = null;
+        if (pointer?.element.hasPointerCapture(pointer.id)) pointer.element.releasePointerCapture(pointer.id);
         dragRef.current.isDraggingNode = false;
         nodeDraggingRef.current = false;
         historyPausedRef.current = false;
@@ -1294,6 +1288,7 @@ function InfiniteCanvasPage() {
             setDialogNodeId(null);
             if (pendingConnectionCreateRef.current) cancelPendingConnectionCreate();
             if (event.button !== 0) return;
+            interactionPointerRef.current = { id: event.pointerId, element: event.currentTarget };
 
             const world = screenToCanvas(event.clientX, event.clientY);
             const nextSelectionBox = {
@@ -1333,11 +1328,11 @@ function InfiniteCanvasPage() {
     }, []);
 
     // Capture-phase selection lets any inner element, including textarea or iframe, select the node and show its toolbar.
-    // It only selects; body onMouseDown still starts dragging, so text selection inside editors does not drag the node.
+    // It only selects; the body's pointer handler starts dragging, leaving editors interactive.
     // Cache the capture result for the following bubbling drag handler to avoid applying shift-selection twice.
     const pendingSelectionRef = useRef<Set<string> | null>(null);
     const handleNodeSelectCapture = useCallback(
-        (event: ReactMouseEvent, nodeId: string) => {
+        (event: ReactPointerEvent, nodeId: string) => {
             if (event.button !== 0) return;
             setContextMenu(null);
             setHoveredNodeId(null);
@@ -1348,9 +1343,12 @@ function InfiniteCanvasPage() {
         [selectNodeByEvent],
     );
 
-    const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
+    const handleNodePointerDown = useCallback((event: ReactPointerEvent, nodeId: string) => {
         event.stopPropagation();
-        if (!canEditRef.current) return;
+        if (event.button !== 0 || !canEditRef.current) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        interactionPointerRef.current = { id: event.pointerId, element: event.currentTarget };
         // Capture already selected the node; this only starts dragging, with a fallback selection if capture did not run.
         const currentNodes = nodesRef.current;
         const nextSelected = pendingSelectionRef.current ?? selectNodeByEvent(event, nodeId).nextSelected;
@@ -1391,7 +1389,7 @@ function InfiniteCanvasPage() {
         if (!canEditRef.current) return;
         if (!dragRef.current.isDraggingNode) return;
 
-        const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.size === 1;
+        const wasClick = clientX != null && clientY != null && !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.size === 1;
         const clickedNodeId = dragRef.current.initialSelectedNodes.keys().next().value;
         const currentViewport = viewportRef.current;
         const dx = clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k;
@@ -1403,6 +1401,12 @@ function InfiniteCanvasPage() {
         nodeDraggingRef.current = false;
         setIsNodeDragging(false);
         setDropTargetGroupId(null);
+        if (clientX == null || clientY == null) {
+            setNodes((prev) => prev.map((node) => {
+                const initial = initialPositions.get(node.id);
+                return initial ? { ...node, position: initial } : node;
+            }));
+        }
         if (dragRef.current.hasMoved && clientX != null && clientY != null) {
             setNodes((prev) => {
                 const moved = prev.map((node) => {
@@ -1440,8 +1444,9 @@ function InfiniteCanvasPage() {
         }
     }, []);
 
-    const handleGlobalMouseMove = useCallback(
-        (event: MouseEvent) => {
+    const handleNodePointerMove = useCallback(
+        (event: PointerEvent) => {
+            if (interactionPointerRef.current?.id !== event.pointerId) return;
             const currentViewport = viewportRef.current;
 
             if (dragRef.current.isDraggingNode) {
@@ -1453,7 +1458,8 @@ function InfiniteCanvasPage() {
                     dragRef.current.hasMoved = true;
                 }
 
-                // Drop-target detection and node updates both run once per frame; mousemove can fire far more often than the display refreshes.
+                if (!dragRef.current.hasMoved) return;
+                // Drop-target detection and node updates both run once per frame.
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
                 rafRef.current = requestAnimationFrame(() => {
                     const previewNodes = nodesRef.current.map((node) => {
@@ -1479,11 +1485,12 @@ function InfiniteCanvasPage() {
                 setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             }
         },
-        [finishNodeDrag, getConnectionDropTarget, screenToCanvas],
+        [getConnectionDropTarget, screenToCanvas],
     );
 
     const handleGlobalPointerMove = useCallback(
         (event: PointerEvent) => {
+            if (interactionPointerRef.current?.id !== event.pointerId) return;
             const currentSelection = selectionBoxRef.current;
             if (!currentSelection) return;
 
@@ -1515,8 +1522,10 @@ function InfiniteCanvasPage() {
         [screenToCanvas],
     );
 
-    const handleGlobalMouseUp = useCallback(
-        (event: MouseEvent) => {
+    const handleGlobalPointerUp = useCallback(
+        (event: PointerEvent) => {
+            if (interactionPointerRef.current?.id !== event.pointerId) return;
+            interactionPointerRef.current = null;
             finishNodeDrag(event.clientX, event.clientY);
 
             selectionBoxRef.current = null;
@@ -1541,24 +1550,37 @@ function InfiniteCanvasPage() {
         [connectNodes, finishNodeDrag, getConnectionDropTarget, screenToCanvas, setConnecting],
     );
 
+    const cancelCanvasGesture = useCallback(() => {
+        const pointer = interactionPointerRef.current;
+        interactionPointerRef.current = null;
+        finishNodeDrag();
+        pendingSelectionRef.current = null;
+        selectionBoxRef.current = null;
+        setSelectionBox(null);
+        cancelPendingConnectionCreate();
+        if (pointer?.element.hasPointerCapture(pointer.id)) pointer.element.releasePointerCapture(pointer.id);
+    }, [cancelPendingConnectionCreate, finishNodeDrag]);
+
     useEffect(() => {
-        const handlePointerUp = (event: PointerEvent) => finishNodeDrag(event.clientX, event.clientY);
-        const cancelNodeDrag = () => finishNodeDrag();
-        window.addEventListener("mousemove", handleGlobalMouseMove);
-        window.addEventListener("mouseup", handleGlobalMouseUp);
-        window.addEventListener("pointerup", handlePointerUp);
-        window.addEventListener("pointercancel", cancelNodeDrag);
-        window.addEventListener("blur", cancelNodeDrag);
+        const handleCancel = (event: PointerEvent) => {
+            if (event.type === "lostpointercapture" && event.target !== interactionPointerRef.current?.element) return;
+            if (event.pointerId === interactionPointerRef.current?.id) cancelCanvasGesture();
+        };
+        window.addEventListener("pointermove", handleNodePointerMove);
+        window.addEventListener("pointerup", handleGlobalPointerUp);
+        window.addEventListener("pointercancel", handleCancel);
+        window.addEventListener("lostpointercapture", handleCancel);
+        window.addEventListener("blur", cancelCanvasGesture);
         window.addEventListener("pointermove", handleGlobalPointerMove);
         return () => {
-            window.removeEventListener("mousemove", handleGlobalMouseMove);
-            window.removeEventListener("mouseup", handleGlobalMouseUp);
-            window.removeEventListener("pointerup", handlePointerUp);
-            window.removeEventListener("pointercancel", cancelNodeDrag);
-            window.removeEventListener("blur", cancelNodeDrag);
+            window.removeEventListener("pointermove", handleNodePointerMove);
+            window.removeEventListener("pointerup", handleGlobalPointerUp);
+            window.removeEventListener("pointercancel", handleCancel);
+            window.removeEventListener("lostpointercapture", handleCancel);
+            window.removeEventListener("blur", cancelCanvasGesture);
             window.removeEventListener("pointermove", handleGlobalPointerMove);
         };
-    }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
+    }, [cancelCanvasGesture, handleNodePointerMove, handleGlobalPointerUp, handleGlobalPointerMove]);
 
     const { copySelectedNodes, pasteCopiedNodes, pasteSystemClipboard, createImageFileNode, handleDrop } = useCanvasClipboard({
         canEdit: () => canEditRef.current && loadedProjectIdRef.current === projectId && accessRoleRef.current !== "viewer" && loadedSessionVersionRef.current === useUserStore.getState().sessionVersion,
@@ -1629,9 +1651,12 @@ function InfiniteCanvasPage() {
     });
 
     const handleConnectStart = useCallback(
-        (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
+        (event: ReactPointerEvent, nodeId: string, handleType: "source" | "target") => {
+            if (event.button !== 0 || !canEditRef.current) return;
             event.stopPropagation();
-            if (!canEditRef.current) return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            interactionPointerRef.current = { id: event.pointerId, element: event.currentTarget };
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             setConnecting({ nodeId, handleType });
             connectionTargetNodeIdRef.current = null;
@@ -3288,6 +3313,9 @@ function InfiniteCanvasPage() {
     );
 
     const hoverPreviewNode = hoverPreviewNodeId ? nodeById.get(hoverPreviewNodeId) || null : null;
+    const compactCanvas = size.width < 1024;
+    const dialogNode = dialogNodeId ? nodeById.get(dialogNodeId) : undefined;
+    const mobilePanelNode = compactCanvas && !isNodeResizing && !isNodeDragging && !selectionBox && dialogNode && dialogNode.type !== CanvasNodeType.Group && !getNodeDefinition(dialogNode.type)?.hidePanel ? dialogNode : null;
     const hoverPreviewMedia =
         projectReady && hoverPreviewNode && (hoverPreviewNode.type === CanvasNodeType.Image || hoverPreviewNode.type === CanvasNodeType.Video) && hoverPreviewNode.metadata?.content
             ? {
@@ -3312,7 +3340,7 @@ function InfiniteCanvasPage() {
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={(nodeId) => { const node = nodeById.get(nodeId); if (node) handleNodeViewImage(node); }} onHoverNode={setHoverPreviewNodeId} onInsertAsset={handleAssetInsert} />
-            <section className="relative min-w-0 flex-1 overflow-hidden">
+            <section className="relative min-w-0 flex-1 overflow-hidden @container/canvas">
                 {canEdit && !nodes.length ? <CanvasEmptyGuide onDescribe={(prompt) => createNode(CanvasNodeType.Image, undefined, prompt)} onUpload={() => handleUploadRequest()} onTemplates={() => setTemplatesOpen(true)} /> : null}
                 <TemplatePickerModal open={templatesOpen && canEdit && !nodes.length} onClose={() => setTemplatesOpen(false)} onCreated={(project) => {
                     if (!canEditRef.current || loadedProjectIdRef.current !== projectId || loadedSessionVersionRef.current !== useUserStore.getState().sessionVersion) return;
@@ -3361,6 +3389,7 @@ function InfiniteCanvasPage() {
                         if (!referencePickerNodeId) handleCanvasMouseDown(event);
                     }}
                     onCanvasDeselect={referencePickerNodeId ? undefined : deselectCanvas}
+                    onGestureStart={cancelCanvasGesture}
                     onCanvasDoubleClick={(event) => {
                         if (referencePickerNodeId || !canEditRef.current) return;
                         setContextMenu(null);
@@ -3403,7 +3432,7 @@ function InfiniteCanvasPage() {
                             isConnectionTarget={connectionTargetNodeId === node.id}
                             isConnecting={Boolean(connectingParams)}
                             referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes, graph) ? "disabled" : "available"}
-                            showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
+                            showPanel={!compactCanvas && !isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
                             groupChildCount={groupChildCountById.get(node.id) || 0}
                             isGroupDropTarget={dropTargetGroupId === node.id}
                             batchExpanded={expandedBatchNodeIds.has(node.id)}
@@ -3413,7 +3442,8 @@ function InfiniteCanvasPage() {
                             registryVersion={nodeRegistryVersion}
                             renderPanel={renderNodePanel}
                             renderNodeContent={renderNodeContentPanel}
-                            onMouseDown={handleNodeMouseDown}
+                            readOnly={!canEdit}
+                            onPointerDown={handleNodePointerDown}
                             onSelectCapture={handleNodeSelectCapture}
                             onHoverStart={handleNodeHoverStart}
                             onHoverEnd={handleNodeHoverEnd}
@@ -3463,6 +3493,16 @@ function InfiniteCanvasPage() {
                     ) : null}
                 </InfiniteCanvas>
 
+                {mobilePanelNode ? (
+                    <div data-node-panel={mobilePanelNode.id} data-canvas-no-zoom className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(0.5rem,env(safe-area-inset-left))] right-[max(0.5rem,env(safe-area-inset-right))] z-[70] flex max-h-[min(60dvh,calc(100%-4rem-env(safe-area-inset-top)))] flex-col overflow-hidden rounded-2xl" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                        <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-1">
+                            <span className="min-w-0 truncate text-xs font-medium">{mobilePanelNode.title || t("canvas.node.untitled")}</span>
+                            <button type="button" aria-label={t("common.close")} className="grid size-9 shrink-0 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10" onClick={() => setDialogNodeId(null)}><X className="size-4" /></button>
+                        </div>
+                        <div className="min-h-0 overflow-y-auto overscroll-contain">{renderNodePanel(mobilePanelNode)}</div>
+                    </div>
+                ) : null}
+
                 {referencePickerNodeId ? <button type="button" className="absolute left-1/2 top-4 z-[90] -translate-x-1/2 rounded-md px-4 py-2 text-sm font-medium transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} onClick={exitNodeReferenceSelection}>{t("canvas.references.selectingHint")}</button> : null}
 
                 <div
@@ -3487,7 +3527,7 @@ function InfiniteCanvasPage() {
                 </div>
 
                 <CanvasNodeHoverToolbar
-                    node={readOnly || isNodeDragging || isNodeResizing || nodeImageSettingsOpen || Boolean(referencePickerNodeId) || expandedBatchNodeIds.has(toolbarNode?.id || "") ? null : toolbarNode}
+                    node={readOnly || mobilePanelNode || isNodeDragging || isNodeResizing || nodeImageSettingsOpen || Boolean(referencePickerNodeId) || expandedBatchNodeIds.has(toolbarNode?.id || "") ? null : toolbarNode}
                     viewport={viewport}
                     extraTools={toolbarNode ? buildNodeToolbarItems(toolbarNode) : undefined}
                     onKeep={keepNodeToolbar}
@@ -3520,7 +3560,7 @@ function InfiniteCanvasPage() {
                         readOnly={readOnly}
                         nodes={selectedNodes}
                         viewport={viewport}
-                        showToolbar={!isNodeDragging && !isNodeResizing}
+                        showToolbar={!mobilePanelNode && !isNodeDragging && !isNodeResizing}
                         canGroup={canGroupSelection}
                         canUngroup={canUngroupSelection}
                         onGroup={groupSelection}
@@ -3530,7 +3570,7 @@ function InfiniteCanvasPage() {
                     />
                 ) : null}
 
-                {!readOnly ? <CanvasToolbar
+                {!mobilePanelNode ? (!readOnly ? <CanvasToolbar
                     selectedCount={selectedNodeIds.size}
                     canvasTool={canvasTool}
                     onFocusSelected={focusSelectedNode}
@@ -3551,11 +3591,11 @@ function InfiniteCanvasPage() {
                     onCanvasToolChange={setCanvasTool}
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
-                /> : <div className="pointer-events-auto absolute bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg px-3 py-2 text-sm" style={{ background: theme.toolbar.panel, color: theme.node.muted }}>{t("workspace.readOnlyBadge")}</div>}
+                /> : <div className="pointer-events-auto absolute bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg px-3 py-2 text-sm" style={{ background: theme.toolbar.panel, color: theme.node.muted }}>{t("workspace.readOnlyBadge")}</div>) : null}
 
-                {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
+                {isMiniMapOpen && !mobilePanelNode ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
-                <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                {!mobilePanelNode ? <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} /> : null}
 
                 {contextMenu ? (
                     <CanvasNodeContextMenu

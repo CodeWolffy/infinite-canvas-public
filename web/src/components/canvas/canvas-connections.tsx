@@ -36,7 +36,7 @@ export function ConnectionPath({
                 stroke="transparent"
                 strokeWidth="16"
                 fill="none"
-                style={{ cursor: "pointer", pointerEvents: "stroke" }}
+                style={{ cursor: "pointer", pointerEvents: "stroke", touchAction: "none" }}
                 onClick={(event) => {
                     event.stopPropagation();
                     onSelect();

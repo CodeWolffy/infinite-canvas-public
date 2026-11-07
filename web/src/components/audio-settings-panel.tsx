@@ -18,7 +18,7 @@ type AudioSettingsPanelProps = {
     className?: string;
 };
 
-export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: AudioSettingsPanelProps) {
+export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] max-w-full space-y-4 rounded-2xl px-1 py-0.5" }: AudioSettingsPanelProps) {
     const { t } = useTranslation();
     const voice = normalizeAudioVoiceValue(config.audioVoice);
     const format = normalizeAudioFormatValue(config.audioFormat);

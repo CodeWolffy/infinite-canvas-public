@@ -21,9 +21,11 @@ function releaseTypeLabel(type: string, t: TFunction) {
 type VersionReleaseModalProps = {
     className?: string;
     style?: CSSProperties;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
 };
 
-export function VersionReleaseModal({ className, style }: VersionReleaseModalProps) {
+export function VersionReleaseModal({ className, style, open: controlledOpen, onOpenChange }: VersionReleaseModalProps) {
     const { t } = useTranslation();
     const { open, setOpen, openReleaseModal, releases } = useVersionCheck();
 
@@ -33,12 +35,12 @@ export function VersionReleaseModal({ className, style }: VersionReleaseModalPro
                 type="button"
                 className={className || "shrink-0 cursor-pointer text-xs font-medium text-stone-500 transition hover:text-stone-950 dark:text-stone-400 dark:hover:text-white"}
                 style={style}
-                onClick={openReleaseModal}
+                onClick={() => onOpenChange ? onOpenChange(true) : openReleaseModal()}
                 title={t("version.viewUpdates")}
             >
                 {APP_VERSION}
             </button>
-            <Modal title={t("version.title")} open={open} width={680} centered footer={null} onCancel={() => setOpen(false)}>
+            <Modal title={t("version.title")} open={controlledOpen ?? open} width={680} centered footer={null} onCancel={() => onOpenChange ? onOpenChange(false) : setOpen(false)}>
                 <div className="max-h-[56vh] overflow-y-auto pr-2">
                     <Timeline
                         items={releases.map((release) => ({

@@ -278,7 +278,7 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                                 </span>
                             ) : null}
                         </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                             <Tooltip title={t("userCenter.remixPrompt")}>
                                 <Button
                                     size="small"
@@ -363,7 +363,7 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                                 )}
 
                                 {task.image?.mediaId ? (
-                                    <div className="flex items-center justify-between border-t border-stone-200 p-2 text-xs dark:border-stone-800">
+                                    <div className="flex flex-wrap items-center justify-between gap-1 border-t border-stone-200 p-2 text-xs dark:border-stone-800">
                                         <span className="font-mono text-stone-400">{task.image.bytes ? formatBytes(task.image.bytes) : ""}</span>
                                         <div className="flex items-center gap-1">
                                             {!task.image.isSaved ? (

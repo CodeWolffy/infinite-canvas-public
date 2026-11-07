@@ -287,7 +287,7 @@ export default function AdminRedeemPage() {
                     <Form.Item name="note" label="备注">
                         <Input placeholder="例如：社区 9 月福利活动" />
                     </Form.Item>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid gap-3 sm:grid-cols-3">
                         <Form.Item name="amount" label="面额（元）" rules={[{ required: true, message: "请填写面额" }]}>
                             <InputNumber<string> stringMode min="0.000001" precision={6} className="!w-full" />
                         </Form.Item>

@@ -78,6 +78,7 @@ export function CanvasNodeHoverToolbar({
     onUngroup,
     extraTools = [],
 }: CanvasNodeHoverToolbarProps) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [quickImageToolIds, setQuickImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
     const [showImageToolLabels, setShowImageToolLabels] = useState(false);
     const [draftImageToolIds, setDraftImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
@@ -185,9 +186,10 @@ export function CanvasNodeHoverToolbar({
     return (
         <>
             <div
-                className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+                className="thin-scrollbar absolute z-[70] flex h-12 max-w-[calc(100%-1rem)] items-center overflow-x-auto overscroll-x-contain rounded-xl border text-sm shadow-lg @max-[1024px]/canvas:!left-[max(0.5rem,env(safe-area-inset-left))] @max-[1024px]/canvas:right-[max(0.5rem,env(safe-area-inset-right))] @max-[1024px]/canvas:!top-[calc(3.5rem+env(safe-area-inset-top))] @min-[1024px]/canvas:-translate-x-1/2 @min-[1024px]/canvas:-translate-y-full @min-[1024px]/canvas:text-[15px] [&>*]:shrink-0"
                 data-node-toolbar={node.id}
-                style={{ left, top }}
+                data-canvas-no-zoom
+                style={{ left, top, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
                 onMouseEnter={() => onKeep(node.id)}
                 onMouseLeave={() => {
                     if (!imageToolSettingsOpen) onLeave();
@@ -258,7 +260,7 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
     return (
         <Modal className="canvas-node-info-modal" title={title} open={open && Boolean(node)} centered footer={null} onCancel={onClose}>
             {node ? (
-                <div className="h-[56vh] min-h-[360px] select-text text-sm" data-canvas-shortcuts-ignore>
+                <div className="h-[56dvh] min-h-0 select-text text-sm" data-canvas-shortcuts-ignore>
                     {view === "info" ? (
                         <div className="thin-scrollbar h-full space-y-3 overflow-auto pr-1">
                             <InfoRow label="ID" value={node.id} />
@@ -290,10 +292,11 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
 
 function ToolbarAction({ title, label, icon, onClick, showLabel, active = false, danger = false }: ToolbarTool & { showLabel: boolean }) {
     const hasText = showLabel && Boolean(label);
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
     return (
-        <Tooltip title={title} placement="top" mouseEnterDelay={0.2} color="#ffffff" styles={{ root: { color: "#242529", boxShadow: "0 8px 24px rgba(15,23,42,.16)", fontSize: 13, fontWeight: 500 } }}>
-            <button type="button" className={`group relative flex h-12 items-center whitespace-nowrap px-1.5 ${danger ? "text-[#ef4444]" : ""}`} onClick={onClick} aria-label={title}>
-                <span className={`flex h-9 items-center ${hasText ? "gap-2 px-2.5" : "justify-center px-2"} rounded-lg transition group-hover:bg-[#f0f0f1] ${active ? "bg-[#eeeeef]" : ""}`}>
+        <Tooltip title={title} placement="top" mouseEnterDelay={0.2}>
+            <button type="button" className={`group relative flex h-12 min-w-11 items-center justify-center whitespace-nowrap px-1 ${danger ? "text-red-500" : ""}`} onClick={onClick} aria-label={title}>
+                <span className={`flex h-10 items-center ${hasText ? "gap-2 px-2.5" : "justify-center px-2"} rounded-lg transition group-hover:bg-black/5 dark:group-hover:bg-white/10`} style={active ? { background: theme.toolbar.activeBg, color: theme.toolbar.activeText } : undefined}>
                     {icon}
                     {hasText ? <span>{label}</span> : null}
                 </span>

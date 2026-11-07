@@ -131,7 +131,7 @@ export function LogCard({
 
     return (
         <button type="button" className={buttonClassName} onClick={onClick}>
-            <div className="grid grid-cols-[minmax(128px,1fr)_auto] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                 <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2">
                     {checkbox}
                     <div className="min-w-0">

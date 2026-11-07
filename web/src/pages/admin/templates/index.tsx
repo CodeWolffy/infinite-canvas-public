@@ -63,8 +63,8 @@ export default function AdminTemplatesPage() {
     };
 
     return (
-        <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-8">
-            <header className="flex items-center justify-between">
+        <div className="mx-auto flex min-w-0 max-w-5xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+            <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-semibold">{t("templates.adminTitle")}</h1>
                     <p className="mt-1 text-sm text-stone-500">{t("templates.adminHint")}</p>
@@ -78,6 +78,7 @@ export default function AdminTemplatesPage() {
                 loading={loading}
                 dataSource={templates}
                 pagination={false}
+                scroll={{ x: "max-content" }}
                 columns={[
                     { title: t("templates.name"), dataIndex: "title" },
                     { title: t("templates.description"), dataIndex: "description", render: (value: string) => value || "—" },

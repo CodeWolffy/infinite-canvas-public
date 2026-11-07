@@ -18,7 +18,7 @@ export default function ChannelMonitoring({ channel, onClose }: { channel: Admin
     const check = useMutation({ mutationFn: () => checkChannel(channel.id), onSuccess: () => { refresh(); message.success("检测已提交到后台"); }, onError: (error: Error) => message.error(error.message) });
     const acknowledge = useMutation({ mutationFn: () => acknowledgeModelChanges(channel.id), onSuccess: refresh, onError: (error: Error) => message.error(error.message) });
     const changes = current.modelChanges;
-    return <Drawer title={`${channel.name} · 主动检测`} open onClose={onClose} size={680}>
+    return <Drawer title={`${channel.name} · 主动检测`} open onClose={onClose} size="min(680px, 100vw)">
         <Alert className="mb-6" type="info" showIcon title="默认仅手动检测" description="填写间隔后开启自动检测。检测只读取上游模型列表和渠道余额，不产生生成费用；状态变化时通知管理员。" />
         <Form form={form} layout="vertical" onFinish={(values) => save.mutate(values)}>
             <Form.Item name="intervalMinutes" label="自动检测间隔（分钟）" extra="0 表示关闭自动检测，可随时手动执行。"><InputNumber min={0} precision={0} className="!w-full" /></Form.Item>
@@ -29,6 +29,6 @@ export default function ChannelMonitoring({ channel, onClose }: { channel: Admin
         </Form>
         {changes ? <section className="mt-8 border-t border-border pt-5"><div className="flex items-center justify-between"><h3 className="font-medium">模型列表变更</h3><Button type="text" onClick={() => acknowledge.mutate()} loading={acknowledge.isPending}>已核对</Button></div><p className="mt-2 text-sm text-muted-foreground">新增：{changes.added.join("、") || "无"}</p><p className="mt-2 text-sm text-muted-foreground">移除：{changes.removed.join("、") || "无"}</p><p className="mt-3 text-xs text-muted-foreground">请在模型绑定中调整需要使用的模型。</p></section> : null}
         <h3 className="mb-4 mt-8 font-medium">最近检测</h3>
-        {checks.error ? <Alert type="error" title={checks.error.message} /> : <Table rowKey="id" pagination={false} dataSource={checks.data?.checks || []} loading={checks.isPending} columns={[{ title: "结果", dataIndex: "status", width: 85, render: (value: string) => <Tag color={value === "healthy" ? "green" : "red"}>{value === "healthy" ? "正常" : "失败"}</Tag> }, { title: "详情", dataIndex: "detail", render: (value: Record<string, unknown>) => Object.entries(value).map(([key, item]) => <div key={key} className="text-xs leading-5">{key === "modelCount" ? `模型数量：${item}` : String(item)}</div>) }, { title: "时间", dataIndex: "createdAt", width: 140, render: (value: string) => new Date(value).toLocaleString() }]} />}
+        {checks.error ? <Alert type="error" title={checks.error.message} /> : <Table rowKey="id" pagination={false} scroll={{ x: "max-content" }} dataSource={checks.data?.checks || []} loading={checks.isPending} columns={[{ title: "结果", dataIndex: "status", width: 85, render: (value: string) => <Tag color={value === "healthy" ? "green" : "red"}>{value === "healthy" ? "正常" : "失败"}</Tag> }, { title: "详情", dataIndex: "detail", render: (value: Record<string, unknown>) => Object.entries(value).map(([key, item]) => <div key={key} className="text-xs leading-5">{key === "modelCount" ? `模型数量：${item}` : String(item)}</div>) }, { title: "时间", dataIndex: "createdAt", width: 140, render: (value: string) => new Date(value).toLocaleString() }]} />}
     </Drawer>;
 }

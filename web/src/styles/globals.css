@@ -462,7 +462,15 @@
 }
 
 .agent-streamdown {
+    min-width: 0;
+    max-width: 100%;
     overflow-wrap: anywhere;
+}
+
+.agent-streamdown [data-streamdown="table-wrapper"] {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
 }
 
 .agent-streamdown > :first-child {
@@ -502,6 +510,8 @@
 }
 
 .agent-streamdown [data-streamdown="code-block-body"] {
+    min-width: 0;
+    max-width: 100%;
     min-height: 0;
     padding: 0.4rem 2rem 0.4rem 0.6rem;
     overflow-x: auto;
@@ -540,6 +550,48 @@
 
 .agent-streamdown [data-streamdown="code-block-actions"] button:hover {
     background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+@media (hover: none) {
+    .agent-streamdown [data-streamdown="code-block-actions"] {
+        opacity: 0.7;
+    }
+
+    .agent-streamdown [data-streamdown="code-block-actions"] button {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    .agent-streamdown [data-streamdown="code-block-body"] {
+        padding-right: 3rem;
+    }
+}
+
+@media (max-width: 767px) {
+    .ant-picker-dropdown .ant-picker-panel-container {
+        max-width: calc(100vw - 24px);
+        max-height: calc(100dvh - 24px);
+        overflow: auto;
+        overscroll-behavior: contain;
+    }
+
+    .ant-picker-dropdown .ant-picker-panel-layout,
+    .ant-picker-dropdown .ant-picker-panels,
+    .ant-picker-dropdown .ant-picker-datetime-panel {
+        flex-direction: column;
+    }
+
+    .ant-picker-dropdown .ant-picker-presets {
+        max-width: none;
+    }
+
+    .ant-picker-dropdown .ant-picker-presets ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        height: auto;
+        max-height: 96px;
+    }
 }
 
 .agent-streamdown [data-streamdown="inline-code"] {

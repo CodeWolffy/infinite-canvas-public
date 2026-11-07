@@ -355,23 +355,23 @@ function TextConversationPage() {
         </div>
     </>;
 
-    return <div className="flex h-full min-h-0">
-        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-muted/40 px-2 py-4 md:flex">{sidebarBody}</aside>
-        <Drawer placement="left" size={300} open={historyOpen} onClose={() => setHistoryOpen(false)} styles={{ body: { display: "flex", flexDirection: "column", padding: "16px 8px" } }} closable={false}>{sidebarBody}</Drawer>
-        <section className="flex min-w-0 flex-1 flex-col">
+    return <div className="flex h-full min-h-0 min-w-0">
+        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-muted/40 px-2 py-4 lg:flex">{sidebarBody}</aside>
+        <Drawer placement="left" size="min(300px, 100vw)" open={historyOpen} onClose={() => setHistoryOpen(false)} styles={{ body: { display: "flex", flexDirection: "column", padding: "16px 8px" } }} closable={false}>{sidebarBody}</Drawer>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4 sm:px-6">
                 <div className="flex min-w-0 items-center gap-1">
-                    <Button type="text" className="md:!hidden" aria-label="历史对话" title="历史对话" icon={<PanelLeft className="size-4" />} onClick={() => setHistoryOpen(true)} />
+                    <Button type="text" className="lg:!hidden" aria-label="历史对话" title="历史对话" icon={<PanelLeft className="size-4" />} onClick={() => setHistoryOpen(true)} />
                     <h2 className="min-w-0 truncate text-sm font-medium">{conversation.data?.conversation.title || "新对话"}</h2>
                 </div>
                 <div className="flex shrink-0 items-center gap-1 sm:gap-2">
                     <Link to="/user/wallet" className="mr-2 text-xs text-muted-foreground hover:text-foreground">余额 ¥{wallet.data?.wallet.balance ?? "—"}</Link>
                     <Button type="text" aria-label="对话设置" icon={<Settings2 className="size-4" />} onClick={() => setSettingsOpen(true)} />
-                    <Button type="text" className="md:!hidden" aria-label="新建对话" icon={<Plus className="size-4" />} disabled={sending} onClick={() => selectConversation("")} />
+                    <Button type="text" className="lg:!hidden" aria-label="新建对话" icon={<Plus className="size-4" />} disabled={sending} onClick={() => selectConversation("")} />
                 </div>
             </header>
             <div ref={scroll} className="thin-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
-                <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
+                <div className="mx-auto min-w-0 max-w-3xl space-y-6 break-words px-4 py-6 sm:px-6">
                     {models.error || conversation.error ? <Alert type="error" title={models.error ? "模型列表读取失败，请重试。" : "对话读取失败，请重试。"} description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{models.error?.message || conversation.error?.message}</p></details>} action={<Button size="small" onClick={() => void (models.error ? models.refetch() : conversation.refetch())}>{models.error ? "刷新模型列表" : "刷新对话"}</Button>} /> : null}
                     {unavailableModel ? <Alert type="warning" showIcon title={ambiguousDraftModel ? "草稿名称对应多个模型配置，请明确选择后继续发送" : "已选模型已下线或暂无可用渠道，请明确选择其它模型后继续发送"} /> : null}
                     {conversationId && conversation.isPending ? <Spin className="!block py-10" /> : null}
@@ -389,14 +389,14 @@ function TextConversationPage() {
                                 {item.attachments?.length ? <MessageAttachments attachments={item.attachments} /> : null}
                                 {item.content ? <p className="whitespace-pre-wrap break-words text-[15px] leading-7">{item.content}</p> : null}
                             </div>
-                            <div className="mt-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                            <div className="mt-1 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100">
                                 <Button type="text" size="small" aria-label="复制消息" title="复制" icon={<Copy className="size-3.5" />} onClick={() => copy(item.content)} />
                             </div>
                         </div>
                     ) : (
-                        <div key={item.id} className="group">
+                        <div key={item.id} className="group min-w-0">
                             <Streamdown className="agent-streamdown" controls={{ code: { copy: true, download: false }, table: { copy: true, download: false, fullscreen: false } }}>{item.content}</Streamdown>
-                            <div className="mt-1 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                            <div className="mt-1 flex items-center transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100">
                                 <Button type="text" size="small" aria-label="复制回复" title="复制" icon={<Copy className="size-3.5" />} onClick={() => copy(item.content)} />
                             </div>
                         </div>
@@ -411,7 +411,7 @@ function TextConversationPage() {
                     {streamError ? <Alert type="warning" title="连接已中断，请刷新对话查看最新结果。" description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{streamError}</p></details>} action={<Button size="small" onClick={() => void conversation.refetch()}>刷新对话</Button>} /> : null}
                 </div>
             </div>
-            <footer className="px-4 pb-5 pt-3 sm:px-6">
+            <footer className="thin-scrollbar max-h-[60%] shrink-0 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
                 <div className="mx-auto max-w-3xl">
                     <div className="rounded-3xl border border-border bg-background p-3 transition-colors focus-within:border-muted-foreground/40">
                         {files.length ? <div className="flex flex-wrap gap-2 px-1 pb-2">
