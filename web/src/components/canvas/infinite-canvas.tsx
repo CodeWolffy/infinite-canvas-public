@@ -53,6 +53,23 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         [],
     );
 
+    const cancelGesture = useCallback(() => {
+        const pointers = new Set([...touchPointsRef.current.keys(), panState.current.pointerId]);
+        panState.current.isPanning = false;
+        touchPointsRef.current.clear();
+        pinchRef.current = null;
+        multiTouchRef.current = false;
+        if (frameRef.current) cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+        nextViewportRef.current = null;
+        setIsPanning(false);
+        document.body.style.cursor = "";
+        const container = containerRef.current;
+        pointers.forEach((pointerId) => {
+            if (container?.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
+        });
+    }, [containerRef]);
+
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Control") setIsControlPressed(true);
@@ -75,20 +92,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         const handleBlur = () => {
             setIsSpacePressed(false);
             setIsControlPressed(false);
-            const pointers = new Set([...touchPointsRef.current.keys(), panState.current.pointerId]);
-            panState.current.isPanning = false;
-            touchPointsRef.current.clear();
-            pinchRef.current = null;
-            multiTouchRef.current = false;
-            if (frameRef.current) cancelAnimationFrame(frameRef.current);
-            frameRef.current = null;
-            nextViewportRef.current = null;
-            setIsPanning(false);
-            document.body.style.cursor = "";
-            const container = containerRef.current;
-            pointers.forEach((pointerId) => {
-                if (container?.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
-            });
+            cancelGesture();
         };
 
         window.addEventListener("keydown", handleKeyDown);
@@ -99,9 +103,10 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             window.removeEventListener("keyup", handleKeyUp);
             window.removeEventListener("blur", handleBlur);
         };
-    }, [containerRef]);
+    }, [cancelGesture]);
 
     const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+        if (touchPointsRef.current.size) return;
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
@@ -142,10 +147,14 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             suppressClickRef.current = false;
             return;
         }
+        // A primary touch begins a new sequence; missed endings must never become a second finger.
+        if (event.isPrimary) cancelGesture();
         if (!touchPointsRef.current.size) suppressClickRef.current = false;
         const target = event.target instanceof Element ? event.target : null;
         if (!touchPointsRef.current.size) {
-            if (!target?.closest("[data-canvas-node-drag-handle]") && target?.closest("[data-canvas-no-zoom],[data-node-panel],[data-connection-create-menu],button,input,textarea,select,a,video,audio,[role='button'],[role='slider'],[role='combobox'],.ant-select,[contenteditable='true']")) return;
+            const dragHandle = target?.closest("[data-canvas-node-drag-handle]");
+            const control = target?.closest("[data-canvas-no-zoom],[data-node-panel],[data-connection-create-menu],button,input,textarea,select,a,video,audio,[role='button'],[role='slider'],[role='combobox'],.ant-select,[contenteditable='true']");
+            if (control && (!dragHandle || dragHandle.contains(control))) return;
             // A touch begun outside the canvas must not turn its second finger into a node drag.
             if (!event.isPrimary) {
                 event.preventDefault();
@@ -171,8 +180,9 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (!target?.closest("[data-canvas-node-drag-handle]") && target?.closest("[data-canvas-no-zoom]")) return;
-        if (target?.closest("[data-connection-create-menu]")) return;
+        const dragHandle = target?.closest("[data-canvas-node-drag-handle]");
+        const control = target?.closest("[data-canvas-no-zoom],[data-node-panel],[data-connection-create-menu],button,input,textarea,select,a,video,audio,[role='button'],[role='slider'],[role='combobox'],.ant-select,[contenteditable='true']");
+        if (control && (!dragHandle || dragHandle.contains(control))) return;
         const isBackgroundClick = !target?.closest("[data-node-id],[data-connection-id]");
         const temporaryTool = event.ctrlKey || isSpacePressed;
         const activeTool = temporaryTool ? (tool === "select" ? "pan" : "select") : tool;
@@ -285,15 +295,15 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             document.body.style.cursor = "";
         };
 
-        window.addEventListener("pointermove", handlePointerMove);
-        window.addEventListener("pointerup", handlePointerUp);
-        window.addEventListener("pointercancel", handlePointerUp);
-        window.addEventListener("lostpointercapture", handlePointerUp);
+        window.addEventListener("pointermove", handlePointerMove, true);
+        window.addEventListener("pointerup", handlePointerUp, true);
+        window.addEventListener("pointercancel", handlePointerUp, true);
+        window.addEventListener("lostpointercapture", handlePointerUp, true);
         return () => {
-            window.removeEventListener("pointermove", handlePointerMove);
-            window.removeEventListener("pointerup", handlePointerUp);
-            window.removeEventListener("pointercancel", handlePointerUp);
-            window.removeEventListener("lostpointercapture", handlePointerUp);
+            window.removeEventListener("pointermove", handlePointerMove, true);
+            window.removeEventListener("pointerup", handlePointerUp, true);
+            window.removeEventListener("pointercancel", handlePointerUp, true);
+            window.removeEventListener("lostpointercapture", handlePointerUp, true);
             document.body.style.cursor = "";
         };
     }, [containerRef, onCanvasDeselect, onViewportChange, startPinch]);

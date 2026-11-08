@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button, Dropdown, Segmented, Switch } from "antd";
-import { CircleDot, Ellipsis, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, LocateFixed, Moon, MousePointer2, Music2, Palette, Plus, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video, X } from "lucide-react";
+import { CircleDot, Ellipsis, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, LocateFixed, Moon, MousePointer2, Music2, Palette, Plus, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video, X } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -108,7 +108,7 @@ export function CanvasToolbar({
                     { key: "group", icon: <Group className="size-4" />, label: t("canvas.toolbar.group"), onClick: onAddGroup },
                     ...extensionDefs.map((def) => ({ key: `plugin-${def.type}`, icon: def.icon, label: getNodeSpec(def.type).title, onClick: () => onAddExtensionNode(def.type) })),
                 ] }}>
-                    <button type="button" className="inline-flex h-11 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm hover:bg-black/5 @min-[1024px]/canvas:h-8 dark:hover:bg-white/10" style={{ color: theme.toolbar.item }}><Plus className="size-4" />添加内容</button>
+                    <button type="button" className="inline-flex h-11 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm hover:bg-black/5 @min-[1024px]/canvas:hidden dark:hover:bg-white/10" style={{ color: theme.toolbar.item }}><Plus className="size-4" />添加内容</button>
                 </Dropdown>
                 <Dropdown trigger={["click"]} placement="topRight" styles={{ root: { maxHeight: "calc(100dvh - 144px)", overflowY: "auto" } }} menu={{ className: "[&_.ant-dropdown-menu-item]:min-h-11", items: [
                     { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: t("canvas.undo"), onClick: onUndo },
@@ -132,6 +132,23 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-focus" label={t("canvas.toolbar.focus")} disabled={!selectedCount} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onFocusSelected}>
                     <LocateFixed className="size-4.5" />
                 </ToolbarButton>
+                <Divider theme={theme} />
+                {[
+                    { id: "text", icon: <Type className="size-4.5" />, action: onAddText },
+                    { id: "image", icon: <ImageIcon className="size-4.5" />, action: onAddImage },
+                    { id: "video", icon: <Video className="size-4.5" />, action: () => onAddExtensionNode("video") },
+                    { id: "audio", icon: <Music2 className="size-4.5" />, action: () => onAddExtensionNode("audio") },
+                    { id: "config", icon: <Settings2 className="size-4.5" />, action: onAddConfig },
+                    { id: "group", icon: <Group className="size-4.5" />, action: onAddGroup },
+                    { id: "upload", icon: <Upload className="size-4.5" />, action: onUpload },
+                ].map(({ id, icon, action }) => (
+                    <ToolbarButton key={id} id={`tool-${id}`} label={t(`canvas.toolbar.${id}`)} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={action}>{icon}</ToolbarButton>
+                ))}
+                {extensionDefs.length ? (
+                    <Dropdown trigger={["click"]} placement="top" menu={{ items: extensionDefs.map((def) => ({ key: def.type, icon: def.icon, label: getNodeSpec(def.type).title, onClick: () => onAddExtensionNode(def.type) })) }} onOpenChange={(open) => { if (open) { setAppearanceOpen(false); setHovered(null); } }}>
+                        <button type="button" className="grid size-8 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10" aria-label={t("canvas.toolbar.extensions")} title={t("canvas.toolbar.extensions")}><Puzzle className="size-4.5" /></button>
+                    </Dropdown>
+                ) : null}
                 <Divider theme={theme} />
                 <ToolbarButton
                     id="tool-style"

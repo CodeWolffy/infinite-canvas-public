@@ -49,7 +49,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             <Select
                 aria-label={pickerPlaceholder}
                 title={currentTitle}
-                className={cn("canvas-composer-model-picker !h-8 max-w-full text-sm", fullWidth ? "w-full min-w-0" : "min-w-[9rem]", className)}
+                className={cn("canvas-composer-model-picker !h-8 max-w-full !rounded-full !bg-transparent text-sm shadow-sm", fullWidth ? "w-full min-w-0" : "min-w-[9rem]", className)}
                 open={open}
                 value={current || undefined}
                 onOpenChange={(nextOpen) => {

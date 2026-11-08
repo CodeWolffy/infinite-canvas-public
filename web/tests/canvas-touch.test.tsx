@@ -30,9 +30,9 @@ function capture(element: HTMLElement) {
     element.releasePointerCapture = vi.fn((id: number) => { pointers.delete(id); });
 }
 
-function pointer(target: HTMLElement | Window, type: string, id: number, x: number, y: number, isPrimary = true) {
+function pointer(target: HTMLElement | Window, type: string, id: number, x: number, y: number, isPrimary = true, pointerType = "touch") {
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, buttons: type === "pointerup" || type === "pointercancel" ? 0 : 1, clientX: x, clientY: y });
-    Object.defineProperties(event, { pointerId: { value: id }, pointerType: { value: "touch" }, isPrimary: { value: isPrimary } });
+    Object.defineProperties(event, { pointerId: { value: id }, pointerType: { value: pointerType }, isPrimary: { value: isPrimary } });
     fireEvent(target, event);
     return event;
 }
@@ -50,7 +50,7 @@ function renderCanvas(initial: ViewportTransform = { x: 10, y: 20, k: 1 }, tool:
         const [viewport, setViewport] = useState(initial);
         return <InfiniteCanvas containerRef={containerRef} viewport={viewport} tool={tool} onViewportChange={(next) => { changed(next); setViewport(next); }} onCanvasDeselect={deselect} onGestureStart={gesture} onCanvasMouseDown={selection}>
             <div data-testid="node" data-node-id="test" onPointerDown={(event) => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); nodeDown(); }}>节点</div>
-            <div data-canvas-no-zoom><textarea aria-label="提示词" /><button onClick={action}>设置</button></div>
+            <div data-canvas-no-zoom><div data-canvas-node-drag-handle><textarea aria-label="提示词" /><button onClick={action}>设置</button></div></div>
         </InfiniteCanvas>;
     }
     const view = render(<Canvas />);
@@ -120,6 +120,58 @@ test("双指抬起一指后不误平移或点击，全部结束后的新触摸�
     expect(canvas.viewport()).toEqual({ ...zoomed, x: zoomed.x + 30, y: zoomed.y + 40 });
 });
 
+test.each([1, 3])("旧触摸结束缺失时，新主触点 %s 清理旧双指和待提交缩放", (pointerId) => {
+    const canvas = renderCanvas();
+    pointer(canvas.surface, "pointerdown", 1, 100, 100);
+    pointer(canvas.surface, "pointerdown", 2, 200, 100, false);
+    pointer(window, "pointermove", 2, 300, 100, false);
+    // A new primary pointer is authoritative even when its ID is reused.
+    pointer(canvas.surface, "pointerdown", pointerId, 100, 100);
+    frame();
+    expect(canvas.changed).not.toHaveBeenCalled();
+    pointer(window, "pointermove", pointerId, 130, 140);
+    frame();
+    expect(canvas.viewport()).toEqual({ x: 40, y: 60, k: 1 });
+    expect(canvas.gesture).toHaveBeenCalledOnce();
+});
+
+test.each(["pointerup", "pointercancel", "lostpointercapture"])("%s 被子级停止冒泡仍结束缩放，余下单指不被当成双指", (endEvent) => {
+    const canvas = renderCanvas();
+    pointer(canvas.surface, "pointerdown", 1, 100, 100);
+    pointer(canvas.surface, "pointerdown", 2, 200, 100, false);
+    pointer(window, "pointermove", 2, 300, 100, false);
+    frame();
+    const zoomed = canvas.viewport();
+    canvas.surface.addEventListener(endEvent, (event) => event.stopPropagation());
+    canvas.surface.releasePointerCapture(2);
+    pointer(canvas.surface, endEvent, 2, 300, 100, false);
+    pointer(window, "pointermove", 1, 150, 150);
+    frame();
+    expect(canvas.viewport()).toEqual(zoomed);
+    expect(canvas.deselect).not.toHaveBeenCalled();
+});
+
+test("触摸不叠加滚轮或合成鼠标操作，结束后桌面滚轮缩放与鼠标平移保持可用", () => {
+    const canvas = renderCanvas();
+    pointer(canvas.surface, "pointerdown", 1, 100, 100);
+    fireEvent.wheel(canvas.surface, { deltaY: -100, clientX: 100, clientY: 100 });
+    expect(canvas.changed).not.toHaveBeenCalled();
+    pointer(window, "pointermove", 1, 130, 140);
+    pointer(window, "pointerup", 1, 130, 140);
+    expect(canvas.viewport()).toEqual({ x: 40, y: 60, k: 1 });
+    fireEvent.mouseDown(canvas.surface, { button: 0, clientX: 130, clientY: 140 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: 200, clientY: 220 });
+    fireEvent.mouseUp(window, { button: 0, clientX: 200, clientY: 220 });
+    expect(canvas.viewport()).toEqual({ x: 40, y: 60, k: 1 });
+    fireEvent.wheel(canvas.surface, { deltaY: -100, clientX: 100, clientY: 100 });
+    const zoomed = canvas.viewport();
+    expect(zoomed.k).toBeCloseTo(1.1);
+    pointer(canvas.surface, "pointerdown", 9, 100, 100, true, "mouse");
+    pointer(window, "pointermove", 9, 140, 120, true, "mouse");
+    pointer(window, "pointerup", 9, 140, 120, true, "mouse");
+    expect(canvas.viewport()).toEqual({ ...zoomed, x: zoomed.x + 40, y: zoomed.y + 20 });
+});
+
 test.each(["pointercancel", "lostpointercapture"])("%s 取消未提交移动，不把取消当作点击或保留旧手势", (endEvent) => {
     const canvas = renderCanvas();
     pointer(canvas.surface, "pointerdown", 1, 100, 100);
@@ -175,20 +227,21 @@ test("三指变为双指时连续平移，结束后不会残留手势", () => {
     expect(canvas.deselect).not.toHaveBeenCalled();
 });
 
-test("输入区域保留原生触摸，其外的第二指不会独自拖动画布", () => {
+test("拖动区域内的输入控件保留原生触摸，其外的第二指不会独自拖动画布", () => {
     const canvas = renderCanvas();
     const input = screen.getByRole("textbox", { name: "提示词" });
-    pointer(input, "pointerdown", 1, 100, 100);
+    const start = pointer(input, "pointerdown", 1, 100, 100);
     pointer(window, "pointermove", 1, 100, 180);
     pointer(canvas.surface, "pointerdown", 2, 200, 100, false);
     pointer(window, "pointermove", 2, 200, 180, false);
     frame();
+    expect(start.defaultPrevented).toBe(false);
     expect(canvas.changed).not.toHaveBeenCalled();
     expect(canvas.gesture).not.toHaveBeenCalled();
     expect(canvas.selection).not.toHaveBeenCalled();
 });
 
-test("配置节点内容不拦截滚动触摸，标题仍可拖动并切换到双指缩放", () => {
+test("配置节点标题和空白可拖动，内部控件保留原生交互，标题触摸可切换双指缩放", () => {
     const drag = vi.fn();
     const gesture = vi.fn();
     const changed = vi.fn();
@@ -200,7 +253,13 @@ test("配置节点内容不拦截滚动触摸，标题仍可拖动并切换到�
             <CanvasNode
                 data={{ id: "config", type: CanvasNodeType.Config, title: "配置", position: { x: 0, y: 0 }, width: 340, height: 240 }}
                 scale={viewport.k} isSelected isRelated={false} isFocusRelated={false} isConnectionTarget={false} isConnecting={false} showPanel={false} showImageInfo={false}
-                renderNodeContent={() => <div><div data-canvas-node-drag-handle className="touch-none">拖动配置</div><div>配置滚动内容</div></div>}
+                renderNodeContent={() => <div data-canvas-node-drag-handle>
+                    <div data-canvas-node-drag-handle className="touch-none">拖动配置</div>
+                    <div>配置空白区域</div>
+                    <div data-canvas-no-zoom>配置参数区域</div>
+                    <button>配置按钮</button>
+                    <input aria-label="配置输入" />
+                </div>}
                 onPointerDown={(event) => { event.stopPropagation(); drag(); }} onHoverStart={noop} onHoverEnd={noop} onConnectStart={noop}
                 onResizeStart={noop} onResize={noop} onResizeEnd={noop} onContentChange={noop} onTitleChange={noop} onContextMenu={noop}
             />
@@ -209,13 +268,29 @@ test("配置节点内容不拦截滚动触摸，标题仍可拖动并切换到�
     const view = render(<ConfigCanvas />);
     const surface = view.container.firstElementChild as HTMLDivElement;
     capture(surface);
-    const scrollStart = pointer(screen.getByText("配置滚动内容"), "pointerdown", 1, 100, 100);
-    pointer(window, "pointermove", 1, 100, 170);
-    pointer(window, "pointerup", 1, 100, 170);
-    frame();
-    expect(scrollStart.defaultPrevented).toBe(false);
+    for (const target of [screen.getByText("拖动配置"), screen.getByText("配置空白区域")]) {
+        pointer(target, "pointerdown", 1, 100, 100, true, "mouse");
+        pointer(window, "pointerup", 1, 100, 100, true, "mouse");
+    }
+    expect(drag).toHaveBeenCalledTimes(2);
+    drag.mockClear();
+    const controls = [screen.getByText("配置参数区域"), screen.getByRole("button", { name: "配置按钮" }), screen.getByRole("textbox", { name: "配置输入" })];
+    for (const [index, target] of controls.entries()) {
+        pointer(target, "pointerdown", 1, 100, 100, true, "mouse");
+        pointer(window, "pointerup", 1, 100, 100, true, "mouse");
+        const touchId = 10 + index * 2;
+        const start = pointer(target, "pointerdown", touchId, 100, 100);
+        pointer(window, "pointermove", touchId, 100, 170);
+        pointer(surface, "pointerdown", touchId + 1, 200, 100, false);
+        pointer(window, "pointermove", touchId + 1, 300, 100, false);
+        pointer(window, "pointerup", touchId + 1, 300, 100, false);
+        pointer(window, "pointerup", touchId, 100, 170);
+        frame();
+        expect(start.defaultPrevented).toBe(false);
+    }
     expect(drag).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
+    expect(gesture).not.toHaveBeenCalled();
     pointer(screen.getByText("拖动配置"), "pointerdown", 2, 100, 100);
     expect(drag).toHaveBeenCalledOnce();
     pointer(surface, "pointerdown", 3, 200, 100, false);

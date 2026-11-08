@@ -62,7 +62,8 @@ export function CanvasImagePreview({ node, initialImageId, onClose, onDownload }
             onCancel={onClose}
             width="100vw"
             style={{ top: 0, margin: 0, paddingBottom: 0, maxWidth: "100vw" }}
-            styles={{ wrapper: { overflow: "hidden" }, container: { padding: 0, borderRadius: 0, boxShadow: "none", background: theme.canvas.background, color: theme.node.text } }}
+            mask={{ blur: false }}
+            styles={{ mask: { background: `color-mix(in srgb, ${theme.canvas.background} 76%, transparent)` }, wrapper: { overflow: "hidden" }, container: { padding: 0, borderRadius: 0, boxShadow: "none", background: "transparent", color: theme.node.text } }}
             transitionName=""
             maskTransitionName=""
             wrapProps={{ onKeyDown: handleKeyDown, onKeyUp: (event: KeyboardEvent) => event.stopPropagation() }}

@@ -403,7 +403,9 @@ export const CanvasNode = React.memo(function CanvasNode({
                 onPointerDown={(event) => {
                     if (event.button !== 0) return;
                     const target = event.target instanceof Element ? event.target : null;
-                    if (!target?.closest("[data-canvas-node-drag-handle]") && target?.closest("button,input,textarea,select,a,video,audio,[role='button'],[role='slider'],[role='combobox'],.ant-select,[contenteditable='true'],[data-canvas-no-zoom]")) return;
+                    const dragHandle = target?.closest("[data-canvas-node-drag-handle]");
+                    const control = target?.closest("button,input,textarea,select,a,video,audio,[role='button'],[role='slider'],[role='combobox'],.ant-select,[contenteditable='true'],[data-canvas-no-zoom]");
+                    if (control && (!dragHandle || dragHandle.contains(control))) return;
                     if (!referenceSelectionState) onPointerDown(event, data.id);
                 }}
                 onClick={(event) => {

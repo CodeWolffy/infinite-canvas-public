@@ -31,10 +31,15 @@ function loadImage(image = currentImage(), width = 2000, height = 1600) {
     Object.defineProperties(image, { naturalWidth: { configurable: true, value: width }, naturalHeight: { configurable: true, value: height } });
     fireEvent.load(image);
 }
-function pointer(element: HTMLElement, type: string, x: number, y: number) {
+function pointer(element: HTMLElement, type: string, x: number, y: number, pointerId = 1) {
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
-    Object.defineProperty(event, "pointerId", { value: 1 });
+    Object.defineProperty(event, "pointerId", { value: pointerId });
     fireEvent(element, event);
+}
+function mockPointerCapture(element: HTMLElement) {
+    element.setPointerCapture = vi.fn();
+    element.hasPointerCapture = () => true;
+    element.releasePointerCapture = vi.fn();
 }
 
 test("切图立即隐藏旧图片，同尺寸新图加载后重置缩放，下载对应当前图", () => {
@@ -44,6 +49,10 @@ test("切图立即隐藏旧图片，同尺寸新图加载后重置缩放，下�
     expect(first).not.toBeVisible();
     loadImage(first);
     fireEvent.click(button("canvas.imagePreview.original"));
+    const viewport = first.parentElement!.parentElement!.parentElement!;
+    mockPointerCapture(viewport);
+    pointer(viewport, "pointerdown", 500, 400);
+    pointer(viewport, "pointermove", 600, 450);
     fireEvent.click(button("canvas.imagePreview.next"));
     const second = currentImage();
     expect(first).not.toBeInTheDocument();
@@ -53,8 +62,12 @@ test("切图立即隐藏旧图片，同尺寸新图加载后重置缩放，下�
     expect(second).not.toBeVisible();
     expect(button("common.download")).toBeDisabled();
     loadImage(second);
+    pointer(viewport, "pointermove", 700, 500);
     expect(second).toBeVisible();
     expect(button("canvas.editors.zoomOut")).toBeDisabled();
+    const stage = second.parentElement!.getBoundingClientRect();
+    expect(stage.left + stage.width / 2).toBeCloseTo(500);
+    expect(stage.top + stage.height / 2).toBeCloseTo(400);
     fireEvent.click(button("common.download"));
     expect(download).toHaveBeenCalledWith("b");
     fireEvent.click(button("canvas.imagePreview.previous"));
@@ -113,18 +126,72 @@ test("滚轮以鼠标所在像素为缩放锚点，左键可以拖动放大图�
     fireEvent.click(button("canvas.imagePreview.original"));
     const stage = currentImage().parentElement!;
     const viewport = stage.parentElement!.parentElement!;
-    const pointBefore = (600 + viewport.scrollLeft) / parseFloat(stage.style.width);
-    fireEvent.wheel(viewport, { deltaY: -100, clientX: 600, clientY: 400 });
-    expect((600 + viewport.scrollLeft) / parseFloat(stage.style.width)).toBeCloseTo(pointBefore);
-    viewport.setPointerCapture = vi.fn();
-    viewport.hasPointerCapture = () => true;
-    viewport.releasePointerCapture = vi.fn();
-    const start = viewport.scrollLeft;
+    mockPointerCapture(viewport);
+    const before = stage.getBoundingClientRect();
+    const pointBefore = { x: (600 - before.left) / before.width, y: (400 - before.top) / before.height };
+    const background = vi.fn();
+    window.addEventListener("wheel", background);
+    try {
+        fireEvent.wheel(viewport, { deltaY: -100, clientX: 600, clientY: 400 });
+        expect(background).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("wheel", background); }
+    const enlarged = stage.getBoundingClientRect();
+    expect((600 - enlarged.left) / enlarged.width).toBeCloseTo(pointBefore.x);
+    expect((400 - enlarged.top) / enlarged.height).toBeCloseTo(pointBefore.y);
     pointer(viewport, "pointerdown", 600, 400);
-    pointer(viewport, "pointermove", 650, 400);
-    expect(viewport.scrollLeft).toBeCloseTo(start - 50);
-    pointer(viewport, "pointerup", 650, 400);
+    pointer(viewport, "pointermove", 650, 440);
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(enlarged.left + 50);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(enlarged.top + 40);
+    pointer(viewport, "pointerup", 650, 440);
     expect(viewport.releasePointerCapture).toHaveBeenCalledWith(1);
+});
+
+test.each([[2000, 1600], [240, 180], [2000, 200]])("适应时和未溢出的方向也可拖动，适应按钮恢复居中（%i×%i）", (width, height) => {
+    render(<CanvasImagePreview node={node([batchImage("a")])} initialImageId={null} onClose={vi.fn()} onDownload={vi.fn()} />);
+    loadImage(currentImage(), width, height);
+    const stage = currentImage().parentElement!;
+    const viewport = stage.parentElement!.parentElement!;
+    mockPointerCapture(viewport);
+    const initial = stage.getBoundingClientRect();
+    pointer(viewport, "pointerdown", 500, 400);
+    pointer(viewport, "pointermove", 560, 450);
+    pointer(viewport, "pointerup", 560, 450);
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(initial.left + 60);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(initial.top + 50);
+    fireEvent.click(button("canvas.imagePreview.fit"));
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(initial.left);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(initial.top);
+    fireEvent.click(button("canvas.editors.zoomIn"));
+    expect(stage.getBoundingClientRect().width).toBeGreaterThan(initial.width);
+    const enlarged = stage.getBoundingClientRect();
+    pointer(viewport, "pointerdown", 500, 400);
+    pointer(viewport, "pointermove", 560, 450);
+    pointer(viewport, "pointerup", 560, 450);
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(enlarged.left + 60);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(enlarged.top + 50);
+    fireEvent.click(button("canvas.imagePreview.fit"));
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(initial.left);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(initial.top);
+    expect(stage.getBoundingClientRect().width).toBeCloseTo(initial.width);
+});
+
+test("第二个指针不会抢走拖动，取消指针后停止移动", () => {
+    render(<CanvasImagePreview node={node([batchImage("a")])} initialImageId={null} onClose={vi.fn()} onDownload={vi.fn()} />);
+    loadImage();
+    const stage = currentImage().parentElement!;
+    const viewport = stage.parentElement!.parentElement!;
+    mockPointerCapture(viewport);
+    const initial = stage.getBoundingClientRect();
+    pointer(viewport, "pointerdown", 500, 400);
+    pointer(viewport, "pointerdown", 600, 450, 2);
+    pointer(viewport, "pointermove", 700, 500, 2);
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(initial.left);
+    pointer(viewport, "pointermove", 550, 430);
+    pointer(viewport, "pointercancel", 550, 430);
+    pointer(viewport, "pointermove", 650, 500);
+    expect(stage.getBoundingClientRect().left).toBeCloseTo(initial.left + 50);
+    expect(stage.getBoundingClientRect().top).toBeCloseTo(initial.top + 30);
+    expect(viewport).not.toHaveClass("cursor-grabbing");
 });
 
 test("真实Modal初始焦点支持左右和Esc，编辑快捷键及空格不泄漏给底层画布", async () => {
@@ -164,10 +231,17 @@ test("编辑模式仍能在裁剪手柄上用空格加左键平移", () => {
     }
     render(<Editor />);
     const viewport = screen.getByTestId("editor");
-    viewport.setPointerCapture = vi.fn();
+    mockPointerCapture(viewport);
+    viewport.scrollLeft = 200;
+    viewport.scrollTop = 100;
     fireEvent.keyDown(window, { key: " ", code: "Space" });
     pointer(button("裁剪手柄"), "pointerdown", 500, 400);
     expect(viewport.setPointerCapture).toHaveBeenCalledWith(1);
     expect(crop).not.toHaveBeenCalled();
+    pointer(viewport, "pointermove", 550, 420);
+    expect(viewport.scrollLeft).toBe(150);
+    expect(viewport.scrollTop).toBe(80);
+    pointer(viewport, "pointerup", 550, 420);
+    expect(viewport.releasePointerCapture).toHaveBeenCalledWith(1);
     fireEvent.keyUp(window, { key: " ", code: "Space" });
 });
