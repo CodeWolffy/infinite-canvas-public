@@ -6,10 +6,11 @@ import { useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
 import { useCopyText } from "@/hooks/use-copy-text";
-import { createPaymentOrder, getPaymentOrder, getPaymentOrders, getWallet, paymentMethodLabels, redeemCode, refreshPaymentOrder, type PaymentMethod, type PaymentOrder } from "@/services/api/billing";
+import { createPaymentOrder, getPaymentOrder, getPaymentOrders, getWallet, paymentMethodLabels, redeemCode, refreshPaymentOrder, resumePaymentOrder, type PaymentMethod, type PaymentOrder, type PaymentOrderResult } from "@/services/api/billing";
 import { getReferrals, type Referral } from "@/services/api/platform-operations";
 import { generateAffiliateLink } from "@/lib/affiliate";
 import { useUserStore } from "@/stores/use-user-store";
+import { formatMoney } from "@/lib/format-money";
 
 type RechargeValues = { channelId: string; method: PaymentMethod; amount: string };
 const statusLabels = { pending: "待支付", paid: "已到账", closed: "已关闭" };
@@ -21,12 +22,19 @@ export default function WalletPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [rechargeOpen, setRechargeOpen] = useState(false);
     const [activeOrder, setActiveOrder] = useState<string | null>(searchParams.get("order"));
+    const activeOrderRef = useRef(activeOrder);
+    activeOrderRef.current = activeOrder;
+    const [paymentIssue, setPaymentIssue] = useState<{ id: string; message: string } | null>(null);
     const [orderPage, setOrderPage] = useState(1);
     const [referralPage, setReferralPage] = useState(1);
     const copy = useCopyText();
     const [form] = Form.useForm<RechargeValues>();
     const selectedChannel = Form.useWatch("channelId", form);
     const request = useRef<{ fingerprint: string; id: string } | null>(null);
+    const formVersion = useRef(0);
+    const paymentViewVersion = useRef(0);
+    const redeemVersion = useRef(0);
+    const showOrder = (id: string | null) => { paymentViewVersion.current++; setActiveOrder(id); };
     const overview = useQuery({ queryKey: ["wallet", sessionVersion], queryFn: getWallet });
     const orders = useQuery({ queryKey: ["payment-orders", sessionVersion, orderPage], queryFn: () => getPaymentOrders((orderPage - 1) * 50) });
     const referrals = useQuery({ queryKey: ["referrals", sessionVersion, referralPage], queryFn: () => getReferrals((referralPage - 1) * 50) });
@@ -34,13 +42,34 @@ export default function WalletPage() {
     const invalidate = () => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); };
     const [redeemOpen, setRedeemOpen] = useState(false);
     const [redeemForm] = Form.useForm<{ code: string }>();
-    const redeem = useMutation({ mutationFn: (code: string) => redeemCode(code), onSuccess: (result) => { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); setRedeemOpen(false); redeemForm.resetFields(); message.success(`兑换成功，到账 ¥${result.amount}`); }, onError: (error: Error) => message.error(error.message) });
-    const create = useMutation({ mutationFn: createPaymentOrder, onSuccess: ({ order }) => { setActiveOrder(order.id); setRechargeOpen(false); request.current = null; invalidate(); }, onError: (error: Error) => message.error(error.message) });
-    const refresh = useMutation({ mutationFn: () => refreshPaymentOrder(activeOrder!), onSuccess: () => { void order.refetch(); invalidate(); }, onError: (error: Error) => message.error(error.message) });
+    const redeem = useMutation({ mutationFn: (code: string) => redeemCode(code), onMutate: () => ({ session: useUserStore.getState().sessionVersion, form: redeemVersion.current }), onSuccess: (result, _code, context) => {
+        if (context?.session !== useUserStore.getState().sessionVersion) return;
+        void queryClient.invalidateQueries({ queryKey: ["wallet", context.session] });
+        if (context.form !== redeemVersion.current) return;
+        setRedeemOpen(false); redeemForm.resetFields(); message.success(`兑换成功，到账 ¥${result.amount}`);
+    }, onError: (error: Error, _code, context) => { if (context?.session === useUserStore.getState().sessionVersion && context.form === redeemVersion.current) message.error(error.message); } });
+    const create = useMutation({ mutationFn: createPaymentOrder, onMutate: () => ({ session: useUserStore.getState().sessionVersion, form: formVersion.current, view: paymentViewVersion.current }), onSuccess: (result, input, context) => {
+        if (context?.session !== useUserStore.getState().sessionVersion) return;
+        queryClient.setQueryData(["payment-order", context.session, result.order.id], result);
+        invalidate();
+        if (context.form !== formVersion.current || context.view !== paymentViewVersion.current || request.current?.id !== input.requestId) return;
+        setPaymentIssue(result.paymentError ? { id: result.order.id, message: result.paymentError } : null);
+        showOrder(result.order.id); setRechargeOpen(false); request.current = null;
+    }, onError: (error: Error, _input, context) => { if (context?.session === useUserStore.getState().sessionVersion && context.form === formVersion.current && context.view === paymentViewVersion.current) message.error(error.message); } });
+    const resume = useMutation({ mutationFn: resumePaymentOrder, onMutate: () => ({ session: useUserStore.getState().sessionVersion }), onSuccess: (result: PaymentOrderResult, id, context) => {
+        if (context?.session !== useUserStore.getState().sessionVersion) return;
+        queryClient.setQueryData(["payment-order", context.session, id], result);
+        if (activeOrderRef.current === id) setPaymentIssue(result.paymentError ? { id, message: result.paymentError } : null);
+        invalidate();
+    }, onError: (error: Error, id, context) => { if (context?.session === useUserStore.getState().sessionVersion && activeOrderRef.current === id) setPaymentIssue({ id, message: error.message }); } });
+    const refresh = useMutation({ mutationFn: refreshPaymentOrder, onMutate: () => ({ session: useUserStore.getState().sessionVersion }), onSuccess: (result, id, context) => {
+        if (context?.session !== useUserStore.getState().sessionVersion) return;
+        queryClient.setQueryData(["payment-order", context.session, id], result); invalidate();
+    }, onError: (error: Error, id, context) => { if (context?.session === useUserStore.getState().sessionVersion && activeOrderRef.current === id) message.error(error.message); } });
     const orderStatus = order.data?.order.status;
     useEffect(() => { if (orderStatus === "paid") { void queryClient.invalidateQueries({ queryKey: ["wallet"] }); void queryClient.invalidateQueries({ queryKey: ["payment-orders"] }); } }, [orderStatus, queryClient]);
     const previousSession = useRef(sessionVersion);
-    useEffect(() => { if (previousSession.current !== sessionVersion) { setActiveOrder(null); setRechargeOpen(false); setReferralPage(1); request.current = null; previousSession.current = sessionVersion; } }, [sessionVersion]);
+    useEffect(() => { if (previousSession.current !== sessionVersion) { formVersion.current++; paymentViewVersion.current++; redeemVersion.current++; setActiveOrder(null); setPaymentIssue(null); setRechargeOpen(false); setRedeemOpen(false); redeemForm.resetFields(); setReferralPage(1); request.current = null; previousSession.current = sessionVersion; } }, [sessionVersion, redeemForm]);
 
     const submit = (values: RechargeValues) => {
         const body = { ...values, amount: String(values.amount) };
@@ -76,12 +105,12 @@ export default function WalletPage() {
                 <div>
                     <p className="text-xs text-muted-foreground">可用余额 · 人民币</p>
                     <p className="mt-1 break-all font-mono text-3xl tracking-tight">¥ {wallet?.balance ?? "—"}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">生成中冻结 ¥{wallet?.frozen ?? "—"}</p>
+                    {Number(wallet?.frozen) > 0 ? <p className="mt-1 text-xs text-muted-foreground">进行中的任务预计消费 {formatMoney(wallet?.frozen)}，未使用金额会退回</p> : null}
                 </div>
                 <div className="flex flex-col items-start gap-1.5">
                     <Space wrap>
-                        <Button type="primary" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button>
-                        <Button icon={<Ticket className="size-4" />} onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>
+                        <Button type="primary" icon={<ArrowDownToLine className="size-4" />} disabled={!channels.length} onClick={() => { formVersion.current++; form.resetFields(); request.current = null; setRechargeOpen(true); }}>充值余额</Button>
+                        <Button icon={<Ticket className="size-4" />} onClick={() => { redeemVersion.current++; redeemForm.resetFields(); setRedeemOpen(true); }}>兑换码</Button>
                     </Space>
                     {!channels.length && !overview.isPending ? <p className="text-xs text-muted-foreground">充值渠道暂未开放</p> : null}
                 </div>
@@ -122,7 +151,7 @@ export default function WalletPage() {
                 { title: "支付方式", dataIndex: "method", render: (value: PaymentMethod) => paymentMethodLabels[value] },
                 { title: "金额", dataIndex: "amount", render: (value: string) => `¥${value}` },
                 { title: "状态", dataIndex: "status", render: (value: PaymentOrder["status"]) => <Tag color={value === "paid" ? "success" : "default"}>{statusLabels[value]}</Tag> },
-                { title: "", key: "actions", render: (_, row) => <Button type="text" onClick={() => setActiveOrder(row.id)}>查看订单</Button> },
+                { title: "", key: "actions", render: (_, row) => <Button type="text" onClick={() => showOrder(row.id)}>查看订单</Button> },
             ]} /><div className="mt-4 flex justify-end gap-2"><Button disabled={orderPage === 1} onClick={() => setOrderPage((p) => p - 1)}>上一页</Button><Button disabled={(orders.data?.orders.length || 0) < 50} onClick={() => setOrderPage((p) => p + 1)}>下一页</Button></div>{orders.error ? <Alert type="error" title={orders.error.message} /> : null}</> },
             { key: "referrals", label: "邀请记录", children: <><Table<Referral> rowKey="id" loading={referrals.isPending} dataSource={referral?.referrals || []} scroll={{ x: 520 }} pagination={{ current: referralPage, pageSize: 50, total: referral?.summary.invited || 0, showSizeChanger: false, showTotal: (total) => `共 ${total} 条`, onChange: setReferralPage }} columns={[
                 { title: "好友", dataIndex: "displayName" },
@@ -130,26 +159,27 @@ export default function WalletPage() {
                 { title: "注册时间", dataIndex: "createdAt", width: 160, render: (value: string) => <span className="font-mono text-xs text-muted-foreground">{dayjs(value).format("YYYY-MM-DD HH:mm")}</span> },
             ]} /></> },
         ]} />
-        <Drawer title="兑换码充值" open={redeemOpen} onClose={() => setRedeemOpen(false)} destroyOnHidden>
+        <Drawer title="兑换码充值" open={redeemOpen} onClose={() => { redeemVersion.current++; setRedeemOpen(false); }} destroyOnHidden>
             <p className="mb-5 text-sm leading-6 text-muted-foreground">输入管理员发放的兑换码，金额直接计入余额；每个兑换码只能兑换一次。</p>
             <Form form={redeemForm} layout="vertical" onFinish={({ code }) => redeem.mutate(code.trim())}>
                 <Form.Item name="code" label="兑换码" rules={[{ required: true, message: "请输入兑换码" }]}><Input.Password size="large" placeholder="CD-xxxxxxxx" autoComplete="off" /></Form.Item>
                 <Button type="primary" htmlType="submit" block loading={redeem.isPending}>立即兑换</Button>
             </Form>
         </Drawer>
-        <Drawer title="充值余额" open={rechargeOpen} onClose={() => setRechargeOpen(false)} destroyOnHidden>
-            <Form<RechargeValues> form={form} layout="vertical" onFinish={submit} initialValues={{ amount: "10.00" }}>
+        <Drawer title="充值余额" open={rechargeOpen} onClose={() => { formVersion.current++; setRechargeOpen(false); }} destroyOnHidden>
+            <Form<RechargeValues> form={form} layout="vertical" onFinish={submit} onValuesChange={() => { formVersion.current++; }} initialValues={{ amount: "10.00" }}>
                 <Form.Item name="amount" label="充值金额（元）" rules={[{ required: true, message: "请输入充值金额" }]}><InputNumber<string> stringMode className="!w-full" min="0.01" precision={2} prefix="¥" size="large" /></Form.Item>
                 <Form.Item name="channelId" label="充值渠道" rules={[{ required: true, message: "请选择充值渠道" }]}><Select options={channels.map((item) => ({ value: item.id, label: item.name }))} onChange={(id) => form.setFieldValue("method", channels.find((item) => item.id === id)?.methods[0])} /></Form.Item>
                 <Form.Item name="method" label="支付方式" rules={[{ required: true, message: "请选择支付方式" }]}><Select options={(channel?.methods || []).map((method) => ({ value: method, label: paymentMethodLabels[method] }))} /></Form.Item>
                 <Button type="primary" htmlType="submit" block loading={create.isPending}>创建充值订单</Button>
             </Form>
         </Drawer>
-        <Drawer title="充值订单" open={Boolean(activeOrder)} onClose={() => { setActiveOrder(null); if (searchParams.has("order")) setSearchParams({}, { replace: true }); }} destroyOnHidden>
+        <Drawer title="充值订单" open={Boolean(activeOrder)} onClose={() => { showOrder(null); if (searchParams.has("order")) setSearchParams({}, { replace: true }); }} destroyOnHidden>
             {payment ? <><div className="mb-6 text-center"><p className="font-mono text-4xl">¥{payment.amount}</p><Tag className="mt-3" color={payment.status === "paid" ? "success" : "default"}>{statusLabels[payment.status]}</Tag></div>{payment.status === "pending" && payment.paymentUrl && dayjs(payment.expiresAt).isAfter(dayjs()) ? <div className="mb-6 flex flex-col items-center gap-4"><QRCode value={payment.paymentUrl} size={220} /><p className="text-sm text-muted-foreground">使用{paymentMethodLabels[payment.method]}扫码支付</p>{/^https:\/\//.test(payment.paymentUrl) ? <Button href={payment.paymentUrl} target="_blank" rel="noopener noreferrer">打开支付页面</Button> : null}</div> : null}
+                {payment.status === "pending" && !payment.paymentUrl && dayjs(payment.expiresAt).isAfter(dayjs()) ? <Alert className="mb-4" type="warning" showIcon title="订单已保留，可继续支付" description={paymentIssue?.id === payment.id ? paymentIssue.message : "支付入口尚未准备好。继续支付会使用当前订单，已付款请先刷新状态。"} action={<Button loading={resume.isPending && resume.variables === payment.id} onClick={() => resume.mutate(payment.id)}>继续支付</Button>} /> : null}
                 {payment.status === "paid" ? <Alert type="success" showIcon title="充值成功，余额已到账" /> : payment.status === "pending" && !dayjs(payment.expiresAt).isAfter(dayjs()) ? <Alert type="info" showIcon title="订单已过有效期，正在确认支付结果" /> : null}
                 <Descriptions className="mt-6" column={1} items={[{ key: "id", label: "订单编号", children: <Typography.Text copyable className="break-all">{payment.id}</Typography.Text> }, { key: "method", label: "支付方式", children: paymentMethodLabels[payment.method] }, { key: "expiry", label: "有效期至", children: dayjs(payment.expiresAt).format("YYYY-MM-DD HH:mm:ss") }]} />
-                {payment.status !== "paid" ? <Space className="mt-6"><Button icon={<RefreshCw className="size-4" />} loading={refresh.isPending} onClick={() => refresh.mutate()}>我已支付，刷新状态</Button></Space> : null}
+                {payment.status !== "paid" ? <Space className="mt-6"><Button icon={<RefreshCw className="size-4" />} loading={refresh.isPending && refresh.variables === payment.id} onClick={() => refresh.mutate(payment.id)}>我已支付，刷新状态</Button></Space> : null}
             </> : order.error ? <Alert type="error" title={order.error.message} /> : <Empty description="正在读取订单" />}
         </Drawer>
     </div>

@@ -3,10 +3,12 @@ package platform
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/tiktoken-go/tokenizer"
 )
 
 func roundedMicros(value decimal.Decimal) (int64, error) {
@@ -90,15 +92,19 @@ func pricingSnapshot(model Row, discount decimal.Decimal, params map[string]any,
 }
 
 func promptEstimate(ctx context.Context, q querier, conversation, content, system string, attachments ...string) (int64, error) {
+	return promptEstimateBefore(ctx, q, conversation, content, system, 0, attachments...)
+}
+
+func promptEstimateBefore(ctx context.Context, q querier, conversation, content, system string, before int64, attachments ...string) (int64, error) {
 	var history, images int64
 	if conversation != "" {
-		if err := q.QueryRow(ctx, "SELECT coalesce(sum(octet_length(m.content)),0) FROM messages m WHERE m.conversation_id=$1 AND "+approvedMessage, conversation).Scan(&history); err != nil {
+		if err := q.QueryRow(ctx, "SELECT coalesce(sum(octet_length(m.content)),0) FROM messages m WHERE m.conversation_id=$1 AND ($2::bigint=0 OR m.sequence<$2) AND "+approvedMessage, conversation, before).Scan(&history); err != nil {
 			return 0, err
 		}
 		// 图片按传给上游的 base64 字节预算，历史附件也计入；实际用量仍以结算为准。
 		if err := q.QueryRow(ctx, `SELECT coalesce(sum(4*((o.byte_size+2)/3)),0) FROM media_objects o
 			JOIN media_references r ON r.media_id=o.id JOIN messages m ON r.owner_kind='message' AND r.owner_id=m.id
-			WHERE m.conversation_id=$1 AND `+approvedMessage, conversation).Scan(&images); err != nil {
+			WHERE m.conversation_id=$1 AND ($2::bigint=0 OR m.sequence<$2) AND `+approvedMessage, conversation, before).Scan(&images); err != nil {
 			return 0, err
 		}
 	}
@@ -112,16 +118,81 @@ func promptEstimate(ctx context.Context, q querier, conversation, content, syste
 	return history + int64(len(content)+len(system)) + images + incoming + 1024, nil
 }
 
+func textContextSummary(ctx context.Context, q querier, model Row, input textInput, before int64) (Row, error) {
+	history := []Row{}
+	var count int
+	var images int64
+	if input.ConversationID != "" {
+		if err := q.QueryRow(ctx, `SELECT count(*),coalesce(sum((SELECT count(*) FROM media_references r WHERE r.owner_kind='message' AND r.owner_id=m.id)),0)::bigint
+			FROM messages m WHERE m.conversation_id=$1 AND ($2::bigint=0 OR m.sequence<$2) AND `+approvedMessage, input.ConversationID, before).Scan(&count, &images); err != nil {
+			return nil, err
+		}
+		if integer(object(model["config"])["contextWindowTokens"]) > 0 && images == 0 && len(input.AttachmentMediaIDs) == 0 {
+			var err error
+			history, err = rows(ctx, q, "SELECT m.content FROM messages m WHERE m.conversation_id=$1 AND ($2::bigint=0 OR m.sequence<$2) AND "+approvedMessage+" ORDER BY m.sequence", input.ConversationID, before)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if input.Content != "" || len(input.AttachmentMediaIDs) > 0 {
+		count++
+	}
+	return summarizeTextContext(model, history, input, count, images+int64(len(input.AttachmentMediaIDs)))
+}
+
+var contextTokenizer = sync.OnceValues(func() (tokenizer.Codec, error) {
+	return tokenizer.Get(tokenizer.Cl100kBase)
+})
+
+func summarizeTextContext(model Row, history []Row, input textInput, count int, images int64) (Row, error) {
+	result := Row{"messageCount": count, "imageCount": images, "estimatedTokens": nil, "contextWindow": nil}
+	capacity := integer(object(model["config"])["contextWindowTokens"])
+	if capacity == 0 {
+		result["estimateNote"] = "管理员尚未配置模型上下文容量，当前仅显示本次有效上下文的消息与图片数量。"
+		return result, nil
+	}
+	result["contextWindow"] = capacity
+	if images > 0 {
+		result["estimateNote"] = "本次上下文包含图片，不同模型的图片用量规则不同，暂不估算 token 数。"
+		return result, nil
+	}
+	codec, err := contextTokenizer()
+	if err != nil {
+		return nil, err
+	}
+	var tokens int64
+	texts := []string{input.Content, input.SystemPrompt}
+	for _, message := range history {
+		texts = append(texts, str(message["content"]))
+	}
+	for _, content := range texts {
+		value, err := codec.Count(content)
+		if err != nil {
+			return nil, err
+		}
+		tokens += int64(value)
+	}
+	result["estimatedTokens"] = tokens
+	result["estimateNote"] = "使用 cl100k_base 对有效历史、当前输入和系统提示词做文本估计，未包含协议封装；不同模型实际用量可能不同。"
+	if tokens > capacity-explicitTextTokens(input.Parameters) {
+		result["warning"] = "预估上下文加生成预算可能超过模型容量，可新建对话或调整输入；仍可发送，不会自动裁剪历史。"
+	}
+	return result, nil
+}
+
 func (a *App) quoteRoutes(api *gin.RouterGroup) {
 	api.POST("/generation-quote", a.rateLimit("quote", 120, time.Minute), respond(func(c *gin.Context) (any, error) {
 		input, err := body[struct {
-			ModelID        string         `json:"modelId" binding:"required,uuid"`
-			Count          int            `json:"count" binding:"required,min=1,max=20"`
-			Content        string         `json:"content"`
-			System         string         `json:"systemPrompt"`
-			ConversationID string         `json:"conversationId" binding:"omitempty,uuid"`
-			AttachmentMediaIDs []string    `json:"attachmentMediaIds" binding:"max=20,dive,uuid"`
-			Parameters     map[string]any `json:"parameters"`
+			ModelID            string         `json:"modelId" binding:"required,uuid"`
+			Count              int            `json:"count" binding:"required,min=1,max=20"`
+			Content            string         `json:"content"`
+			System             string         `json:"systemPrompt"`
+			ConversationID     string         `json:"conversationId" binding:"omitempty,uuid"`
+			AttachmentMediaIDs []string       `json:"attachmentMediaIds" binding:"max=20,dive,uuid"`
+			Parameters         map[string]any `json:"parameters"`
+			Action             string         `json:"action" binding:"omitempty,oneof=edit regenerate"`
+			TargetMessageID    string         `json:"targetMessageId" binding:"omitempty,uuid"`
 		}](c)
 		if err != nil {
 			return nil, err
@@ -141,9 +212,20 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 			}
 		}
 		if input.ConversationID != "" {
-			if _, err = one(ctx, a.DB, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2", input.ConversationID, u.ID); err != nil {
+			if _, err = one(ctx, a.DB, "SELECT id FROM conversations WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", input.ConversationID, u.ID); err != nil {
 				return nil, err
 			}
+		}
+		text := textInput{ConversationID: input.ConversationID, Content: input.Content, SystemPrompt: input.System, AttachmentMediaIDs: input.AttachmentMediaIDs, Parameters: input.Parameters, Action: input.Action, TargetMessageID: input.TargetMessageID}
+		var before int64
+		if model["capability"] == "text" {
+			before, err = resolveTextRevision(ctx, a.DB, input.ConversationID, &text)
+			if err != nil {
+				return nil, err
+			}
+			input.Content, input.AttachmentMediaIDs = text.Content, text.AttachmentMediaIDs
+		} else if input.Action != "" || input.TargetMessageID != "" {
+			return nil, problem(400, "invalid_text_action", "只有文本对话支持编辑和重新生成")
 		}
 		if len(input.AttachmentMediaIDs) > 0 {
 			var visible int
@@ -154,7 +236,17 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 				return nil, problem(400, "invalid_media", "包含重复、无权访问或不可用的文件")
 			}
 		}
-		estimate, err := promptEstimate(ctx, a.DB, input.ConversationID, input.Content, input.System, input.AttachmentMediaIDs...)
+		var contextSummary Row
+		if model["capability"] == "text" {
+			if err = validateTextImages(ctx, a.DB, model, input.ConversationID, before, input.AttachmentMediaIDs); err != nil {
+				return nil, err
+			}
+			contextSummary, err = textContextSummary(ctx, a.DB, model, text, before)
+			if err != nil {
+				return nil, err
+			}
+		}
+		estimate, err := promptEstimateBefore(ctx, a.DB, input.ConversationID, input.Content, input.System, before, input.AttachmentMediaIDs...)
 		if err != nil {
 			return nil, err
 		}
@@ -173,6 +265,10 @@ func (a *App) quoteRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		return gin.H{"quote": gin.H{"pricingKind": p["pricingKind"], "estimatedHold": modelPrice(total), "unitHold": modelPrice(integer(p["priceMicros"])), "seconds": p["seconds"], "groupDiscount": p["groupDiscount"], "variable": p["pricingKind"] == "token" || p["pricePerSecond"] != nil}}, nil
+		result := gin.H{"quote": gin.H{"pricingKind": p["pricingKind"], "estimatedHold": modelPrice(total), "unitHold": modelPrice(integer(p["priceMicros"])), "seconds": p["seconds"], "groupDiscount": p["groupDiscount"], "variable": p["pricingKind"] == "token" || p["pricePerSecond"] != nil}}
+		if contextSummary != nil {
+			result["context"] = contextSummary
+		}
+		return result, nil
 	}))
 }

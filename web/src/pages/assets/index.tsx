@@ -1,7 +1,7 @@
 import { ArrowUpRight, Copy, Download, Ellipsis, PencilLine, Search, Share2, Trash2, Upload, Users } from "lucide-react";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, Drawer, Dropdown, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Drawer, Dropdown, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
@@ -9,11 +9,13 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { ASSET_PAGE_SIZE, listAssetPage } from "@/services/api/assets";
+import { ASSET_PAGE_SIZE, getAsset, listAssetPage } from "@/services/api/assets";
+import { ApiError } from "@/services/api/request";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, normalizeAsset, useAssetStore, type Asset, type AssetKind, type AssetScope, type ImageAsset } from "@/stores/use-asset-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
-import { exportAssets, readAssetPackage } from "./asset-transfer";
+import { exportAssets } from "./asset-transfer";
+import { useAssetImport } from "./use-asset-import";
 import { ShareDialog } from "@/components/share-dialog";
 import { WorkspaceMoveButton } from "@/components/workspace-move-button";
 import { useAssetCreation } from "./use-asset-creation";
@@ -41,6 +43,8 @@ export default function AssetsPage() {
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
+    const formVersion = useRef(0);
+    const fileReads = useRef<{ cover?: AbortController; image?: AbortController }>({});
     const queryClient = useQueryClient();
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
@@ -48,7 +52,7 @@ export default function AssetsPage() {
     const isAdmin = useUserStore((state) => state.user?.role === "admin");
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
-    const [importing, setImporting] = useState(false);
+    const [assetConflict, setAssetConflict] = useState(false);
     const [exportingSession, setExportingSession] = useState<number | null>(null);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
@@ -70,13 +74,49 @@ export default function AssetsPage() {
     const assetsQuery = useQuery({
         queryKey: ["assets", sessionVersion, page, pageSize, kindFilter, keyword.trim()],
         queryFn: () => listAssetPage({ page, size: pageSize, kind: kindFilter, keyword }),
-        placeholderData: keepPreviousData,
+        placeholderData: (previous, query) => query?.queryKey[1] === sessionVersion ? keepPreviousData(previous) : undefined,
     });
     const visibleAssets = (assetsQuery.data?.assets || []).map(normalizeAsset);
     const total = assetsQuery.data?.total || 0;
     const refreshAssets = () => { void queryClient.invalidateQueries({ queryKey: ["assets"] }); };
+    const assetImport = useAssetImport(refreshAssets);
+
+    useEffect(() => {
+        setIsAssetOpen(false);
+        setEditingAsset(null);
+        setPreviewAsset(null);
+        setImageDraft(null);
+        setSaving(false);
+        setAssetConflict(false);
+        return () => {
+            formVersion.current++;
+            fileReads.current.cover?.abort();
+            fileReads.current.image?.abort();
+        };
+    }, [sessionVersion]);
+
+    const invalidateForm = () => {
+        formVersion.current++;
+        fileReads.current.cover?.abort();
+        fileReads.current.image?.abort();
+        setSaving(false);
+        setAssetConflict(false);
+        setPreviewAsset(null);
+    };
+
+    const captureForm = () => {
+        const version = formVersion.current;
+        const session = useUserStore.getState().sessionVersion;
+        return () => formVersion.current === version && useUserStore.getState().sessionVersion === session;
+    };
+
+    const closeAsset = () => {
+        invalidateForm();
+        setIsAssetOpen(false);
+    };
 
     const openCreate = () => {
+        invalidateForm();
         setEditingAsset(null);
         setImageDraft(null);
         setFormKind("text");
@@ -85,6 +125,7 @@ export default function AssetsPage() {
     };
 
     const openEdit = (asset: Asset) => {
+        invalidateForm();
         setEditingAsset(asset);
         setFormKind(asset.kind);
         setImageDraft(asset.kind === "image" ? asset.data : null);
@@ -101,16 +142,16 @@ export default function AssetsPage() {
         setIsAssetOpen(true);
     };
 
-    const saveAsset = async () => {
+    const saveAsset = async (copy = false) => {
         if (saving) return;
-        const session = useUserStore.getState().sessionVersion;
+        const isCurrent = captureForm();
         setSaving(true);
         try {
             const values = await form.validateFields();
-            assertCurrentSession(session);
+            if (!isCurrent()) return;
             const base = {
                 title: values.title.trim(),
-                scope: values.scope,
+                scope: copy ? "private" as const : values.scope,
                 coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
                 tags: values.tags || [],
                 source: values.source?.trim(),
@@ -119,51 +160,65 @@ export default function AssetsPage() {
             };
             if (values.kind === "text") {
                 const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-                await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
+                await (editingAsset && !copy ? updateAsset(editingAsset, asset) : addAsset(asset));
             } else {
                 if (!imageDraft) {
                     message.error(t("assets.selectImage"));
                     return;
                 }
                 const asset = { ...base, kind: "image" as const, data: imageDraft };
-                await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
+                await (editingAsset && !copy ? updateAsset(editingAsset, asset) : addAsset(asset));
             }
-            assertCurrentSession(session);
-            message.success(editingAsset ? t("assets.updated") : t("assets.saved"));
+            if (!isCurrent()) return;
+            message.success(copy ? "已另存为私人素材" : editingAsset ? t("assets.updated") : t("assets.saved"));
             refreshAssets();
-            setIsAssetOpen(false);
+            closeAsset();
         } catch (error) {
-            if (useUserStore.getState().sessionVersion !== session || (error && typeof error === "object" && "errorFields" in error)) return;
-            message.error(error instanceof Error ? error.message : "素材保存失败");
+            if (!isCurrent() || (error && typeof error === "object" && "errorFields" in error)) return;
+            if (error instanceof ApiError && error.code === "asset_conflict") { setAssetConflict(true); refreshAssets(); }
+            else message.error(error instanceof Error ? error.message : "素材保存失败");
         } finally {
-            if (useUserStore.getState().sessionVersion === session) setSaving(false);
+            if (isCurrent()) setSaving(false);
         }
+    };
+
+    const viewLatestAsset = async () => {
+        if (!editingAsset) return;
+        const isCurrent = captureForm();
+        try { const asset = await getAsset(editingAsset.id); if (isCurrent()) setPreviewAsset(normalizeAsset(asset)); }
+        catch (error) { if (isCurrent()) message.error(error instanceof Error ? error.message : "素材读取失败"); }
     };
 
     const readCoverFile = async (file?: File) => {
         if (!file) return;
-        const session = useUserStore.getState().sessionVersion;
+        const isCurrentForm = captureForm();
+        fileReads.current.cover?.abort();
+        const controller = fileReads.current.cover = new AbortController();
+        const isCurrent = () => isCurrentForm() && !controller.signal.aborted;
         try {
             const dataUrl = await readFileAsDataUrl(file);
-            assertCurrentSession(session);
+            if (!isCurrent()) return;
             form.setFieldValue("coverUrl", dataUrl);
         } catch (error) {
-            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "封面读取失败");
+            if (isCurrent()) message.error(error instanceof Error ? error.message : "封面读取失败");
         }
     };
 
     const readImageFile = async (file?: File) => {
         if (!file || !file.type.startsWith("image/")) return;
-        const session = useUserStore.getState().sessionVersion;
+        const isCurrentForm = captureForm();
+        fileReads.current.image?.abort();
+        const controller = fileReads.current.image = new AbortController();
+        const isCurrent = () => isCurrentForm() && !controller.signal.aborted;
         try {
-            const image = await uploadImage(file);
-            assertCurrentSession(session);
+            const image = await uploadImage(file, { signal: controller.signal });
+            if (!isCurrent()) return;
             const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
             setImageDraft(draft);
             if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);
             if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
         } catch (error) {
-            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "图片上传失败");
+            if (isCurrent()) message.error(error instanceof Error ? error.message : "图片上传失败");
         }
     };
 
@@ -210,28 +265,6 @@ export default function AssetsPage() {
             if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : "素材导出失败");
         } finally {
             if (useUserStore.getState().sessionVersion === session) setExportingSession(null);
-        }
-    };
-
-    const importAssetZip = async (file?: File) => {
-        if (!file || importing) return;
-        const session = useUserStore.getState().sessionVersion;
-        setImporting(true);
-        try {
-            const importedAssets = await readAssetPackage(file);
-            assertCurrentSession(session);
-            const results = await Promise.allSettled(importedAssets.map((asset) => addAsset({ ...asset, scope: "private" })));
-            assertCurrentSession(session);
-            const failed = results.filter((result) => result.status === "rejected");
-            const count = results.length - failed.length;
-            if (!failed.length) message.success(t("assets.imported", { count }));
-            else message.error(`已导入 ${count} 项，${failed.length} 项失败：${failed[0].reason instanceof Error ? failed[0].reason.message : t("assets.importFailed")}`);
-            refreshAssets();
-        } catch (error) {
-            if (useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : t("assets.importFailed"));
-        } finally {
-            if (useUserStore.getState().sessionVersion === session) setImporting(false);
-            if (assetInputRef.current) assetInputRef.current.value = "";
         }
     };
 
@@ -314,10 +347,10 @@ export default function AssetsPage() {
                                     type="button"
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
-                                    disabled={importing}
-                                    aria-busy={importing}
+                                    disabled={assetImport.busy}
+                                    aria-busy={assetImport.busy}
                                 >
-                                    {importing ? "导入中…" : t("assets.import")}
+                                    {assetImport.busy ? "导入中…" : t("assets.import")}
                                 </button>
                                 <button
                                     type="button"
@@ -332,6 +365,11 @@ export default function AssetsPage() {
                 </div>
 
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
+                    {assetImport.filename ? <Alert type={assetImport.error || assetImport.items.some((item) => item.status === "failed") ? "warning" : assetImport.busy ? "info" : "success"} title={`${assetImport.filename} · 已导入 ${assetImport.items.filter((item) => item.status === "succeeded").length} / ${assetImport.items.length} 项${assetImport.busy ? " · 处理中" : ""}`} closable={!assetImport.busy} onClose={assetImport.clear} description={<div className="space-y-2">
+                        {assetImport.error ? <div>{assetImport.error}</div> : null}
+                        {assetImport.items.filter((item) => item.status === "failed").map((item) => <div key={item.requestId} className="text-sm">{item.title}：{item.error}</div>)}
+                        {assetImport.items.some((item) => item.status === "failed") ? <Button type="link" className="!p-0" loading={assetImport.busy} onClick={() => void assetImport.retry()}>仅重试失败项</Button> : null}
+                    </div>} /> : null}
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {visibleAssets.map((asset) => (
                             <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} onMoved={refreshAssets} />
@@ -357,7 +395,8 @@ export default function AssetsPage() {
                 </div>
             </main>
 
-            <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => { if (!saving) setIsAssetOpen(false); }} onOk={() => void saveAsset()} confirmLoading={saving} cancelButtonProps={{ disabled: saving }} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
+            <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => { if (!saving) closeAsset(); }} onOk={() => void saveAsset()} confirmLoading={saving} okButtonProps={{ disabled: assetConflict }} cancelButtonProps={{ disabled: saving }} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
+                {assetConflict ? <Alert type="warning" title="素材已有更新，当前输入已保留" description={<Space wrap><Button type="link" onClick={() => void viewLatestAsset()}>查看最新</Button><Button type="link" disabled={saving} onClick={() => void saveAsset(true)}>另存私人副本</Button></Space>} /> : null}
                 <div className="grid gap-6 pt-1 lg:grid-cols-[minmax(0,1fr)_320px]">
                     <Form form={form} layout="vertical" disabled={saving} requiredMark={false} initialValues={{ kind: "text", scope: "private", tags: [] }}>
                         <Form.Item name="kind" label={t("assets.type")}>
@@ -366,7 +405,7 @@ export default function AssetsPage() {
                                     { label: t("assets.kinds.text"), value: "text" },
                                     { label: t("assets.kinds.image"), value: "image" },
                                 ]}
-                                onChange={(value) => setFormKind(value)}
+                                onChange={(value) => { invalidateForm(); setFormKind(value); }}
                             />
                         </Form.Item>
                         <Form.Item name="scope" label="可见范围">
@@ -375,9 +414,11 @@ export default function AssetsPage() {
                         <Form.Item name="title" label={t("assets.fields.title")} rules={[{ required: true, message: t("assets.fields.titleRequired") }]}>
                             <Input size="large" placeholder={t("assets.fields.titlePlaceholder")} />
                         </Form.Item>
-                        <Form.Item name="coverUrl" label={t("assets.fields.coverUrl")}>
+                        <Form.Item label={t("assets.fields.coverUrl")}>
                             <Space.Compact className="w-full">
-                                <Input placeholder={t("assets.fields.coverPlaceholder")} />
+                                <Form.Item name="coverUrl" noStyle>
+                                    <Input placeholder={t("assets.fields.coverPlaceholder")} onChange={() => fileReads.current.cover?.abort()} />
+                                </Form.Item>
                                 <Button icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
                                     {t("common.upload")}
                                 </Button>
@@ -468,7 +509,7 @@ export default function AssetsPage() {
 
             <AssetDrawer asset={previewAsset} onClose={() => setPreviewAsset(null)} onCopy={copyAssetText} onDownload={downloadImage} />
 
-            <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
+            <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => { void assetImport.start(event.target.files?.[0]); event.target.value = ""; }} />
 
             <Modal title={t("assets.deleteTitle")} open={Boolean(deletingAsset)} onCancel={() => { if (!deleting) setDeletingAsset(null); }} onOk={confirmDelete} confirmLoading={deleting} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelButtonProps={{ disabled: deleting }} cancelText={t("common.cancel")}>
                 {t("assets.deleteConfirm", { name: deletingAsset?.title })}

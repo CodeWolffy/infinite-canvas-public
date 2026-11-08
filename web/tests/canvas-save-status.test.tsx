@@ -9,7 +9,8 @@ vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => (
 vi.mock("antd", () => ({ Tooltip: ({ children }: { children: ReactNode }) => children, theme: { useToken: () => ({ token: { colorError: "red" } }) } }));
 vi.mock("@/stores/use-user-store", () => ({ useUserStore: (select: (value: typeof state) => unknown) => select(state) }));
 vi.mock("@/stores/use-theme-store", () => ({ useThemeStore: (select: (value: { theme: string }) => unknown) => select({ theme: "light" }) }));
-vi.mock("@/stores/canvas/use-canvas-store", () => ({ useCanvasStore: (select: (value: unknown) => unknown) => select({ projects: ["a", "b"].map((id) => ({ id, snapshotLoaded: true, accessRole: "owner" })), saveStates: state.saveStates, retrySave: state.retry }) }));
+vi.mock("@/stores/canvas/use-canvas-store", () => ({ useCanvasStore: (select: (value: unknown) => unknown) => select({ projects: ["a", "b"].map((id) => ({ id, snapshotLoaded: true, accessRole: "owner" })), saveStates: state.saveStates, recoveryErrors: {}, retrySave: state.retry }) }));
+vi.mock("@/components/canvas/canvas-recovery-prompt", () => ({ CanvasRecoveryPrompt: () => null }));
 vi.mock("@/components/canvas/canvas-save-conflict-modal", () => ({ CanvasSaveConflictModal: ({ projectId, open }: { projectId: string; open: boolean }) => open ? <div role="dialog">{projectId}冲突</div> : null }));
 const { CanvasSaveStatus } = await import("@/components/canvas/canvas-save-status");
 afterEach(() => { cleanup(); state.id = "a"; state.sessionVersion = 1; state.saveStates = {}; state.retry.mockClear(); });

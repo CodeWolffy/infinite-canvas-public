@@ -277,7 +277,7 @@ func TestAssetCRUDIsolatesOwners(t *testing.T) {
 		t.Fatalf("创建素材失败: %d %s", created.Code, created.Body.String())
 	}
 	assetID := str(object(responseRow(t, created)["asset"])["id"])
-	updated := testRequest(router, "PUT", "/api/assets/"+assetID, map[string]any{"type": "text", "title": "改名素材", "content": "world"}, ownerCookie)
+	updated := testRequest(router, "PUT", "/api/assets/"+assetID, map[string]any{"type": "text", "title": "改名素材", "content": "world", "expectedRevision": 0}, ownerCookie)
 	if updated.Code != 200 {
 		t.Fatalf("更新素材失败: %d %s", updated.Code, updated.Body.String())
 	}

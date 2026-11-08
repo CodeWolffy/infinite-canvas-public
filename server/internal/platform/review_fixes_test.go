@@ -143,7 +143,7 @@ func TestTextSSEReceivesModerationAndCancelTransitions(t *testing.T) {
 	}
 	statuses, stop = watch(canceledID)
 	expect(statuses, "reviewing")
-	if response := testRequest(router, "POST", "/api/generation-tasks/"+canceledID+"/cancel", nil, cookie); response.Code != 204 {
+	if response := testRequest(router, "POST", "/api/generation-tasks/"+canceledID+"/cancel", nil, cookie); response.Code != 200 || responseRow(t, response)["canceled"] != true {
 		t.Fatal(response.Body.String())
 	}
 	expect(statuses, "canceled")

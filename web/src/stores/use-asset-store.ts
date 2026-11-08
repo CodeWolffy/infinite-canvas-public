@@ -15,6 +15,7 @@ export type Asset = TextAsset | ImageAsset | VideoAsset | AudioAsset;
 
 type AssetBase<T extends AssetKind> = {
     id: string;
+    revision: number;
     ownerId?: string;
     scope?: AssetScope;
     editable?: boolean;
@@ -34,14 +35,14 @@ type AssetBase<T extends AssetKind> = {
 };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type AssetDraft = DistributiveOmit<Asset, "id" | "createdAt" | "updatedAt">;
+export type AssetDraft = DistributiveOmit<Asset, "id" | "revision" | "createdAt" | "updatedAt">;
 type AssetStore = {
     hydrated: boolean;
     hydratedUserId: string;
     assets: Asset[];
     hydrateAssets: (userId: string, force?: boolean) => Promise<void>;
-    addAsset: (asset: AssetDraft) => Promise<string>;
-    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => Promise<void>;
+    addAsset: (asset: AssetDraft, requestId?: string) => Promise<string>;
+    updateAsset: (current: Asset, patch: Partial<Omit<Asset, "id" | "createdAt">>) => Promise<void>;
     removeAsset: (id: string) => Promise<void>;
     replaceAssets: (assets: Asset[]) => void;
     cleanupImages: (extra?: unknown) => void;
@@ -70,6 +71,7 @@ export function normalizeAsset(record: assetApi.AssetRecord): Asset {
     const mine = Boolean(record.ownerId && record.ownerId === user?.id);
     const common = {
         id: record.id,
+        revision: record.revision,
         ownerId: record.ownerId,
         scope: record.scope,
         // 工作区素材按成员角色控制编辑；删除只放行所有者（后端对工作区所有者单独放行）。
@@ -156,18 +158,18 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
         }
         await request;
     },
-    addAsset: async (draft) => {
+    addAsset: async (draft, requestId) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
-        const record = await assetApi.createAsset(assetInput(draft));
+        const record = await assetApi.createAsset({ ...assetInput(draft), requestId });
         assertCurrentSession(sessionVersion);
-        set((state) => ({ assets: [normalizeAsset(record), ...state.assets] }));
+        set((state) => ({ assets: [normalizeAsset(record), ...state.assets.filter((asset) => asset.id !== record.id)] }));
         return record.id;
     },
-    updateAsset: async (id, patch) => {
+    updateAsset: async (current, patch) => {
         const sessionVersion = useUserStore.getState().sessionVersion;
-        const current = get().assets.find((asset) => asset.id === id);
-        if (!current || current.editable === false) throw new Error("素材不存在或无权编辑");
-        const record = await assetApi.updateAsset(id, assetInput({ ...current, ...patch } as Asset));
+        const id = current.id;
+        // 分页和搜索结果不一定在最近素材缓存中；提交当前编辑记录，权限以服务端为准。
+        const record = await assetApi.updateAsset(id, { ...assetInput({ ...current, ...patch } as Asset), expectedRevision: current.revision });
         assertCurrentSession(sessionVersion);
         set((state) => ({ assets: state.assets.map((asset) => (asset.id === id ? normalizeAsset(record) : asset)) }));
     },

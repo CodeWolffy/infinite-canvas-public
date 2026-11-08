@@ -127,40 +127,58 @@ func (a *App) createPaymentOrder(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return a.preparePaymentOrder(c, order, !created)
+}
+
+func (a *App) resumePaymentOrder(c *gin.Context) (any, error) {
+	id, err := idParam(c, "id")
+	if err != nil { return nil, err }
+	order, err := one(c.Request.Context(), a.DB, "SELECT * FROM payment_orders WHERE id=$1 AND user_id=$2", id, currentUser(c).ID)
+	if err != nil { return nil, err }
+	return a.preparePaymentOrder(c, order, true)
+}
+
+func (a *App) preparePaymentOrder(c *gin.Context, order Row, retry bool) (any, error) {
+	ctx := c.Request.Context()
+	retained := func(message string) (any, error) { return gin.H{"order": publicOrder(order), "paymentError": message}, nil }
 	if order["status"] != "pending" || str(order["paymentUrl"]) != "" {
 		return gin.H{"order": publicOrder(order)}, nil
 	}
 	expires := order["expiresAt"].(time.Time)
 	if !expires.After(time.Now()) {
-		return nil, problem(409, "order_expired", "订单已过期，请刷新订单状态")
+		return retained("订单已过期，请刷新支付状态，不要继续支付")
 	}
 	// 首次调用未取得支付链接时仍能用原编号恢复；这些真实网关重试也受下单频控保护。
-	if !created {
-		if err = a.paymentRate(c, "create", 10, 60); err != nil {
-			return nil, err
+	if retry {
+		if err := a.paymentRate(c, "create", 10, 60); err != nil {
+			return retained("请求过于频繁，订单已保留，请稍后继续支付")
 		}
 	}
 	lockKey, token := "ic:payment:create:"+str(order["id"]), uuid.NewString()
 	locked, err := a.Redis.SetNX(ctx, lockKey, token, time.Until(expires)).Result()
 	if err != nil {
-		return nil, problem(503, "payment_unavailable", "充值服务暂时不可用")
+		return retained("充值服务暂时不可用，订单已保留，可稍后继续支付")
 	}
 	if !locked {
-		return nil, problem(409, "order_processing", "订单正在创建，请稍后查看订单")
+		return retained("正在获取支付入口，请稍后继续支付")
 	}
 	defer releaseRedisLock.Run(context.Background(), a.Redis, []string{lockKey}, token)
+	order, err = one(ctx, a.DB, "SELECT * FROM payment_orders WHERE id=$1 AND user_id=$2", order["id"], currentUser(c).ID)
+	if err != nil { return nil, err }
+	if order["status"] != "pending" || str(order["paymentUrl"]) != "" { return gin.H{"order": publicOrder(order)}, nil }
 	config, err := a.paymentConfig(str(order["encryptedConfig"]))
 	if err != nil {
-		return nil, err
+		return retained("支付渠道暂时不可用，订单已保留，请联系管理员")
 	}
 	paymentURL, err := a.startPayment(ctx, order, config)
 	if err != nil {
-		return nil, problem(502, "payment_pending", "支付平台未确认创建结果，请保留此订单并刷新状态")
+		return retained("暂未取得支付入口，订单已保留；可继续支付，已付款请先刷新状态")
 	}
 	if _, err = a.DB.Exec(ctx, "UPDATE payment_orders SET payment_url=$2 WHERE id=$1 AND status='pending'", order["id"], paymentURL); err != nil {
-		return nil, err
+		return retained("支付入口暂未保存，订单已保留，请稍后继续支付或刷新状态")
 	}
-	order["paymentUrl"] = paymentURL
+	order, err = one(ctx, a.DB, "SELECT * FROM payment_orders WHERE id=$1 AND user_id=$2", order["id"], currentUser(c).ID)
+	if err != nil { return nil, err }
 	return gin.H{"order": publicOrder(order)}, nil
 }
 func (a *App) getPaymentOrder(c *gin.Context) (any, error) {

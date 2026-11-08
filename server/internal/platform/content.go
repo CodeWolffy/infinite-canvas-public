@@ -463,13 +463,15 @@ func trimCanvasHistory(ctx context.Context, tx pgx.Tx, id string) error {
 }
 
 type assetInput struct {
+	ExpectedRevision *int64         `json:"expectedRevision"`
+	RequestID        string         `json:"requestId"`
 	Scope       string         `json:"scope" binding:"omitempty,oneof=private public"`
 	Type        string         `json:"type" binding:"omitempty,oneof=image text video audio"`
 	Title       string         `json:"title" binding:"omitempty,max=200"`
 	Content     *string        `json:"content"`
 	MediaID     *string        `json:"mediaId"`
 	Metadata    map[string]any `json:"metadata"`
-	WorkspaceID *string        `json:"workspaceId"`
+	WorkspaceID json.RawMessage `json:"workspaceId"`
 }
 
 func (a *App) assetRoutes(api *gin.RouterGroup) {
@@ -487,14 +489,19 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
 			args = append(args, "%"+keyword+"%")
 			placeholder := "$" + str(len(args))
-			where += " AND (title ILIKE " + placeholder + " OR coalesce(content,'') ILIKE " + placeholder + ")"
+			where += " AND (title ILIKE " + placeholder + " OR coalesce(content,'') ILIKE " + placeholder + " OR coalesce(metadata->'tags','[]'::jsonb)::text ILIKE " + placeholder + ")"
+		}
+		if ownerID := c.Query("ownerId"); u.Role == "admin" && ownerID != "" {
+			if !validID(ownerID) { return nil, problem(400, "invalid_user", "用户编号不正确") }
+			args = append(args, ownerID)
+			where += " AND owner_id=$" + str(len(args))
 		}
 		ctx := c.Request.Context()
 		total, err := one(ctx, a.DB, "SELECT count(*)::int AS total FROM assets WHERE "+where, args...)
 		if err != nil {
 			return nil, err
 		}
-		query := `SELECT *,CASE WHEN owner_id=$1 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$1),'') END AS access_role,
+		query := `SELECT *, (SELECT display_name FROM users WHERE id=assets.owner_id) AS owner_name, CASE WHEN owner_id=$1 THEN 'owner' ELSE coalesce((SELECT wm.role FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$1),'') END AS access_role,
 			(SELECT name FROM workspaces WHERE id=assets.workspace_id) AS workspace_name FROM assets WHERE ` + where + " ORDER BY updated_at DESC,id DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
 		items, err := rows(ctx, a.DB, query, append(args, limit, offset)...)
 		return gin.H{"assets": items, "total": integer(total["total"])}, err
@@ -514,6 +521,11 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
+		var targetWorkspace *string
+		workspaceProvided := len(input.WorkspaceID) > 0
+		if workspaceProvided && json.Unmarshal(input.WorkspaceID, &targetWorkspace) != nil {
+			return nil, problem(400, "invalid_workspace", "工作区编号不正确")
+		}
 		id := c.Param("id")
 		create := id == ""
 		if create {
@@ -524,13 +536,32 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 		ctx := c.Request.Context()
 		u := currentUser(c)
 		var saved Row
+		digest := hash(string(jsonBytes(input)))
 		err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 			owner := u.ID
 			var workspaceID any
+			if create && input.RequestID != "" {
+				if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "asset-import:"+u.ID+":"+input.RequestID); err != nil {
+					return err
+				}
+				existing, err := one(ctx, tx, "SELECT * FROM assets WHERE owner_id=$1 AND client_request_id=$2", u.ID, input.RequestID)
+				if err == nil {
+					if str(existing["clientRequestHash"]) != digest {
+						return problem(409, "idempotency_conflict", "同一导入请求的素材内容不一致")
+					}
+					saved = existing
+					return nil
+				}
+				if !errors.Is(err, notFound) { return err }
+			}
 			if !create {
 				old, err := one(ctx, tx, "SELECT * FROM assets WHERE id=$1 AND (owner_id=$2 OR ($3 AND scope='public') OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=assets.workspace_id AND wm.user_id=$2 AND wm.role IN('owner','editor'))) FOR UPDATE", id, u.ID, u.Role == "admin")
 				if err != nil {
 					return err
+				}
+				contentEdit := !workspaceProvided || input.Scope != "" || input.Type != "" || input.Title != "" || input.Content != nil || input.MediaID != nil || input.Metadata != nil
+				if (contentEdit && input.ExpectedRevision == nil) || (input.ExpectedRevision != nil && *input.ExpectedRevision != integer(old["revision"])) {
+					return problem(409, "asset_conflict", "素材已被其他操作修改，当前输入已保留；请查看最新内容或另存私人副本")
 				}
 				owner = str(old["ownerId"])
 				workspaceID = old["workspaceId"]
@@ -566,11 +597,12 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 				}
 			}
 			// 调整素材所属工作区只允许素材所有者/管理员执行；目标工作区要求编辑者及以上角色。
-			if input.WorkspaceID != nil {
+			if workspaceProvided {
 				if owner != u.ID && u.Role != "admin" {
 					return problem(403, "forbidden", "仅素材所有者可以调整所属工作区")
 				}
-				target := strings.TrimSpace(*input.WorkspaceID)
+				target := ""
+				if targetWorkspace != nil { target = strings.TrimSpace(*targetWorkspace) }
 				workspaceID = nil
 				if target != "" {
 					if !validID(target) {
@@ -614,7 +646,7 @@ func (a *App) assetRoutes(api *gin.RouterGroup) {
 			} else {
 				input.MediaID = nil
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO assets(id,owner_id,scope,type,title,content,media_id,metadata,workspace_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,type=excluded.type,title=excluded.title,content=excluded.content,media_id=excluded.media_id,metadata=excluded.metadata,workspace_id=excluded.workspace_id,updated_at=now()", id, owner, input.Scope, input.Type, input.Title, input.Content, input.MediaID, jsonBytes(input.Metadata), workspaceID); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO assets(id,owner_id,scope,type,title,content,media_id,metadata,workspace_id,client_request_id,client_request_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,'')) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,type=excluded.type,title=excluded.title,content=excluded.content,media_id=excluded.media_id,metadata=excluded.metadata,workspace_id=excluded.workspace_id,revision=assets.revision+1,updated_at=now()", id, owner, input.Scope, input.Type, input.Title, input.Content, input.MediaID, jsonBytes(input.Metadata), workspaceID, input.RequestID, digest); err != nil {
 				return err
 			}
 			if err := syncMediaRefs(ctx, tx, "asset", id, owner, ids); err != nil {

@@ -193,7 +193,7 @@ func TestModerationRefundAndRejectedContext(t *testing.T) {
 	testBalance(t, a, user, 2*moneyScale, 2*moneyScale)
 	for _, value := range responseRow(t, pending)["tasks"].([]any) {
 		task := object(value)
-		if canceled := testRequest(router, "POST", "/api/generation-tasks/"+str(task["id"])+"/cancel", nil, cookie); canceled.Code != 204 { t.Fatal(canceled.Body.String()) }
+		if canceled := testRequest(router, "POST", "/api/generation-tasks/"+str(task["id"])+"/cancel", nil, cookie); canceled.Code != 200 || responseRow(t, canceled)["canceled"] != true { t.Fatal(canceled.Body.String()) }
 	}
 	testBalance(t, a, user, 4*moneyScale, 0)
 	var canceledReviews int

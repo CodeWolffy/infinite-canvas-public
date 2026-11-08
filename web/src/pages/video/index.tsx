@@ -1,6 +1,6 @@
 import { AudioLines, BookOpen, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Drawer, Empty, Input, Tag } from "antd";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
+import { Alert, App, Button, Drawer, Empty, Input, Tag } from "antd";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 import { useSearchParams } from "react-router-dom";
@@ -22,21 +22,22 @@ import { clampVideoSeconds } from "@/lib/media-size";
 import { videoGenerationParameters } from "@/services/api/video";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "@/services/image-storage";
-import { createGenerationBatch, getGenerationBatch, retryGenerationTask, updateGenerationPreferences, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
-import { ensurePlatformMedia, selectedPlatformModel } from "@/services/api/tasks";
+import { getGenerationBatch, retryGenerationTask, updateGenerationPreferences, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { GenerationSubmissionUncertainError, submitWorkbenchGeneration } from "@/services/api/workbench-generation";
+import { selectedPlatformModel } from "@/services/api/tasks";
 import { mediaId } from "@/services/api/media";
 import { useSaveToAssets } from "@/hooks/use-save-to-assets";
 import { useGenerationBatches, useWorkbenchBootstrap, isActiveGenerationTask, generationTaskDuration } from "@/hooks/use-generation-batches";
 import { useGenerationQuote } from "@/hooks/use-generation-quote";
 import { useConfirmInputReplace } from "@/hooks/use-confirm-input-replace";
 import { useAddToCanvas } from "@/hooks/use-add-to-canvas";
-import { useWorkbenchInput, type WorkbenchInput } from "@/hooks/use-workbench-input";
+import { useWorkbenchInput, workbenchSettingKeys, type WorkbenchInput } from "@/hooks/use-workbench-input";
 import { useWorkbenchReferenceUploads } from "@/hooks/use-workbench-reference-uploads";
 import { useWorkbenchView } from "@/hooks/use-workbench-view";
 import { getWorkbenchDraft } from "@/stores/use-workbench-draft-store";
 import { useCreationDraftStore } from "@/stores/use-creation-draft-store";
-import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionName, useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { getPendingWorkbenchAgentTasks, setPendingWorkbenchAgentTasks, useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { boolConfig, defaultConfig, modelOptionName, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -66,7 +67,9 @@ type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => 
 export default function VideoPage() {
     const { message, modal } = App.useApp();
     const confirmReplace = useConfirmInputReplace();
-    const savedInput = useRef(getWorkbenchDraft<WorkbenchInput>("video")).current;
+    const savedInputRef = useRef({ session: useUserStore.getState().sessionVersion, value: getWorkbenchDraft<WorkbenchInput>("video") });
+    if (savedInputRef.current.session !== useUserStore.getState().sessionVersion) savedInputRef.current = { session: useUserStore.getState().sessionVersion, value: getWorkbenchDraft<WorkbenchInput>("video") };
+    const savedInput = savedInputRef.current.value;
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const [searchParams, setSearchParams] = useSearchParams();
@@ -80,6 +83,7 @@ export default function VideoPage() {
     const initialBatchRef = useRef<string | null>(null);
     const dismissedBatchRef = useRef<string | null>(null);
     const batchRequestRef = useRef(0);
+    const inputRevisionRef = useRef(0);
     const mountedRef = useRef(false);
     useEffect(() => {
         mountedRef.current = true;
@@ -92,12 +96,23 @@ export default function VideoPage() {
     const appliedDraftRef = useRef("");
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
-    const effectiveConfig = useConfigStore((state) => state.config);
-    const updateConfig = useConfigStore((state) => state.updateConfig);
+    const globalConfig = useConfigStore((state) => state.config);
+    const updateGlobalConfig = useConfigStore((state) => state.updateConfig);
+    const ownConfigUpdateRef = useRef(false);
+    const [modelId, setModelId] = useState(savedInput?.model || globalConfig.videoModel || "");
+    const [settings, setSettings] = useState<Partial<AiConfig>>(() => savedInput?.settings || Object.fromEntries(workbenchSettingKeys.video.map((key) => [key, globalConfig[key]])));
+    const effectiveConfig = { ...globalConfig, ...settings, videoModel: modelId };
+    const updateConfig = useCallback(<K extends keyof AiConfig>(key: K, value: AiConfig[K]) => {
+        if (workbenchSettingKeys.video.some((item) => item === key)) setSettings((current) => ({ ...current, [key]: value }));
+        if (key === "videoModel") setModelId(String(value));
+        ownConfigUpdateRef.current = true;
+        try { updateGlobalConfig(key, value); }
+        finally { ownConfigUpdateRef.current = false; }
+    }, [updateGlobalConfig]);
     const addAsset = useSaveToAssets();
 
     const modelsRef = useRef<PublicModel[]>([]);
-    const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission } = useGenerationBatches({
+    const { logs, setLogs, activeBatchIds, setActiveBatchIds, previewLog, setPreviewLog, previewLogIdRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission, subscriptionErrors, retrySubscription } = useGenerationBatches({
         toLog: (detail) => detailToLog(detail, modelsRef.current),
         onDetail: (detail) => detail.referenceMedia.filter((item) => item.mimeType.startsWith("image/")).forEach((item) => void ensureImagePreview(item.mediaId)),
         notifyKeys: { success: "videoWorkbench.generated", title: "videoWorkbench.title" },
@@ -105,17 +120,26 @@ export default function VideoPage() {
     const preferencesRef = useRef<Record<string, unknown>>({});
     const [prompt, setPrompt] = useState(savedInput?.prompt || "");
     const [ambiguousDraftModel, setAmbiguousDraftModel] = useState(false);
-    const referenceUploads = useWorkbenchReferenceUploads({ initialReferences: savedInput?.references || [], sessionVersion, captureInputScope, supportsType: (type) => /^(image|video|audio)\//.test(type), unsupportedMessage: "仅支持图片、视频或音频文件", maxCount: 9 });
+    useEffect(() => useConfigStore.subscribe((state, previous) => {
+        if (state.configEditVersion === previous.configEditVersion || !state.lastEditedConfigKey) return;
+        const key = state.lastEditedConfigKey;
+        if (workbenchSettingKeys.video.some((item) => item === key)) setSettings((current) => ({ ...current, [key]: state.config[key] }));
+        if (key === "videoModel") setModelId(state.config.videoModel);
+        if (!ownConfigUpdateRef.current) ++inputRevisionRef.current;
+    }), []);
+    const referenceUploads = useWorkbenchReferenceUploads({ initialReferences: savedInput?.references || [], initialUploads: savedInput?.uploads, sessionVersion, captureInputScope, onInputChange: () => { ++inputRevisionRef.current; }, supportsType: (type) => /^(image|video|audio)\//.test(type), unsupportedMessage: "仅支持图片、视频或音频文件", maxCount: 9 });
     const { references, setReferences, addFiles: addReferences, addClipboard: addReferencesFromClipboard } = referenceUploads;
     const [generating, setGenerating] = useState(false);
     const generatingRef = useRef(false);
     const [logsOpen, setLogsOpen] = useState(false);
+    const [batchReadError, setBatchReadError] = useState<{ id: string; restoreInput: boolean; message: string } | null>(null);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [referenceDragTarget, setReferenceDragTarget] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
+    const startedAutoRunRef = useRef(0);
 
     const videoCommand = useWorkbenchAgentStore((state) => state.videoCommand);
     const clearVideoCommand = useWorkbenchAgentStore((state) => state.clearVideoCommand);
@@ -123,12 +147,13 @@ export default function VideoPage() {
     const processedCommandRef = useRef(0);
     const agentTaskIdRef = useRef<string | undefined>(undefined);
 
-    const model = effectiveConfig.videoModel || effectiveConfig.model;
+    const model = modelId || modelsRef.current[0]?.id || effectiveConfig.model;
 
-    const { initialized } = useWorkbenchBootstrap({
+    const bootstrap = useWorkbenchBootstrap({
         capability: "video",
         modelsRef,
         preferencesRef,
+        captureInputScope: captureDraftScope,
         batches: { setLogs, setActiveBatchIds, applyDetail, setPreviewLog, setResults },
         toLog: (batch, models) => summaryToLog(batch, models),
         applyPreferences: (preferences) => {
@@ -143,11 +168,12 @@ export default function VideoPage() {
             if (typeof size === "string") updateConfig("size", size);
         },
         resolveInitialBatchId: (batches) => {
+            if (savedInput || inputRevisionRef.current) return null;
             initialBatchRef.current = batches[0]?.id || null;
             return null;
         },
-        ignoreDetailError: true,
     });
+    const { initialized, historyReady } = bootstrap;
 
     const quoteModelId = effectiveConfig.platformModels.find((item) => item.name === modelOptionName(model) && item.capability === "video")?.name || "";
     const referencesReady = !referenceUploads.hasPending() && !referenceUploads.hasFailures();
@@ -155,11 +181,36 @@ export default function VideoPage() {
     const disabledReason = generating ? "正在提交本次生成，请稍候" : referenceUploads.hasPending() ? "参考素材正在准备或上传，请完成后再生成" : referenceUploads.hasFailures() ? "请重试或移除失败的参考素材后再生成" : !prompt.trim() ? "请先填写提示词" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : quote.error?.message || (!quote.ready ? "正在获取本次费用，请稍候" : "");
     const canGenerate = !disabledReason;
 
-    const inputDraft = useWorkbenchInput("video", { prompt, references, model, config: effectiveConfig }, initialized, sessionVersion);
+    const inputDraft = useWorkbenchInput("video", { prompt, references, model, config: effectiveConfig, uploads: referenceUploads.storedUploads() }, initialized, sessionVersion, {
+        captureInputScope: captureDraftScope,
+        restore: (saved) => {
+            ++batchRequestRef.current;
+            initialBatchRef.current = null;
+            setPrompt(saved.prompt);
+            setReferences(saved.references);
+            setModelId(saved.model);
+            setSettings(saved.settings);
+            for (const key of workbenchSettingKeys.video) if (typeof saved.settings[key] === "string") updateConfig(key, saved.settings[key]!);
+            updateConfig("videoModel", saved.model);
+            referenceUploads.restoreUploads(saved.uploads || []);
+        },
+    });
+    const inputSessionRef = useRef(sessionVersion);
+    useLayoutEffect(() => {
+        if (inputSessionRef.current === sessionVersion) return;
+        inputSessionRef.current = sessionVersion;
+        ++batchRequestRef.current;
+        ++inputRevisionRef.current;
+        setPrompt(""); setModelId(""); setSettings(Object.fromEntries(workbenchSettingKeys.video.map((key) => [key, defaultConfig[key]])));
+        setAutoRunToken(0); agentTaskIdRef.current = undefined;
+        generatingRef.current = false; setGenerating(false); setBatchReadError(null);
+    }, [sessionVersion]);
 
     const loadBatchRef = useRef<(id: string, restoreInput: boolean) => Promise<void>>(async () => undefined);
     loadBatchRef.current = async (id, restoreInput) => {
         const request = ++batchRequestRef.current;
+        const revision = inputRevisionRef.current;
+        setBatchReadError(null);
         referenceUploads.clearUploads();
         const version = useUserStore.getState().sessionVersion;
         try {
@@ -169,10 +220,10 @@ export default function VideoPage() {
             const applied = applyDetail(detail);
             setPreviewLog(applied.log);
             setResults(applied.results);
-            if (!restoreInput) return;
+            if (!restoreInput || revision !== inputRevisionRef.current) return;
             handledReuse.current = id;
             confirmReplace(inputDraft.dirty, () => {
-                if (!mountedRef.current || request !== batchRequestRef.current || useUserStore.getState().sessionVersion !== version) return;
+                if (!mountedRef.current || request !== batchRequestRef.current || revision !== inputRevisionRef.current || useUserStore.getState().sessionVersion !== version) return;
                 ++batchRequestRef.current;
                 referenceUploads.clearUploads();
                 workbenchView.selectView("create");
@@ -185,12 +236,12 @@ export default function VideoPage() {
                 }
             });
         } catch (error) {
-            if (restoreInput && request === batchRequestRef.current && useUserStore.getState().sessionVersion === version) message.error(error instanceof Error ? error.message : "生成记录读取失败");
+            if (request === batchRequestRef.current && useUserStore.getState().sessionVersion === version) setBatchReadError({ id, restoreInput, message: error instanceof Error ? error.message : "生成记录读取失败" });
         }
     };
 
     useEffect(() => {
-        if (!initialized || generating || !draft || draft.capability !== "video" || draft.sessionVersion !== sessionVersion || appliedDraftRef.current === draft.id) return;
+        if (!initialized || !inputDraft.hydrated || generating || !draft || draft.capability !== "video" || draft.sessionVersion !== sessionVersion || appliedDraftRef.current === draft.id) return;
         appliedDraftRef.current = draft.id;
         confirmReplace(inputDraft.dirty, () => {
             if (useCreationDraftStore.getState().draft?.id !== draft.id) return;
@@ -212,7 +263,7 @@ export default function VideoPage() {
                 updateConfig("videoModel", selected?.id || draft.modelId || draft.modelName || "");
                 if (!selected) message.warning(ambiguous ? `草稿名称「${draft.modelName}」对应多个模型配置，请明确选择` : `草稿指定的模型「${draft.modelName || draft.modelId}」当前不可用，请重新选择`);
             }
-            const applied = readVideoDraftSettings(draft.settings, useConfigStore.getState().config);
+            const applied = readVideoDraftSettings(draft.settings, effectiveConfig);
             for (const [key, value] of Object.entries(applied.settings)) updateConfig(key as "size" | "vquality" | "videoSeconds" | "videoMode", value);
             if (applied.warnings.length) message.warning(`草稿中的${applied.warnings.join("、")}无法使用，已保留当前设置`);
             if (previousBatch) {
@@ -220,23 +271,46 @@ export default function VideoPage() {
             }
             clearDraft(draft.id);
         }, () => clearDraft(draft.id));
-    }, [initialized, generating, draft, sessionVersion, updateConfig, clearDraft, message, setSearchParams]);
+    }, [initialized, inputDraft.hydrated, generating, draft, sessionVersion, updateConfig, clearDraft, message, setSearchParams]);
 
     useEffect(() => {
-        if (!initialized || pendingDraft || targetBatchId !== targetBatchRef.current || targetBatchId && targetBatchId === dismissedBatchRef.current) return;
+        return () => { ++batchRequestRef.current; referenceUploads.clearUploads(); };
+    }, [targetBatchId, sessionVersion]);
+
+    useEffect(() => {
+        if (!initialized || !inputDraft.hydrated || pendingDraft || targetBatchId !== targetBatchRef.current || targetBatchId && targetBatchId === dismissedBatchRef.current) return;
         dismissedBatchRef.current = null;
         if (!reuseBatch) handledReuse.current = "";
-        const id = targetBatchId || initialBatchRef.current;
         if (targetBatchId !== viewBatchRef.current) {
             viewBatchRef.current = targetBatchId;
             if (targetBatchId) workbenchView.selectView(reuseBatch ? "create" : "results");
         }
-        if (id) {
-            const shouldReuse = reuseBatch && handledReuse.current !== id;
-            void loadBatchRef.current(id, shouldReuse);
+        if (targetBatchId) {
+            const shouldReuse = reuseBatch && handledReuse.current !== targetBatchId;
+            void loadBatchRef.current(targetBatchId, shouldReuse);
         }
-        return () => { ++batchRequestRef.current; referenceUploads.clearUploads(); };
-    }, [initialized, targetBatchId, sessionVersion, pendingDraft, reuseBatch]);
+    }, [initialized, inputDraft.hydrated, targetBatchId, sessionVersion, pendingDraft, reuseBatch]);
+
+    useEffect(() => {
+        if (!initialized || !inputDraft.hydrated || !historyReady || pendingDraft || targetBatchRef.current || inputRevisionRef.current || !initialBatchRef.current) return;
+        const id = initialBatchRef.current;
+        initialBatchRef.current = null;
+        void loadBatchRef.current(id, false);
+    }, [initialized, inputDraft.hydrated, historyReady, sessionVersion, pendingDraft]);
+
+    function markInputInteraction() {
+        ++inputRevisionRef.current;
+        workbenchView.markInteraction();
+    }
+
+    function captureDraftScope() {
+        const assertScope = captureInputScope();
+        const revision = inputRevisionRef.current;
+        return () => {
+            assertScope();
+            if (revision !== inputRevisionRef.current || pendingDraft) throw new DOMException("当前创作输入已改变", "AbortError");
+        };
+    }
 
     function captureInputScope() {
         const version = useUserStore.getState().sessionVersion;
@@ -268,7 +342,7 @@ export default function VideoPage() {
     };
 
     const generate = async () => {
-        if (generatingRef.current) return;
+        if (generatingRef.current || !initialized || !inputDraft.hydrated) return;
         if (referenceUploads.hasPending() || referenceUploads.hasFailures()) {
             message.warning("请等待参考素材上传完成，并重试或移除失败项后再生成");
             const taskId = agentTaskIdRef.current;
@@ -285,6 +359,8 @@ export default function VideoPage() {
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const submittedFingerprint = inputDraft.fingerprint;
+        const agentTaskIds = getPendingWorkbenchAgentTasks(submittedFingerprint);
+        if (agentTaskId) agentTaskIds.add(agentTaskId);
         const text = prompt.trim();
         if (!text) {
             generatingRef.current = false;
@@ -293,7 +369,7 @@ export default function VideoPage() {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.promptRequired") });
             return;
         }
-        const currentModel = effectiveConfig.videoModel || effectiveConfig.model;
+        const currentModel = model;
         if (!currentModel) {
             generatingRef.current = false;
             setGenerating(false);
@@ -304,40 +380,44 @@ export default function VideoPage() {
 
         try {
             ensureNotifyPermission();
-            const referenceMediaIds = await Promise.all(references.map((item) => ensurePlatformMedia(item)));
             const modelId = selectedPlatformModel(modelsRef.current, currentModel, "video");
             const parameters = videoGenerationParameters(effectiveConfig);
-            assertCurrentSession(sessionVersion);
-            if (!mountedRef.current || viewRequest !== batchRequestRef.current || targetBatchRef.current !== sourceBatchId) return;
-            const created = await createGenerationBatch({
+            const created = await submitWorkbenchGeneration({
+                capability: "video",
                 modelId,
                 prompt: text,
                 count: 1,
-                referenceMediaIds,
+                references,
                 parameters,
+            }, () => {
+                assertCurrentSession(sessionVersion);
+                if (!mountedRef.current || viewRequest !== batchRequestRef.current || targetBatchRef.current !== sourceBatchId || !inputDraft.isCurrent(submittedFingerprint)) throw new DOMException("当前创作输入已改变", "AbortError");
             });
             assertCurrentSession(sessionVersion);
+            if (!mountedRef.current) return;
+            if (created.submissionWarning) message.warning(created.submissionWarning);
             inputDraft.submitted(submittedFingerprint);
-            const applied = applyDetail({ ...created, referenceMediaIds, referenceMedia: references.map((item, index) => ({ mediaId: referenceMediaIds[index], mimeType: item.type, originalName: item.name })) });
-            if (mountedRef.current && viewRequest === batchRequestRef.current && targetBatchRef.current === sourceBatchId) {
+            setPendingWorkbenchAgentTasks(submittedFingerprint, new Set());
+            agentTaskIds.forEach((id) => {
+                updateAgentTask(id, { status: "running", error: undefined });
+                registerAgentTask(created.batch.id, id);
+            });
+            const applied = applyDetail(created);
+            if (mountedRef.current && viewRequest === batchRequestRef.current && targetBatchRef.current === sourceBatchId && inputDraft.isCurrent(submittedFingerprint) && !referenceUploads.hasPending() && !referenceUploads.hasFailures()) {
                 setPreviewLog(applied.log);
                 setResults(applied.results);
                 showSubmittedResults();
                 viewBatchRef.current = created.batch.id;
                 setSearchParams((current) => { current.set("batch", created.batch.id); current.delete("reuse"); return current; }, { replace: true });
             }
-            if (agentTaskId) {
-                registerAgentTask(created.batch.id, agentTaskId);
-                updateAgentTask(agentTaskId, { status: "running", error: undefined });
-            }
         } catch (error) {
-            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+            if (!mountedRef.current || useUserStore.getState().sessionVersion !== sessionVersion || error instanceof DOMException && error.name === "AbortError") return;
             const detail = error instanceof Error ? error.message : t("workbench.generationFailed");
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: detail });
+            setPendingWorkbenchAgentTasks(submittedFingerprint, error instanceof GenerationSubmissionUncertainError ? agentTaskIds : new Set());
+            agentTaskIds.forEach((id) => updateAgentTask(id, { status: error instanceof GenerationSubmissionUncertainError ? "running" : "failed", error: detail }));
             message.error(detail);
         } finally {
-            generatingRef.current = false;
-            setGenerating(false);
+            if (mountedRef.current && useUserStore.getState().sessionVersion === sessionVersion) { generatingRef.current = false; setGenerating(false); }
         }
     };
 
@@ -345,6 +425,7 @@ export default function VideoPage() {
     useEffect(() => {
         if (!initialized || !videoCommand || videoCommand.nonce === processedCommandRef.current) return;
         processedCommandRef.current = videoCommand.nonce;
+        ++inputRevisionRef.current;
         clearVideoCommand();
         if (typeof videoCommand.prompt === "string") setPrompt(videoCommand.prompt);
         if (videoCommand.config?.model) updateConfig("videoModel", videoCommand.config.model);
@@ -363,20 +444,25 @@ export default function VideoPage() {
     }, [videoCommand, clearVideoCommand, initialized, generating, updateAgentTask, updateConfig, t]);
 
     useEffect(() => {
-        if (!autoRunToken) return;
+        if (!autoRunToken || startedAutoRunRef.current === autoRunToken || !initialized || !inputDraft.hydrated) return;
+        startedAutoRunRef.current = autoRunToken;
         void generate();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [autoRunToken]);
+    }, [autoRunToken, initialized, inputDraft.hydrated]);
 
     const retryResult = async (taskId?: string) => {
         const targetId = taskId || results.find((r) => r.status === "failed")?.id;
         if (!targetId) return;
+        const session = useUserStore.getState().sessionVersion;
+        const batchId = previewLogIdRef.current;
+        const request = batchRequestRef.current;
         try {
             const retried = await retryGenerationTask(targetId);
-            setResults((value) => value.map((item) => (item.id === targetId ? { id: retried.id, status: "queued" } : item)));
-            if (previewLogIdRef.current) watchBatch(previewLogIdRef.current);
+            if (!mountedRef.current || useUserStore.getState().sessionVersion !== session) return;
+            if (previewLogIdRef.current === batchId && request === batchRequestRef.current) setResults((value) => value.map((item) => (item.id === targetId ? { id: retried.id, status: "queued" } : item)));
+            if (batchId) watchBatch(batchId);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("workbench.generationFailed"));
+            if (mountedRef.current && useUserStore.getState().sessionVersion === session) message.error(error instanceof Error ? error.message : t("workbench.generationFailed"));
         }
     };
 
@@ -475,7 +561,7 @@ export default function VideoPage() {
     };
 
     const updateGenerationConfig: UpdateAiConfig = (key, value) => {
-        workbenchView.markInteraction();
+        markInputInteraction();
         updateConfig(key, value);
         if (key === "videoModel") setAmbiguousDraftModel(false);
         if (!["vquality", "size", "videoSeconds", "videoGenerateAudio", "videoWatermark", "videoMode", "videoModel"].includes(key)) return;
@@ -498,10 +584,15 @@ export default function VideoPage() {
 
                 <section className="grid min-h-0 min-w-0 gap-3 overflow-hidden @min-[1024px]/workbench:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] @min-[1280px]/workbench:grid-cols-[420px_minmax(0,1fr)]">
                     <div className={`min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800 ${workbenchView.view === "create" ? "flex" : "hidden"} @min-[1024px]/workbench:flex`} aria-label="创作输入">
-                        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4" onPointerDownCapture={workbenchView.markInteraction} onChangeCapture={workbenchView.markInteraction} onKeyDownCapture={workbenchView.markInteraction}>
+                        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4" onPointerDownCapture={workbenchView.markInteraction} onChangeCapture={markInputInteraction} onKeyDownCapture={workbenchView.markInteraction}>
                             <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("videoWorkbench.title")}</h1>
 
-                            <p className="mt-2 text-xs leading-5 text-muted-foreground">输入在当前会话跨页面保留，刷新页面后清空。</p>
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">{inputDraft.hydrated ? "未提交输入会在本机按账号保留，可刷新后继续。" : "正在读取本机草稿，可先继续编辑。"}</p>
+                            {inputDraft.loadError ? <Alert className="mt-3" type="warning" showIcon title={inputDraft.loadError} action={<Button size="small" onClick={inputDraft.retryLoad}>重试读取</Button>} /> : null}
+                            {inputDraft.saveError ? <Alert className="mt-3" type="warning" showIcon title={inputDraft.saveError} action={<Button size="small" onClick={inputDraft.retrySave}>重试保存</Button>} /> : null}
+                            {bootstrap.modelsError ? <Alert className="mt-3" type="error" showIcon title="模型加载失败" description={bootstrap.modelsError} action={<Button size="small" onClick={bootstrap.retryModels}>重试模型</Button>} /> : null}
+                            {bootstrap.preferencesError ? <Alert className="mt-3" type="warning" showIcon title="偏好加载失败，已保留当前参数" description={bootstrap.preferencesError} action={<Button size="small" onClick={bootstrap.retryPreferences}>重试偏好</Button>} /> : null}
+                            {bootstrap.historyError ? <Alert className="mt-3" type="warning" showIcon title="历史记录加载失败，仍可继续创作" description={bootstrap.historyError} action={<Button size="small" onClick={bootstrap.retryHistory}>重试记录</Button>} /> : null}
                             <div className="mt-6 space-y-5">
                                 <div>
                                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -566,12 +657,12 @@ export default function VideoPage() {
                         </div>
                         <div className="shrink-0 border-t border-border bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                             <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0 text-xs leading-5 text-muted-foreground" aria-live="polite">{!referencesReady ? "素材就绪后计算费用" : quote.quote ? <>预计冻结 <span className="font-semibold tabular-nums text-foreground">¥{quote.quote.estimatedHold}</span></> : quote.isFetching ? "正在获取本次费用…" : quote.error ? "本次费用获取失败" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : "输入提示词后查看费用"}</div>
-                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating} title={disabledReason || "开始生成"} onClick={() => void generate()}>{t("workbench.generate")}</Button>
+                                <div className="min-w-0 text-xs leading-5 text-muted-foreground" aria-live="polite">{!referencesReady ? "素材就绪后计算费用" : quote.quote ? <>预计消费 <span className="font-semibold tabular-nums text-foreground">¥{quote.quote.estimatedHold}</span></> : quote.isFetching ? "正在获取本次费用…" : quote.error ? "本次费用获取失败" : ambiguousDraftModel ? "请明确选择同名模型配置" : !quoteModelId ? "请选择可用模型" : "输入提示词后查看费用"}</div>
+                                <Button type="primary" size="large" className="shrink-0" icon={<Sparkles className="size-4" />} loading={generating} disabled={!canGenerate || generating || !initialized || !inputDraft.hydrated} title={disabledReason || "开始生成"} onClick={() => void generate()}>{t("workbench.generate")}</Button>
                             </div>
                             {disabledReason ? <p className="mt-2 text-xs leading-5 text-muted-foreground" role="status">{disabledReason}</p> : null}
                             {referencesReady && quote.error ? <Button type="text" size="small" className="!px-0" loading={quote.isFetching} onClick={() => void quote.refetch()}>重试报价</Button> : null}
-                            {referencesReady && quote.quote ? <p className="mt-1 text-xs leading-5 text-muted-foreground">冻结金额不是最终扣费，最终结算以账户账单为准。</p> : null}
+                            {referencesReady && quote.quote ? <p className="mt-1 text-xs leading-5 text-muted-foreground">按实际用量结算，未使用金额会退回。</p> : null}
                         </div>
                     </div>
 
@@ -579,9 +670,11 @@ export default function VideoPage() {
                         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                             <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
                                 {previewLog ? <Button type="text" size="small" disabled={generating} onClick={() => void loadBatchRef.current(previewLog.id, true)}>用此批次再创作</Button> : null}
-                            {activeBatchIds.length || generating ? <Tag className="m-0 px-2 py-1">{t("workbench.generating")}</Tag> : null}
+                            {activeBatchIds.length || generating ? <Tag className="m-0 px-2 py-1">{Object.keys(subscriptionErrors).length ? "部分生成状态待确认" : t("workbench.generating")}</Tag> : null}
                         </div>
                         <Button type="text" className="!mb-3 !px-0 @min-[1024px]/workbench:!hidden" onClick={() => workbenchView.selectView("create")}>继续调整</Button>
+                        {batchReadError ? <Alert className="mb-3" type="warning" showIcon title="生成记录读取失败" description={batchReadError.message} action={<Button size="small" onClick={() => void loadBatchRef.current(batchReadError.id, batchReadError.restoreInput)}>重试读取记录</Button>} /> : null}
+                        {Object.entries(subscriptionErrors).map(([id, error]) => <Alert key={id} className="mb-3" type="warning" showIcon title="生成状态更新已中断" description={error} action={<Button size="small" onClick={() => retrySubscription(id)}>恢复状态更新</Button>} />)}
                         {results.length ? (
                             <div className="grid gap-4">
                                 {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <GenerationFailureCard video key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => void retryResult(result.id)} /> : <PendingVideoCard key={result.id} status={result.status} />))}

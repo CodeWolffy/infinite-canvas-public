@@ -17,9 +17,11 @@ export const walletEntryLabels: Record<string, string> = { recharge: "充值 / �
 export const getWallet = () => apiRequest<WalletOverview>("/api/user/wallet");
 export const checkin = () => apiRequest<{ reward: string; alreadyCheckedIn: boolean }>("/api/user/checkin", { method: "POST", body: {} });
 export const getPaymentOrders = (offset = 0) => apiRequest<{ orders: PaymentOrder[] }>(`/api/user/payment-orders?limit=50&offset=${offset}`);
-export const createPaymentOrder = (body: { channelId: string; method: PaymentMethod; amount: string; requestId: string }) => apiRequest<{ order: PaymentOrder }>("/api/user/payment-orders", { method: "POST", body });
+export type PaymentOrderResult = { order: PaymentOrder; paymentError?: string };
+export const createPaymentOrder = (body: { channelId: string; method: PaymentMethod; amount: string; requestId: string }) => apiRequest<PaymentOrderResult>("/api/user/payment-orders", { method: "POST", body });
 export const getPaymentOrder = (id: string) => apiRequest<{ order: PaymentOrder }>(`/api/user/payment-orders/${id}`);
 export const refreshPaymentOrder = (id: string) => apiRequest<{ order: PaymentOrder }>(`/api/user/payment-orders/${id}/refresh`, { method: "POST", body: {} });
+export const resumePaymentOrder = (id: string) => apiRequest<PaymentOrderResult>(`/api/user/payment-orders/${id}/resume`, { method: "POST", body: {} });
 export const getPaymentChannels = () => apiRequest<{ channels: PaymentChannel[] }>("/api/admin/payment-channels");
 export const savePaymentChannel = (id: string | undefined, body: Omit<PaymentChannel, "id" | "configuredSecrets">, securityProof: SecurityProof) => apiRequest<{ id: string }>(`/api/admin/payment-channels${id ? `/${id}` : ""}`, { method: id ? "PUT" : "POST", body: { ...body, securityProof } });
 export const getAdminPaymentOrders = (status = "", offset = 0) => apiRequest<{ orders: PaymentOrder[] }>(`/api/admin/payment-orders?${serializeApiParams({ status, offset, limit: 50 })}`);

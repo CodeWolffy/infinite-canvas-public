@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { TaskBillingButton } from "@/components/generation/task-billing-button";
 import { useUserStore } from "@/stores/use-user-store";
 import { formatDuration } from "@/lib/image-utils";
 import { walletEntryLabels } from "@/services/api/billing";
@@ -278,7 +279,7 @@ export default function UserLogsPage() {
                     { key: "model", label: "模型", children: detail.modelDisplayName || "—" },
                     { key: "status", label: "状态", children: detail.status ? <Tag color={statusColors[detail.status]}>{statusLabel(detail.status)}</Tag> : "—" },
                     { key: "http", label: "HTTP 状态", children: detail.httpStatus ?? "—" },
-                    { key: "cost", label: "费用", children: detail.billedAmount ? <span className="font-mono">¥{detail.billedAmount}</span> : "—" },
+                    { key: "cost", label: "费用", children: <div className="flex flex-wrap items-center gap-3"><span className="font-mono">{detail.billedAmount ? `¥${detail.billedAmount}` : "—"}</span>{detail.taskId || detail.textRequestId ? <TaskBillingButton taskId={(detail.taskId || detail.textRequestId)!} /> : null}</div> },
                     { key: "tokens", label: "Tokens", children: detail.promptTokens !== null || detail.completionTokens !== null
                         ? <span className="font-mono text-xs">输入 {(detail.promptTokens ?? 0).toLocaleString()}{detail.cachedTokens ? `（缓存 ${detail.cachedTokens.toLocaleString()}）` : ""} · 输出 {(detail.completionTokens ?? detail.outputTokens ?? 0).toLocaleString()}</span>
                         : (detail.outputTokens !== null ? <span className="font-mono text-xs">输出 {detail.outputTokens.toLocaleString()}</span> : "—") },

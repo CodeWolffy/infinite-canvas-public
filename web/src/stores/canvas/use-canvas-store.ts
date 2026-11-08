@@ -7,6 +7,7 @@ import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 import { mergeCanvasSnapshots } from "@/lib/canvas/canvas-collaboration-merge";
+import { createCanvasRecovery, readCanvasRecoveries, removeCanvasRecovery, writeCanvasRecovery, type CanvasRecovery } from "@/lib/canvas/canvas-recovery";
 
 export type CanvasProject = {
     id: string;
@@ -58,6 +59,8 @@ type CanvasStore = {
     deletedProjects: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
     saveStates: Record<string, CanvasSaveState>;
+    recoveries: Record<string, CanvasRecovery[]>;
+    recoveryErrors: Record<string, string>;
     reloadVersion: number;
     hydrateProjects: (userId: string) => Promise<void>;
     refreshProjectList: (query?: canvasApi.CanvasProjectQuery) => Promise<void>;
@@ -76,6 +79,8 @@ type CanvasStore = {
     retrySave: (id: string) => Promise<void>;
     hasPendingChanges: (id: string) => boolean;
     registerSnapshotCapture: (id: string, capture: () => void) => () => void;
+    retainRecovery: (id: string, snapshot: CanvasSnapshot) => void;
+    resolveRecovery: (id: string, key: string, action: "restore" | "copy" | "discard") => Promise<string>;
     resolveConflict: (id: string, action: "reload" | "copy") => Promise<string>;
     acceptRemoteProject: (record: canvasApi.CanvasProjectDetail) => void;
     suspendProjectAccess: (id: string) => void;
@@ -94,6 +99,9 @@ const snapshotCaptures = new Map<string, () => void>();
 const serverProjects = new Map<string, CanvasProject>();
 const deferredRemoteProjects = new Map<string, canvasApi.CanvasProjectDetail>();
 const saveAttempts = new Map<string, number>();
+const activeRecoveries = new Map<string, CanvasRecovery>();
+const recoveryWrites = new Map<string, Promise<boolean>>();
+const recoveryViewports = new Map<string, ViewportTransform>();
 /** 命中不可恢复错误（如 413、400）后停止自动重试，改由用户手动重试，避免无限循环打爆接口。 */
 const blockedProjects = new Set<string>();
 const CANVAS_SAVE_DEBOUNCE_MS = 1000;
@@ -126,6 +134,48 @@ function isPermanentFailure(error: unknown) {
 function projectSnapshot(project: CanvasProject): CanvasSnapshot {
     const { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport } = project;
     return { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport };
+}
+
+function recoveryError(id: string, message: string) {
+    useCanvasStore.setState((state) => ({ recoveryErrors: { ...state.recoveryErrors, [id]: message } }));
+}
+
+function persistProjectRecovery(id: string) {
+    const { user, sessionVersion } = useUserStore.getState();
+    const project = useCanvasStore.getState().projects.find((item) => item.id === id);
+    if (!user || !project) return;
+    const previous = activeRecoveries.get(id);
+    const viewport = recoveryViewports.get(id);
+    const nextSnapshot = project.snapshotLoaded ? { ...projectSnapshot(project), ...(viewport ? { viewport } : {}) } : undefined;
+    const baseRevision = serverProjects.get(id)?.revision ?? project.revision;
+    if (previous?.baseRevision === baseRevision && previous.title === project.title && previous.snapshot && nextSnapshot && Object.entries(nextSnapshot).every(([key, value]) => key === "viewport" ? stringify(value) === stringify(previous.snapshot!.viewport) : previous.snapshot![key as keyof CanvasSnapshot] === value)) return;
+    const record = createCanvasRecovery({ userId: user.id, projectId: id, baseRevision, title: project.title, snapshot: nextSnapshot }, previous);
+    activeRecoveries.set(id, record);
+    const isCurrent = () => useUserStore.getState().sessionVersion === sessionVersion;
+    const writing = (recoveryWrites.get(id) || Promise.resolve()).then(async () => {
+        // 仅合并尚未开始的写入；已经落盘的旧版由下一次成功写入或对应保存完成后清理。
+        if (!isCurrent() || activeRecoveries.get(id) !== record) return false;
+        await writeCanvasRecovery(record, previous, isCurrent);
+        if (isCurrent() && activeRecoveries.get(id) === record) recoveryError(id, "");
+        return isCurrent();
+    }).catch(() => {
+        if (isCurrent()) recoveryError(id, "浏览器恢复副本写入失败，请先完成服务端保存再刷新或关闭页面");
+        return false;
+    });
+    recoveryWrites.set(id, writing);
+}
+
+function clearProjectRecovery(id: string, record = activeRecoveries.get(id)) {
+    if (!record) return;
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    if (activeRecoveries.get(id) === record) activeRecoveries.delete(id);
+    recoveryWrites.set(id, (recoveryWrites.get(id) || Promise.resolve()).then(() => removeCanvasRecovery(record, () => useUserStore.getState().sessionVersion === sessionVersion)).then(() => {
+        if (useUserStore.getState().sessionVersion === sessionVersion && !activeRecoveries.has(id)) recoveryError(id, "");
+        return true;
+    }).catch(() => {
+        if (useUserStore.getState().sessionVersion === sessionVersion) recoveryError(id, "恢复副本清理失败，下次打开时请核对服务端内容");
+        return false;
+    }));
 }
 
 function accessFields(record: canvasApi.CanvasProjectSummary) {
@@ -234,6 +284,7 @@ function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
     if (role === "" || role === "viewer" && (patch.title !== undefined || patch.snapshot !== undefined)) return;
     const merged = mergeUpdates(pendingUpdates.get(id), patch);
     pendingUpdates.set(id, merged);
+    persistProjectRecovery(id);
     publishSaveState(id);
     // 已知不可恢复：只保留待写入内容，等用户点重试，不再自动发请求。
     if (blockedProjects.has(id)) return;
@@ -243,7 +294,8 @@ function enqueueProjectUpdate(id: string, patch: ProjectUpdatePatch) {
 }
 
 export async function flushProject(id: string) {
-    return flushProjectUpdate(id);
+    await flushProjectUpdate(id);
+    await recoveryWrites.get(id);
 }
 
 async function flushProjectUpdate(id: string) {
@@ -262,11 +314,13 @@ async function flushProjectUpdate(id: string) {
         if (!blockedProjects.has(id) && (savingProjects.has(id) || pendingUpdates.has(id))) await flushProjectUpdate(id);
         return;
     }
-    const patch = pendingUpdates.get(id);
-    if (!patch || blockedProjects.has(id)) return;
+    if (!pendingUpdates.has(id) || blockedProjects.has(id)) return;
+    snapshotCaptures.get(id)?.();
+    const patch = pendingUpdates.get(id)!;
     const project = useCanvasStore.getState().projects.find((item) => item.id === id);
     if (!project) return;
     const base = serverProjects.get(id);
+    const recovery = activeRecoveries.get(id);
     pendingUpdates.delete(id);
     let failed = false;
     const request = canvasApi
@@ -275,8 +329,8 @@ async function flushProjectUpdate(id: string) {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             if (record.revision < (useCanvasStore.getState().projects.find((item) => item.id === id)?.revision ?? 0)) return;
             if (blockedProjects.has(id) && useCanvasStore.getState().saveStates[id]?.error?.permanent) return;
+            snapshotCaptures.get(id)?.();
             if (record.snapshot) {
-                snapshotCaptures.get(id)?.();
                 const authoritative = detailProject({ ...record, snapshot: record.snapshot });
                 const local = useCanvasStore.getState().projects.find((item) => item.id === id)!;
                 serverProjects.set(id, authoritative);
@@ -306,6 +360,10 @@ async function flushProjectUpdate(id: string) {
                         : project,
                 ),
             }));
+            const localViewport = recoveryViewports.get(id);
+            const savedViewport = useCanvasStore.getState().projects.find((item) => item.id === id)?.viewport;
+            if (pendingUpdates.has(id) || localViewport && stringify(localViewport) !== stringify(savedViewport)) persistProjectRecovery(id);
+            else clearProjectRecovery(id, recovery);
         })
         .catch((error: unknown) => {
             failed = true;
@@ -381,6 +439,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             deletedProjects: [],
             saveError: null,
             saveStates: {},
+            recoveries: {},
+            recoveryErrors: {},
             reloadVersion: 0,
             hydrateProjects: async (userId) => {
                 const { sessionVersion, user } = useUserStore.getState();
@@ -459,14 +519,23 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             // 服务端已创建的项目（如从模板生成）直接纳入本地列表，避免再拉一次详情。
             adoptProject: (record) => mergeProject(detailProject(record)).id,
             loadProject: async (id) => {
-                const sessionVersion = useUserStore.getState().sessionVersion;
+                const { sessionVersion, user } = useUserStore.getState();
                 const cached = get().projects.find((item) => item.id === id);
                 if (cached?.snapshotLoaded && (pendingUpdates.has(id) || savingProjects.has(id) || blockedProjects.has(id))) return cached;
                 let request = loadPromises.get(id);
                 if (!request) {
-                    request = canvasApi
-                        .getCanvasProject(id)
-                        .then((record) => useUserStore.getState().sessionVersion === sessionVersion ? mergeProject(detailProject(record)) : null)
+                    request = Promise.all([
+                        canvasApi.getCanvasProject(id),
+                        user ? readCanvasRecoveries(user.id, id).catch(() => {
+                            if (useUserStore.getState().sessionVersion === sessionVersion) recoveryError(id, "无法读取浏览器恢复副本，请稍后重新打开画布");
+                            return [];
+                        }) : Promise.resolve([]),
+                    ])
+                        .then(([record, recoveries]) => {
+                            if (useUserStore.getState().sessionVersion !== sessionVersion) return null;
+                            set((state) => ({ recoveries: { ...state.recoveries, [id]: recoveries.filter((item) => item.key !== activeRecoveries.get(id)?.key) } }));
+                            return mergeProject(detailProject(record));
+                        })
                         .catch((error: unknown) => {
                             if (useUserStore.getState().sessionVersion !== sessionVersion) return null;
                             if (error instanceof ApiError && error.status === 404) {
@@ -507,6 +576,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     ids.forEach(cancelProjectUpdate);
                     await Promise.all(ids.map(canvasApi.deleteCanvasProject));
                     assertCurrentSession(sessionVersion);
+                    ids.forEach((id) => clearProjectRecovery(id));
                     ids.forEach((id) => { serverProjects.delete(id); deferredRemoteProjects.delete(id); });
                     const now = new Date().toISOString();
                     const removing = new Set(ids);
@@ -533,6 +603,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 if (!current?.snapshotLoaded || current.accessRole === "") return;
                 if (current.accessRole === "viewer") patch = patch.viewport ? { viewport: patch.viewport } : {};
                 if (!Object.keys(patch).length || Object.entries(patch).every(([key, value]) => key === "viewport" ? JSON.stringify(current.viewport) === JSON.stringify(value) : current[key as keyof CanvasProject] === value)) return;
+                if (patch.viewport) recoveryViewports.set(id, patch.viewport);
                 let updated: CanvasProject | undefined;
                 set((state) => ({
                     projects: state.projects.map((project) => {
@@ -549,6 +620,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 const current = get().projects.find((project) => project.id === record.id);
                 if (!current) return;
                 cancelProjectUpdate(record.id);
+                clearProjectRecovery(record.id);
+                recoveryViewports.delete(record.id);
                 mergeProject({ ...detailProject(record), accessRole: current.accessRole, workspaceId: current.workspaceId, workspaceName: current.workspaceName, canDelete: current.canDelete }, false);
                 set((state) => ({ saveError: state.saveError?.projectId === record.id ? null : state.saveError }));
             },
@@ -567,6 +640,54 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 snapshotCaptures.set(id, capture);
                 return () => { if (snapshotCaptures.get(id) === capture) snapshotCaptures.delete(id); };
             },
+            retainRecovery: (id, snapshot) => {
+                const project = get().projects.find((item) => item.id === id);
+                if (!project?.snapshotLoaded || !get().hydrated || project.accessRole === "") return;
+                if (stringify(project.viewport) === stringify(snapshot.viewport)) {
+                    recoveryViewports.delete(id);
+                    if (!get().hasPendingChanges(id) && !blockedProjects.has(id)) { clearProjectRecovery(id); return; }
+                } else recoveryViewports.set(id, snapshot.viewport);
+                persistProjectRecovery(id);
+            },
+            resolveRecovery: async (id, key, action) => {
+                const { sessionVersion, user } = useUserStore.getState();
+                const recovery = get().recoveries[id]?.find((item) => item.key === key && item.userId === user?.id);
+                if (!recovery) throw new Error("恢复副本已变化，请重新打开画布");
+                const forget = async () => {
+                    await removeCanvasRecovery(recovery, () => useUserStore.getState().sessionVersion === sessionVersion);
+                    assertCurrentSession(sessionVersion);
+                    set((state) => ({ recoveries: { ...state.recoveries, [id]: state.recoveries[id].filter((item) => item.key !== key) } }));
+                };
+                if (action === "discard") { await forget(); return id; }
+                if (action === "copy") {
+                    const snapshot = recovery.snapshot || projectSnapshot(detailProject(await canvasApi.getCanvasProject(id)));
+                    assertCurrentSession(sessionVersion);
+                    const copyId = await get().importProject({ ...snapshot, title: `${recovery.title}（恢复副本）` });
+                    assertCurrentSession(sessionVersion);
+                    await forget();
+                    return copyId;
+                }
+                snapshotCaptures.get(id)?.();
+                if (get().hasPendingChanges(id)) throw new Error("当前画布已有新编辑，请先保存，或将恢复副本另存为新画布");
+                const current = get().projects.find((project) => project.id === id);
+                const remote = detailProject(await canvasApi.getCanvasProject(id));
+                assertCurrentSession(sessionVersion);
+                snapshotCaptures.get(id)?.();
+                if (get().projects.find((project) => project.id === id) !== current || get().hasPendingChanges(id)) throw new Error("当前画布已有新编辑，请先保存，或将恢复副本另存为新画布");
+                if (remote.revision !== recovery.baseRevision) throw new Error("远端画布版本已变化，请另存恢复副本，避免覆盖远端内容");
+                if (remote.accessRole === "viewer" || remote.accessRole === "") throw new Error("当前画布不可编辑，请另存恢复副本");
+                recoveryViewports.delete(id);
+                serverProjects.set(id, remote);
+                const restored = { ...remote, ...recovery.snapshot, title: recovery.title };
+                set((state) => ({ projects: state.projects.map((project) => project.id === id ? restored : project), reloadVersion: state.reloadVersion + 1 }));
+                enqueueProjectUpdate(id, { title: restored.title, snapshot: projectSnapshot(restored) });
+                const backedUp = await recoveryWrites.get(id);
+                assertCurrentSession(sessionVersion);
+                if (get().recoveryErrors[id]) throw new Error("恢复内容已载入，但浏览器备份失败；原恢复副本仍保留，请先完成保存");
+                if (!backedUp) throw new Error("恢复内容已载入，后续编辑仍待保存；原恢复副本暂时保留");
+                await forget();
+                return id;
+            },
             resolveConflict: async (id, action) => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
                 await savingProjects.get(id);
@@ -580,6 +701,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     snapshotCaptures.get(id)?.();
                     if (get().projects.find((project) => project.id === id) !== local) throw new Error("副本已创建，但本地又有新编辑；请核对后再处理冲突");
                     cancelProjectUpdate(id);
+                    clearProjectRecovery(id);
+                    recoveryViewports.delete(id);
                     set((state) => ({ projects: state.projects.map((project) => project.id === id ? { ...project, snapshotLoaded: false } : project), saveError: state.saveError?.projectId === id ? null : state.saveError }));
                     return copyId;
                 }
@@ -588,6 +711,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 snapshotCaptures.get(id)?.();
                 if (get().projects.find((project) => project.id === id) !== local) throw new Error("本地编辑已变化，请重新核对后加载远端版本");
                 cancelProjectUpdate(id);
+                clearProjectRecovery(id);
+                recoveryViewports.delete(id);
                 const restored = detailProject(remote);
                 serverProjects.set(id, restored);
                 set((state) => ({ projects: state.projects.map((project) => project.id === id ? restored : project), saveError: state.saveError?.projectId === id ? null : state.saveError, reloadVersion: state.reloadVersion + 1 }));
@@ -624,6 +749,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     const pending = pendingUpdates.get(id);
                     if (pending?.snapshot) pendingUpdates.set(id, { ...pending, snapshot: projectSnapshot(next) });
                     set((state) => ({ projects: state.projects.map((item) => item.id === id ? next : item) }));
+                    if (pending) persistProjectRecovery(id);
                 } catch {
                     blockedProjects.add(id);
                     const timer = saveTimers.get(id);
@@ -658,5 +784,8 @@ useUserStore.subscribe((state, previous) => {
     deferredRemoteProjects.clear();
     saveAttempts.clear();
     blockedProjects.clear();
-    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null, saveStates: {} });
+    activeRecoveries.clear();
+    recoveryWrites.clear();
+    recoveryViewports.clear();
+    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], projectListIds: [], projectQuery: {}, projectListLoading: false, projectListError: "", projectTotal: 0, deletedProjects: [], saveError: null, saveStates: {}, recoveries: {}, recoveryErrors: {} });
 });

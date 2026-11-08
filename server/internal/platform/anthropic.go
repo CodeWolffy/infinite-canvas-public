@@ -42,6 +42,12 @@ func anthropicEvent(payload map[string]any, stream bool, result *generationResul
 	if message["stop_reason"] == "refusal" || delta["stop_reason"] == "refusal" {
 		return "", false, &upstreamError{Category: "content_policy"}
 	}
+	if reason := str(message["stop_reason"]); reason != "" {
+		result.FinishReason = textFinishReason(reason)
+	}
+	if reason := str(delta["stop_reason"]); reason != "" {
+		result.FinishReason = textFinishReason(reason)
+	}
 	if !stream || payload["type"] == "message_start" {
 		return anthropicContent(message["content"]), !stream, nil
 	}

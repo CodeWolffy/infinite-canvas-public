@@ -14,6 +14,7 @@ export type ModelSettingsValues = {
     perSecondPricing?: boolean;
     pricePerSecond?: string | null;
     maxOutputTokens?: number;
+    contextWindowTokens?: number | null;
     reasoningEfforts?: ModelReasoningEffort[];
     imageInput?: boolean;
     maxAttempts?: number | null;
@@ -27,6 +28,8 @@ export function modelSettingsPayload(values: ModelSettingsValues, config: Record
     else next.maxAttempts = values.maxAttempts;
     if (values.capability === "text") {
         next.maxOutputTokens = values.maxOutputTokens;
+        if (values.contextWindowTokens == null) delete next.contextWindowTokens;
+        else next.contextWindowTokens = values.contextWindowTokens;
         next.reasoningEfforts = values.reasoningEfforts || [];
         next.imageInput = Boolean(values.imageInput);
     }
@@ -45,6 +48,7 @@ export default function ModelSettingsFields({ capability }: { capability: ModelC
         <Form.Item name="maxAttempts" label="重试次数" extra="留空跟随平台设置；绑定渠道较多的模型可调高，范围 1-10。只在没有文本输出、没有异步任务 ID 时切换渠道。"><InputNumber min={1} max={10} precision={0} className="!w-full" placeholder="跟随平台设置" /></Form.Item>
         {capability === "text" ? <>
             <Form.Item name="maxOutputTokens" label="最大输出 token" extra="统一用于报价与生成，用户端不展示或修改；按模型实际能力填写。" rules={[{ required: true, message: "请配置该模型的最大输出 token 数" }]}><InputNumber min={1} precision={0} className="!w-full" /></Form.Item>
+            <Form.Item name="contextWindowTokens" label="上下文容量（token，可选）" extra="按模型实际容量填写，仅用于文本预估预警；留空不预警。不会阻止发送、截断历史或自动生成摘要。"><InputNumber min={1} precision={0} className="!w-full" placeholder="未配置" /></Form.Item>
             <Form.Item name="reasoningEfforts" label="开放的思考强度" extra="只勾选模型与渠道实际支持的档位，留空时使用模型默认。"><Select mode="multiple" allowClear placeholder="仅使用模型默认" options={modelReasoningEfforts.map((value) => ({ value, label: `${reasoningEffortLabel(value)}（${value}）` }))} /></Form.Item>
             <Form.Item name="imageInput" label="图片输入" valuePropName="checked" extra="开启后用户可在对话中附带图片，请确认上游模型确实支持多模态。"><Switch checkedChildren="支持" unCheckedChildren="关闭" /></Form.Item>
             <Form.Item name="tokenPricing" label="计费模式" valuePropName="checked" extra="按 token 计费时按服务端预算冻结，完成后按实际用量结算；不足部分记欠费，结清后可继续生成。"><Switch checkedChildren="按 token" unCheckedChildren="按次" /></Form.Item>

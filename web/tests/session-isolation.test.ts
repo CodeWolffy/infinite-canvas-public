@@ -52,6 +52,10 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
     };
     const users = load("use-user-store.ts");
     imports["@/stores/use-user-store"] = users;
+    imports["@/lib/canvas/canvas-recovery"] = loadModule(readSource("lib/canvas/canvas-recovery.ts"), {}, {
+        nanoid: nodeRequire("nanoid"),
+        localforage: { __esModule: true, default: { createInstance: () => ({ setItem: async () => undefined, removeItem: async () => undefined, iterate: async () => undefined }) } },
+    });
     const canvas = load("canvas/use-canvas-store.ts").useCanvasStore;
     const assets = load("use-asset-store.ts").useAssetStore;
     const user = users.useUserStore;
@@ -365,11 +369,15 @@ test("personal configuration and delayed model hydration stay within the authent
 test("local Agent credentials survive same-user login while platform messages and tools stay isolated", async (t) => {
     const { imports, load, login, user, assets, assetApi, canvas } = setup(t);
     const agent = load("use-agent-store.ts").useAgentStore;
-    const workbench = load("use-workbench-agent-store.ts").useWorkbenchAgentStore;
+    const workbenchModule = load("use-workbench-agent-store.ts");
+    const workbench = workbenchModule.useWorkbenchAgentStore;
     await login("A");
+    workbenchModule.setPendingWorkbenchAgentTasks("private-input-A", new Set(["agent-A"]));
+    expect([...workbenchModule.getPendingWorkbenchAgentTasks("private-input-A")]).toEqual(["agent-A"]);
     agent.getState().setAgentState({ token: "local-test-token-A", messages: [{ id: "private-A", text: "private" }] });
     agent.getState().connectAgent();
     await login("B");
+    expect([...workbenchModule.getPendingWorkbenchAgentTasks("private-input-A")]).toEqual([]);
     expect(agent.getState().token).toBe("");
     expect(agent.getState().messages.length).toBe(0);
     await login("A");

@@ -3,8 +3,8 @@ import { taskDelay } from "./tasks";
 import type { MediaRecord } from "./media";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
-export type TextMessage = { id: string; role: "system" | "user" | "assistant"; content: string; createdAt: string; attachments?: MediaRecord[] };
-export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled"; canCancel?: boolean; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string; attemptCount?: number; maxAttempts?: number };
+export type TextMessage = { id: string; role: "system" | "user" | "assistant"; content: string; createdAt: string; attachments?: MediaRecord[]; supersededAt?: string | null; requestId?: string; requestMessageId?: string; modelDisplayName?: string; billed?: string | null; promptTokens?: number; completionTokens?: number; finishReason?: string };
+export type TextRequestState = { id: string; conversationId: string; responseMessageId: string | null; status: "reviewing" | "queued" | "running" | "succeeded" | "failed" | "canceled"; canCancel?: boolean; errorCode: string | null; errorMessage?: string | null; createdAt: string; finishedAt: string | null; partialText?: string; streamSequence?: number; run?: number; billed?: string; price?: string; attemptCount?: number; maxAttempts?: number; finishReason?: string };
 export type TextRequestDetail = { request: TextRequestState; message: TextMessage | null };
 
 export function watchTextRequest(id: string, onChange: (detail: TextRequestDetail) => void, signal?: AbortSignal, onError?: (error: Error) => void) {
@@ -67,6 +67,8 @@ export async function createTextRequest(input: {
     systemPrompt?: string;
     attachmentMediaIds?: string[];
     parameters?: Record<string, unknown>;
+    action?: "edit" | "regenerate";
+    targetMessageId?: string;
 }, signal?: AbortSignal, onProgress?: (text: string) => void) {
     const session = useUserStore.getState().sessionVersion;
     const accepted = await queueTextRequest(input, signal);
@@ -84,8 +86,13 @@ export function queueTextRequest(input: Parameters<typeof createTextRequest>[0],
     return apiRequest<{ conversationId: string; requestId: string }>("/api/text/requests", { method: "POST", body: input, signal });
 }
 
-export async function listTextConversations(offset = 0) {
-    return (await apiRequest<{ conversations: Array<{ id: string; title: string; canvasProjectId: string | null; createdAt: string; updatedAt: string }> }>(`/api/text/conversations?offset=${offset}`)).conversations;
+export async function listTextConversations(offset = 0, keyword = "", archived = false, signal?: AbortSignal) {
+    const params = new URLSearchParams({ offset: String(offset), keyword, archived: String(archived) });
+    return (await apiRequest<{ conversations: Array<{ id: string; title: string; canvasProjectId: string | null; createdAt: string; updatedAt: string; pinned?: boolean; archivedAt?: string | null; matchedMessageId?: string | null; excerpt?: string | null }> }>(`/api/text/conversations?${params}`, { signal })).conversations;
+}
+
+export async function updateTextConversation(id: string, body: { title?: string; pinned?: boolean; archived?: boolean }) {
+    return apiRequest<void>(`/api/text/conversations/${id}`, { method: "PATCH", body });
 }
 
 export async function deleteTextConversation(id: string) {
@@ -94,7 +101,7 @@ export async function deleteTextConversation(id: string) {
 
 export async function getTextConversation(id: string) {
     return apiRequest<{
-        conversation: { id: string; title: string; canvasProjectId: string | null; modelId?: string; parameters?: Record<string, unknown> };
+        conversation: { id: string; title: string; canvasProjectId: string | null; modelId?: string; parameters?: Record<string, unknown>; pinned?: boolean; archivedAt?: string | null };
         messages: TextMessage[];
         latestRequest: TextRequestState | null;
     }>(`/api/text/conversations/${id}`);

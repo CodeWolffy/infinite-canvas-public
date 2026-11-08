@@ -244,7 +244,7 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 		limit, offset := pagination(c)
 		items, err := rows(c.Request.Context(), a.DB, `SELECT b.id,b.canvas_project_id,b.model_id,b.capability,b.prompt,b.requested_count,b.parameters,b.created_at,
         jsonb_build_object('totalCount',count(t.id),'succeededCount',count(t.id) FILTER(WHERE t.status='succeeded'),'failedCount',count(t.id) FILTER(WHERE t.status IN('failed','canceled')),'activeCount',count(t.id) FILTER(WHERE t.status IN('reviewing','queued','running')),'savedCount',count(t.id) FILTER(WHERE EXISTS(SELECT 1 FROM assets a WHERE a.media_id=t.output_media_id)),'thumbnailMediaIds',coalesce(jsonb_agg(t.output_media_id ORDER BY t.sequence) FILTER(WHERE t.output_media_id IS NOT NULL),'[]')) AS summary
-        FROM generation_batches b LEFT JOIN generation_tasks t ON t.batch_id=b.id WHERE b.user_id=$1 AND b.deleted_at IS NULL AND ($2='' OR b.capability=$2) GROUP BY b.id ORDER BY b.created_at DESC,b.id LIMIT $3 OFFSET $4`, currentUser(c).ID, c.Query("capability"), limit, offset)
+        FROM generation_batches b LEFT JOIN generation_tasks t ON t.batch_id=b.id WHERE b.user_id=$1 AND b.deleted_at IS NULL AND ($2='' OR b.capability=$2) AND ($5='' OR strpos(lower(b.prompt),lower($5))>0) GROUP BY b.id ORDER BY b.created_at DESC,b.id LIMIT $3 OFFSET $4`, currentUser(c).ID, c.Query("capability"), limit, offset, strings.TrimSpace(c.Query("q")))
 		return gin.H{"batches": items}, err
 	}))
 	api.GET("/generation-batches/:id", respond(func(c *gin.Context) (any, error) {
@@ -308,8 +308,9 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, a.cancelTask(c.Request.Context(), id, currentUser(c).ID, false)
+		return a.cancelTaskWithResult(c.Request.Context(), id, currentUser(c).ID, false)
 	}))
+	api.GET("/generation-tasks/:id/billing", respond(a.taskBilling))
 	api.POST("/generation-batches/tasks/:taskId/retry", respond(func(c *gin.Context) (any, error) {
 		id, err := idParam(c, "taskId")
 		if err != nil {
@@ -396,11 +397,22 @@ func (a *App) generationRoutes(api *gin.RouterGroup) {
 }
 
 func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) error {
+	_, err := a.cancelTaskWithResult(ctx, id, userID, admin)
+	return err
+}
+
+type taskCancelResult struct {
+	Canceled bool `json:"canceled"`
+	Status string `json:"status"`
+	Refunded string `json:"refunded"`
+}
+
+func (a *App) cancelTaskWithResult(ctx context.Context, id, userID string, admin bool) (taskCancelResult, error) {
+	result := taskCancelResult{Refunded: "0"}
 	row, err := one(ctx, a.DB, "SELECT user_id FROM generation_tasks WHERE id=$1 AND (user_id::text=$2 OR $3)", id, userID, admin)
 	if err != nil {
-		return err
+		return result, err
 	}
-	canceled := false
 	var canceledTask Row
 	err = pgx.BeginFunc(ctx, a.DB, func(tx pgx.Tx) error {
 		owner := str(row["userId"])
@@ -411,8 +423,13 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if err != nil {
 			return err
 		}
-		if task["status"] != "reviewing" && task["status"] != "queued" && task["status"] != "running" {
+		result.Status = str(task["status"])
+		audit := func() error {
+			if admin && userID != "" { return a.audit(ctx, tx, userID, "task.cancel", id, result) }
 			return nil
+		}
+		if task["status"] != "reviewing" && task["status"] != "queued" && task["status"] != "running" {
+			return audit()
 		}
 		if task["upstreamSubmittedAt"] != nil {
 			return problem(409, "task_submitted", "任务已提交上游，无法取消，将继续执行并正常结算")
@@ -436,17 +453,17 @@ func (a *App) cancelTask(ctx context.Context, id, userID string, admin bool) err
 		if _, err = tx.Exec(ctx, "UPDATE request_logs SET status='failed',error_category='canceled',error_message='任务已取消',finished_at=now() WHERE task_id=$1 AND status='running'", id); err != nil {
 			return err
 		}
-		canceled = true
-		return nil
+		result.Canceled, result.Status, result.Refunded = true, "canceled", modelPrice(price)
+		return audit()
 	})
 	if err != nil {
-		return err
+		return taskCancelResult{}, err
 	}
 	// 事务提交后再广播；提交上游与取消共用任务行锁，取消成功后不能再发起上游请求。
-	if canceled {
+	if result.Canceled {
 		a.publishCancel(ctx, id)
 		// SSE 只在收到信号时查库，取消是 worker 之外的状态变化，需要单独通知订阅者。
 		a.publishTaskChange(ctx, canceledTask)
 	}
-	return nil
+	return result, nil
 }

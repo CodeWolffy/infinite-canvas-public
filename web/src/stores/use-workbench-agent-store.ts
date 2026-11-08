@@ -38,6 +38,16 @@ type WorkbenchAgentStore = {
 
 let nonce = 0;
 const nextNonce = () => (nonce += 1);
+const pendingSubmissions = new Map<string, Set<string>>();
+
+export function getPendingWorkbenchAgentTasks(fingerprint: string) {
+    return new Set(pendingSubmissions.get(fingerprint));
+}
+
+export function setPendingWorkbenchAgentTasks(fingerprint: string, tasks: Set<string>) {
+    if (tasks.size) pendingSubmissions.set(fingerprint, tasks);
+    else pendingSubmissions.delete(fingerprint);
+}
 
 export const useWorkbenchAgentStore = create<WorkbenchAgentStore>((set) => ({
     imageCommand: null,
@@ -61,7 +71,10 @@ export const useWorkbenchAgentStore = create<WorkbenchAgentStore>((set) => ({
 }));
 
 useUserStore.subscribe((state, previous) => {
-    if (state.sessionVersion !== previous.sessionVersion) useWorkbenchAgentStore.setState({ imageCommand: null, videoCommand: null, tasks: [] });
+    if (state.sessionVersion !== previous.sessionVersion) {
+        pendingSubmissions.clear();
+        useWorkbenchAgentStore.setState({ imageCommand: null, videoCommand: null, tasks: [] });
+    }
 });
 
 function createTask(kind: "image" | "video", commandNonce: number, prompt?: string): WorkbenchGenerationTask {

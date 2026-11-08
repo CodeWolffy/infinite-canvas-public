@@ -1,6 +1,7 @@
 import { ApiError, apiRequest } from "@/services/api/request";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ModelReasoning } from "@/lib/model-reasoning";
+import { readMedia } from "@/services/api/media";
 export { uploadMedia as uploadGenerationMedia } from "@/services/api/media";
 
 export type PublicModel = ModelReasoning & {
@@ -102,13 +103,31 @@ export async function createGenerationBatch(input: { requestId?: string; modelId
     return await apiRequest<{ batch: GenerationBatch; tasks: GenerationTask[] }>("/api/generation-batches", { method: "POST", body: { ...input, requestId: input.requestId || crypto.randomUUID() } });
 }
 
-export async function listGenerationBatches(limit = GENERATION_PAGE_SIZE, offset = 0): Promise<GenerationBatchPage> {
-    const batches = (await apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?capability=image&limit=${limit}&offset=${offset}`)).batches;
+export async function listGenerationBatches(limit = GENERATION_PAGE_SIZE, offset = 0, keyword = ""): Promise<GenerationBatchPage> {
+    const query = new URLSearchParams({ capability: "image", limit: String(limit), offset: String(offset) });
+    if (keyword.trim()) query.set("q", keyword.trim());
+    const batches = (await apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?${query}`)).batches;
     return { batches, hasMore: batches.length === limit };
 }
 
 export async function getGenerationBatch(id: string) {
     return await apiRequest<GenerationBatchDetail>(`/api/generation-batches/${id}`);
+}
+
+export async function readGenerationImage(mediaId: string) {
+    const session = useUserStore.getState().sessionVersion;
+    const blob = await readMedia(mediaId);
+    assertCurrentSession(session);
+    const mime = blob.type.toLowerCase().split(";")[0];
+    if (!blob.size || !mime.startsWith("image/")) throw new Error("返回内容不是有效图片");
+    try {
+        const image = await createImageBitmap(blob);
+        try { if (!image.width || !image.height) throw new Error("图片尺寸无效"); }
+        finally { image.close(); }
+    } catch { throw new Error("图片内容损坏或无法解码"); }
+    assertCurrentSession(session);
+    const extension = mime === "image/jpeg" ? "jpg" : mime === "image/svg+xml" ? "svg" : mime.slice(6);
+    return { blob, extension };
 }
 
 /**

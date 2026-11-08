@@ -97,7 +97,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		query := "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.group_id,g.name AS group_name,w.balance_micros,w.frozen_micros FROM users u LEFT JOIN user_groups g ON g.id=u.group_id JOIN wallets w ON w.user_id=u.id WHERE " + where + " ORDER BY u.created_at DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
+		query := "SELECT u.id,u.username,u.display_name,u.role,u.status,u.must_change_password,u.last_login_at,u.created_at,u.group_id,g.name AS group_name,w.balance_micros,w.frozen_micros FROM users u LEFT JOIN user_groups g ON g.id=u.group_id JOIN wallets w ON w.user_id=u.id WHERE " + where + " ORDER BY u.created_at DESC,u.id DESC LIMIT $" + str(len(args)+1) + " OFFSET $" + str(len(args)+2)
 		items, err := rows(ctx, a.DB, query, append(args, limit, offset)...)
 		for _, row := range items {
 			row["balance"] = money(integer(row["balanceMicros"]))
@@ -656,7 +656,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 				return err
 			}
 			deleted = result.RowsAffected()
-			return nil
+			return a.audit(ctx, tx, currentUser(c).ID, "request-logs.clear", "request-logs", gin.H{"deleted": deleted, "retainedStatus": "running"})
 		})
 		return gin.H{"deleted": deleted}, err
 	}))
@@ -670,11 +670,7 @@ func (a *App) adminRoutes(admin *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
-		err = a.cancelTask(c.Request.Context(), id, "", true)
-		if err == nil {
-			err = a.audit(c.Request.Context(), a.DB, currentUser(c).ID, "task.cancel", id, gin.H{})
-		}
-		return nil, err
+		return a.cancelTaskWithResult(c.Request.Context(), id, currentUser(c).ID, true)
 	}))
 }
 

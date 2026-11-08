@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { GENERATION_PAGE_SIZE } from "@/services/api/generation";
 import { getUserGenerationTasks, getUserTaskSourcePath, type UserGenerationTask, type UserTaskCapability, type UserTaskFilterStatus } from "@/services/api/user-tasks";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
+import { TaskBillingButton } from "@/components/generation/task-billing-button";
 
 const capabilityLabels: Record<UserTaskCapability, string> = { image: "图片", video: "视频", audio: "音频", text: "文本" };
 const capabilityIcons = { image: ImageIcon, video: Video, audio: Music2, text: FileText };
@@ -109,6 +110,7 @@ function TaskRow({ task, onOpenSource }: { task: UserGenerationTask; onOpenSourc
                     {source ? <Tooltip title={sourceLabel}><Button type="text" size="small" className="max-w-full !px-0 !text-xs" icon={<ArrowUpRight className="size-3.5" />} onClick={() => onOpenSource(source)}><span className="truncate">{sourceLabel}</span></Button></Tooltip> : <span>{unavailable ? "来源不可用" : task.capability === "audio" ? "音频任务" : "无可返回的来源"}</span>}
                     <Tooltip title={queuedAt.format("YYYY/MM/DD HH:mm:ss")}><time className="shrink-0 tabular-nums" dateTime={task.queuedAt}>{queuedAt.format(queuedAt.year() === dayjs().year() ? "MM/DD HH:mm" : "YYYY/MM/DD HH:mm")}</time></Tooltip>
                 </div>
+                <TaskBillingButton taskId={task.id} />
                 {!unavailable && task.errorMessage ? <div className="mt-2 flex items-start gap-2 text-xs" style={{ color: token.colorError }}>
                     <p className={errorExpanded ? "min-w-0 flex-1 whitespace-pre-wrap break-words" : "min-w-0 flex-1 truncate"}>{errorExpanded ? task.errorMessage : task.errorMessage.split(/\r?\n/, 1)[0]}</p>
                     <Button type="text" size="small" className="shrink-0 !h-auto !px-0 !text-xs" aria-expanded={errorExpanded} onClick={() => setErrorExpanded((current) => !current)}>{errorExpanded ? "收起原因" : "查看原因"}</Button>

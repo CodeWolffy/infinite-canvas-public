@@ -5,7 +5,9 @@ export type AssetType = "image" | "text" | "video" | "audio";
 
 export type AssetRecord = {
     id: string;
+    revision: number;
     ownerId: string;
+    ownerName?: string;
     scope: AssetScope;
     type: AssetType;
     title: string;
@@ -21,6 +23,7 @@ export type AssetRecord = {
 };
 
 export type AssetInput = {
+    requestId?: string;
     scope?: AssetScope;
     type: AssetType;
     title: string;
@@ -51,7 +54,7 @@ export async function listAssets(scope: AssetScope | "all" = "all") {
     return all;
 }
 
-export type AssetPageQuery = { page: number; size: number; scope?: AssetScope | "all"; kind?: AssetType | "all"; keyword?: string };
+export type AssetPageQuery = { page: number; size: number; scope?: AssetScope | "all"; kind?: AssetType | "all"; keyword?: string; ownerId?: string };
 
 /** 素材页的服务端分页：筛选与分页都在后端执行，返回总数供表格分页使用。 */
 export async function listAssetPage(query: AssetPageQuery) {
@@ -59,6 +62,7 @@ export async function listAssetPage(query: AssetPageQuery) {
     if (query.scope && query.scope !== "all") params.set("scope", query.scope);
     if (query.kind && query.kind !== "all") params.set("kind", query.kind);
     if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+    if (query.ownerId) params.set("ownerId", query.ownerId);
     return await apiRequest<{ assets: AssetRecord[]; total: number }>(`/api/assets?${params}`);
 }
 
@@ -71,7 +75,11 @@ export async function createAsset(input: AssetInput) {
     return (await apiRequest<{ asset: AssetRecord }>("/api/assets", { method: "POST", body: input })).asset;
 }
 
-export async function updateAsset(id: string, input: Partial<AssetInput>) {
+export async function getAsset(id: string) {
+    return (await apiRequest<{ asset: AssetRecord }>(`/api/assets/${id}`)).asset;
+}
+
+export async function updateAsset(id: string, input: Partial<AssetInput> & { expectedRevision?: number }) {
     return (await apiRequest<{ asset: AssetRecord }>(`/api/assets/${id}`, { method: "PUT", body: input })).asset;
 }
 

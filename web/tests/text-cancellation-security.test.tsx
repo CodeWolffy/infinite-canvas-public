@@ -32,7 +32,7 @@ function mount(latest: TextRequestState) {
 }
 
 beforeEach(() => {
-    api.cancel.mockReset().mockResolvedValue(undefined);
+    api.cancel.mockReset().mockResolvedValue({ canceled: true, status: "canceled", refunded: "0.0001" });
     api.watch.mockReset().mockImplementation((_id, onChange) => { publish = onChange; return () => undefined; });
     api.conversation.mockReset();
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
@@ -66,4 +66,13 @@ test("尚未提交时可以发起取消", async () => {
     expect(cancel).toBeEnabled();
     await userEvent.click(cancel);
     await waitFor(() => expect(api.cancel).toHaveBeenCalledWith("request"));
+    expect(await screen.findByText("任务已取消，已退回 ¥0.0001")).toBeInTheDocument();
+});
+
+test("取消回包表明任务已完成时展示真实状态，不提示退款", async () => {
+    api.cancel.mockResolvedValue({ canceled: false, status: "succeeded", refunded: "0" });
+    mount(request(true, "queued"));
+    await userEvent.click(await screen.findByRole("button", { name: "取消生成" }));
+    expect(await screen.findByText("任务已完成，未执行取消")).toBeInTheDocument();
+    expect(screen.queryByText(/任务已取消，已退回/)).not.toBeInTheDocument();
 });

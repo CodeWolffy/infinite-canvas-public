@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { App, Button, Card, Empty, Image, Input, Popconfirm, Select, Spin, Tag, Tooltip } from "antd";
+import { useDeferredValue, useMemo, useState } from "react";
+import { Alert, App, Button, Card, Empty, Image, Input, Popconfirm, Select, Spin, Tag, Tooltip } from "antd";
 import { ChevronDown, Clock, Copy, Download, FolderPlus, FolderSync, Images, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -15,16 +15,19 @@ import {
     deleteGenerationBatch,
     getGenerationBatch,
     listGenerationBatches,
+    readGenerationImage,
     GENERATION_PAGE_SIZE,
     type GenerationBatchListItem,
 } from "@/services/api/generation";
 import { createAsset } from "@/services/api/assets";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
+import { TaskBillingButton } from "@/components/generation/task-billing-button";
 
 /** 与服务端 ORPHAN_MEDIA_GRACE_DAYS 的默认值保持一致，接口没带 retentionDays 时用它兜底。 */
 const DEFAULT_RETENTION_DAYS = 45;
-const listKey = (offset: number) => ["user-generations", offset] as const;
-const detailKey = (id: string) => ["user-generation-batch", id] as const;
+const listKey = (session: number, offset: number, keyword: string) => ["user-generations", session, offset, keyword] as const;
+const detailKey = (session: number, id: string) => ["user-generation-batch", session, id] as const;
 
 function expirationDays(createdAt: string, retentionDays = DEFAULT_RETENTION_DAYS) {
     const expiresAt = new Date(createdAt).getTime() + retentionDays * 24 * 60 * 60 * 1000;
@@ -45,27 +48,27 @@ export default function UserGenerationsPage() {
     const { t } = useTranslation();
     const [offset, setOffset] = useState(0);
     const [searchPrompt, setSearchPrompt] = useState("");
+    const keyword = useDeferredValue(searchPrompt.trim());
+    const session = useUserStore((state) => state.sessionVersion);
     const [statusFilter, setStatusFilter] = useState<"all" | "temporary" | "permanent" | "expiring">("all");
 
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: listKey(offset),
-        queryFn: () => listGenerationBatches(GENERATION_PAGE_SIZE, offset),
+    const { data, isLoading, isFetching, error, refetch } = useQuery({
+        queryKey: listKey(session, offset, keyword),
+        queryFn: () => listGenerationBatches(GENERATION_PAGE_SIZE, offset, keyword),
         // 只在这一页还有排队/运行中的任务时轮询；标签页隐藏时 react-query 会自动暂停。
         refetchInterval: (query) => (hasActiveTasks(query.state.data?.batches ?? []) ? 3000 : false),
     });
 
     const batches = data?.batches ?? [];
     const filteredBatches = useMemo(() => {
-        const keyword = searchPrompt.trim().toLowerCase();
         return batches.filter((batch) => {
-            if (keyword && !batch.prompt.toLowerCase().includes(keyword)) return false;
             if (statusFilter === "expiring") return expirationDays(batch.createdAt, batch.retentionDays) <= 3;
             // 「已转存 / 未转存」直接用列表返回的 savedCount 判断，不必为每个批次再拉一次详情。
             if (statusFilter === "permanent") return isBatchSaved(batch);
             if (statusFilter === "temporary") return !isBatchSaved(batch);
             return true;
         });
-    }, [batches, searchPrompt, statusFilter]);
+    }, [batches, statusFilter]);
     return (
         <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8 space-y-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
@@ -99,7 +102,7 @@ export default function UserGenerationsPage() {
                     prefix={<Search className="size-4 text-stone-400" />}
                     placeholder={t("userCenter.searchPromptPlaceholder")}
                     value={searchPrompt}
-                    onChange={(event) => setSearchPrompt(event.target.value)}
+                    onChange={(event) => { setOffset(0); setSearchPrompt(event.target.value); }}
                     allowClear
                     className="max-w-xs"
                 />
@@ -116,6 +119,7 @@ export default function UserGenerationsPage() {
                 />
             </div>
 
+            {error ? <Alert type="error" title="生成历史加载失败" description={error.message} action={<Button onClick={() => void refetch()}>重试</Button>} /> : null}
             {isLoading ? (
                 <div className="flex h-64 items-center justify-center">
                     <Spin size="large" />
@@ -131,12 +135,12 @@ export default function UserGenerationsPage() {
             ) : (
                 <div className="space-y-4">
                     {filteredBatches.map((batch) => (
-                        <GenerationBatchCard key={batch.id} batch={batch} listOffset={offset} />
+                        <GenerationBatchCard key={batch.id} batch={batch} />
                     ))}
                 </div>
             )}
 
-            {batches.length ? (
+            {batches.length || offset > 0 ? (
                 <div className="flex items-center justify-center gap-2">
                     <Button disabled={offset === 0 || isFetching} onClick={() => setOffset((current) => Math.max(current - GENERATION_PAGE_SIZE, 0))}>
                         {t("common.previousPage")}
@@ -151,12 +155,13 @@ export default function UserGenerationsPage() {
     );
 }
 
-function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchListItem; listOffset: number }) {
+function GenerationBatchCard({ batch }: { batch: GenerationBatchListItem }) {
     const { t } = useTranslation();
     const { message } = App.useApp();
     const navigate = useNavigate();
     const copyText = useCopyText();
     const queryClient = useQueryClient();
+    const session = useUserStore((state) => state.sessionVersion);
     const hydrateAssets = useAssetStore((state) => state.hydrateAssets);
     const [expanded, setExpanded] = useState(false);
     const [savingMedia, setSavingMedia] = useState<Record<string, boolean>>({});
@@ -165,7 +170,7 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
     const isExpired = remainingDays <= 0;
 
     const { data: detail, isFetching: isLoadingDetail } = useQuery({
-        queryKey: detailKey(batch.id),
+        queryKey: detailKey(session, batch.id),
         queryFn: () => getGenerationBatch(batch.id),
         enabled: expanded,
         // 只有该批次仍有未完成任务时才继续轮询详情。
@@ -179,14 +184,14 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
         mutationFn: () => deleteGenerationBatch(batch.id),
         onSuccess: async () => {
             message.success(t("userCenter.deleteBatchSuccess"));
-            await queryClient.invalidateQueries({ queryKey: listKey(listOffset) });
+            await queryClient.invalidateQueries({ queryKey: ["user-generations", session] });
         },
         onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.deleteBatchFailed")),
     });
 
     /** 转存成功后强制刷新素材 store，否则「我的素材」页会一直显示旧数据。 */
     const syncAssets = async () => {
-        await queryClient.invalidateQueries({ queryKey: detailKey(batch.id) });
+        await queryClient.invalidateQueries({ queryKey: detailKey(session, batch.id) });
         const userId = useAssetStore.getState().hydratedUserId;
         if (userId) await hydrateAssets(userId, true);
     };
@@ -227,14 +232,28 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
 
     const downloadMutation = useMutation({
         mutationFn: async () => {
-            const images = (detail?.tasks ?? []).flatMap((task) => (task.image?.url ? [{ url: task.image.url, name: `image_${task.sequence + 1}.png` }] : []));
+            const downloadSession = useUserStore.getState().sessionVersion;
+            const images = (detail?.tasks ?? []).flatMap((task) => (task.image?.mediaId ? [{ mediaId: task.image.mediaId, sequence: task.sequence + 1 }] : []));
             if (!images.length) throw new Error(t("userCenter.downloadEmpty"));
-            const files = await Promise.all(
-                images.map(async (image) => ({ name: image.name, data: await (await fetch(image.url, { credentials: "include" })).blob() })),
-            );
-            saveAs(await createZip(files), `batch_${batch.id.slice(0, 8)}.zip`);
+            const results = await Promise.allSettled(images.map(async (image) => {
+                const { blob, extension } = await readGenerationImage(image.mediaId);
+                return { name: `image_${image.sequence}.${extension}`, data: blob };
+            }));
+            assertCurrentSession(downloadSession);
+            const files = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+            const failed = results.length - files.length;
+            if (!files.length) throw new Error(`全部 ${failed} 张图片下载失败，请检查图片是否仍可访问后重试`);
+            const archive = await createZip(files);
+            assertCurrentSession(downloadSession);
+            saveAs(archive, `batch_${batch.id.slice(0, 8)}.zip`);
+            return { downloaded: files.length, failed, session: downloadSession };
         },
-        onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.downloadZipFailed")),
+        onSuccess: ({ downloaded, failed, session: downloadSession }) => {
+            if (useUserStore.getState().sessionVersion !== downloadSession) return;
+            if (failed) message.warning(`已打包 ${downloaded} 张图片，${failed} 张下载失败，可稍后重试`);
+            else message.success(`已打包 ${downloaded} 张图片`);
+        },
+        onError: (error) => { if (useUserStore.getState().sessionVersion === session && !(error instanceof DOMException && error.name === "AbortError")) message.error(error instanceof Error ? error.message : t("userCenter.downloadZipFailed")); },
     });
 
     const thumbnails = batch.summary?.thumbnailMediaIds ?? [];
@@ -362,11 +381,11 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                                     </div>
                                 )}
 
-                                {task.image?.mediaId ? (
                                     <div className="flex flex-wrap items-center justify-between gap-1 border-t border-stone-200 p-2 text-xs dark:border-stone-800">
-                                        <span className="font-mono text-stone-400">{task.image.bytes ? formatBytes(task.image.bytes) : ""}</span>
+                                        <span className="font-mono text-stone-400">{task.image?.bytes ? formatBytes(task.image.bytes) : ""}</span>
                                         <div className="flex items-center gap-1">
-                                            {!task.image.isSaved ? (
+                                            <TaskBillingButton taskId={task.id} />
+                                            {task.image?.mediaId && !task.image.isSaved ? (
                                                 <Tooltip title={t("userCenter.saveToAsset")}>
                                                     <Button
                                                         size="small"
@@ -377,16 +396,15 @@ function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchList
                                                     />
                                                 </Tooltip>
                                             ) : null}
-                                            <a
+                                            {task.image?.mediaId ? <a
                                                 href={task.image.url}
                                                 download={`image_${task.sequence + 1}.png`}
                                                 className="inline-flex size-6 items-center justify-center rounded text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
                                             >
                                                 <Download className="size-3.5" />
-                                            </a>
+                                            </a> : null}
                                         </div>
                                     </div>
-                                ) : null}
                             </div>
                         ))}
                     </div>

@@ -8,7 +8,8 @@ import { History, RefreshCw, Trash2 } from "lucide-react";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useSecurityProof } from "@/hooks/use-security-proof";
 import { clearAdminRequestLogs, getAdminChannels, getAdminModels, getAdminRequestLogs, type RequestLog } from "@/services/api/admin-platform";
-import { getAdminUsers } from "@/services/api/admin-users";
+import { AdminUserSelect } from "@/pages/admin/components/admin-user-select";
+import { formatMoney } from "@/lib/format-money";
 
 type Filters = { range: [Dayjs, Dayjs]; userId?: string; modelId?: string; channelId?: string; type?: RequestLog["type"]; status?: RequestLog["status"] };
 const typeLabels = { image: "生图", text: "文本", video: "视频", audio: "音频", probe: "探测" } as const;
@@ -23,22 +24,16 @@ export default function AdminRequestLogsPage() {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(20);
     const [preset, setPreset] = useState<number | null>(1);
-    const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
     const logsQuery = useQuery({
-        queryKey: ["admin", "request-logs", filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId, filters.type, filters.status, page, pageSize],
-        queryFn: () => getAdminRequestLogs({
-            from: filters.range[0].toISOString(),
-            to: filters.range[1].toISOString(),
-            userId: filters.userId,
-            modelId: filters.modelId,
-            channelId: filters.channelId,
-            type: filters.type,
-            status: filters.status,
-            limit: pageSize,
-            offset: (page - 1) * pageSize,
-        }),
+        queryKey: ["admin", "request-logs", preset, filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId, filters.type, filters.status, page, pageSize],
+        queryFn: async () => {
+            const now = dayjs();
+            const range: [Dayjs, Dayjs] = preset ? [now.subtract(preset - 1, "day").startOf("day"), now] : filters.range;
+            const result = await getAdminRequestLogs({ from: range[0].toISOString(), to: range[1].toISOString(), userId: filters.userId, modelId: filters.modelId, channelId: filters.channelId, type: filters.type, status: filters.status, limit: pageSize, offset: (page - 1) * pageSize });
+            return { ...result, range };
+        },
         refetchInterval: (query) => (query.state.data?.logs.some((log) => log.status === "running") ? 5000 : false),
     });
     const clearMutation = useMutation({
@@ -54,7 +49,7 @@ export default function AdminRequestLogsPage() {
         { title: "类型", dataIndex: "type", width: 64, render: (value: RequestLog["type"]) => value === "probe" ? <span className="text-stone-400">{typeLabels[value]}</span> : typeLabels[value] },
         { title: "模型 / 渠道", key: "model", width: 220, ellipsis: true, render: (_, log) => <div><div className="truncate" title={log.modelDisplayNameSnapshot || undefined}>{log.modelDisplayNameSnapshot || <span className="text-stone-400">—</span>}</div><div className="truncate text-xs text-stone-500" title={log.upstreamModel || undefined}>{[log.channelNameSnapshot, log.upstreamModel].filter(Boolean).join(" · ") || "—"}</div></div> },
         { title: "HTTP", dataIndex: "httpStatus", width: 64, render: (value: number | null, log) => value ? <span className={log.status === "failed" ? "text-red-500" : ""}>{value}</span> : <span className="text-stone-300 dark:text-stone-600">—</span> },
-        { title: "费用", key: "cost", width: 84, render: (_, log) => log.billedAmount != null ? `¥${Number(log.billedAmount).toFixed(2)}` : <span className="text-stone-300 dark:text-stone-600">—</span> },
+        { title: "实际消费", key: "cost", width: 104, render: (_, log) => formatMoney(log.billedAmount) },
         { title: "耗时", key: "duration", width: 90, render: (_, log) => <div className="flex items-center gap-2">{log.durationMs != null && <span className={`h-4 w-[3px] shrink-0 rounded-full ${log.status === "failed" ? "bg-red-400" : "bg-emerald-500"}`} />}<span className={log.durationMs == null ? "text-stone-300 dark:text-stone-600" : ""}>{log.durationMs == null ? "—" : `${(log.durationMs / 1000).toFixed(1)}s`}</span></div> },
         {
             title: "详情",
@@ -84,8 +79,8 @@ export default function AdminRequestLogsPage() {
             </div>
             <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => { const days = Number(value); setPreset(days); setPage(1); setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs()] })); }} />
-                <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={filters.range} allowClear={false} showTime={{ format: "HH:mm" }} onChange={(range) => range && setFilter("range", range as [Dayjs, Dayjs])} />
-                <Select allowClear placeholder="全部用户" className="min-w-36" value={filters.userId} onChange={(value) => setFilter("userId", value)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
+                <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={preset ? logsQuery.data?.range || filters.range : filters.range} allowClear={false} showTime={{ format: "HH:mm" }} onChange={(range) => range && setFilter("range", range as [Dayjs, Dayjs])} />
+                <AdminUserSelect allowClear placeholder="全部用户" className="min-w-36" value={filters.userId} onChange={(value) => setFilter("userId", value)} />
                 <Select allowClear placeholder="全部模型" className="min-w-40" value={filters.modelId} onChange={(value) => setFilter("modelId", value)} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
                 <Select allowClear placeholder="全部渠道" className="min-w-36" value={filters.channelId} onChange={(value) => setFilter("channelId", value)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />
                 <Select allowClear placeholder="全部类型" className="min-w-28" value={filters.type} onChange={(value) => setFilter("type", value as RequestLog["type"])} options={Object.entries(typeLabels).map(([value, label]) => ({ value, label }))} />
@@ -117,7 +112,7 @@ function logDetail(log: RequestLog) {
         `上游模型：${log.upstreamModel || "—"}`,
         `HTTP：${log.httpStatus ?? "—"}`,
         `耗时：${log.durationMs == null ? "—" : `${(log.durationMs / 1000).toFixed(1)}s`}`,
-        `费用：${log.billedAmount != null ? `¥${Number(log.billedAmount).toFixed(2)}` : "—"}`,
+        `实际消费：${formatMoney(log.billedAmount)}`,
         ...(log.errorMessage ? [`错误：[${log.errorCategory || "unknown"}] ${log.errorMessage}`] : []),
     ].join("\n");
 }

@@ -38,6 +38,7 @@ const cleanupBatch = 100
 type generationResult struct {
 	Data             []byte
 	Text, UpstreamID string
+	FinishReason     string
 	Pending          bool
 	PromptTokens     int64
 	CachedTokens     int64
@@ -785,6 +786,7 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 		var billedMicros, calculatedMicros int64
 		var actualSeconds any
 		var promptTokens, cachedTokens, completionTokens any
+		finishReason := ""
 		if failure != nil {
 			status = "failed"
 			errorCode = failure.Category
@@ -815,6 +817,10 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 			usageBased := false
 			if task.Capability == "text" {
 				promptTokens, cachedTokens, completionTokens = result.PromptTokens, result.CachedTokens, result.CompletionTokens
+				finishReason = result.FinishReason
+				if finishReason == "" {
+					finishReason = "stop"
+				}
 			}
 			if task.PricingKind == "token" && task.Capability == "text" {
 				usageBased = true
@@ -856,7 +862,7 @@ func (a *App) finishTask(ctx context.Context, original, media Row, result *gener
 				return err
 			}
 		}
-		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds),partial_text=CASE WHEN $2='succeeded' THEN '' ELSE partial_text END WHERE id=$1", task.ID, status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE generation_tasks SET status=$2,output_media_id=$3,response_message_id=$4,error_code=$5,error_message=$6,finished_at=now(),worker_token=NULL,prompt_tokens=$7,cached_tokens=$8,completion_tokens=$9,billed_micros=$10,calculated_micros=$11,seconds=coalesce($12,seconds),partial_text=CASE WHEN $2='succeeded' THEN '' ELSE partial_text END,finish_reason=$13 WHERE id=$1", task.ID, status, mediaID, messageID, errorCode, errorMessage, promptTokens, cachedTokens, completionTokens, billedMicros, calculatedMicros, actualSeconds, finishReason); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE upstream_cost_entries SET status=$2,updated_at=now() WHERE task_id=$1 AND status='running'", task.ID, status); err != nil {

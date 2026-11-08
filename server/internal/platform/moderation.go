@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// 未通过审核的用户消息永远不作为后续对话上下文发送给上游。
-const approvedMessage = `NOT EXISTS(SELECT 1 FROM generation_tasks mt JOIN moderation_reviews mr ON mr.id=mt.moderation_id WHERE mt.request_message_id=m.id AND mr.status<>'approved')`
+// 被替换的旧记录与未通过审核的用户消息不作为后续对话上下文发送给上游。
+const approvedMessage = `m.superseded_at IS NULL AND NOT EXISTS(SELECT 1 FROM generation_tasks mt JOIN moderation_reviews mr ON mr.id=mt.moderation_id WHERE mt.request_message_id=m.id AND mr.status<>'approved')`
 
 type sensitiveDecision struct {
 	Action string

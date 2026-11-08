@@ -197,7 +197,7 @@ func (a *App) textEvents(c *gin.Context) {
 			}
 			detail := value.(gin.H)
 			request := detail["request"].(Row)
-			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"]) + ":" + str(request["canCancel"])
+			key := str(request["run"]) + ":" + str(request["streamSequence"]) + ":" + str(request["status"]) + ":" + str(request["attemptCount"]) + ":" + str(request["canCancel"]) + ":" + str(request["finishReason"])
 			if key != last {
 				arm()
 				c.SSEvent("snapshot", value)
@@ -260,6 +260,34 @@ func (usage openAIUsage) apply(result *generationResult) {
 	}
 }
 
+func textFinishReason(reason string) string {
+	switch strings.ToLower(reason) {
+	case "stop", "end_turn", "stop_sequence", "completed":
+		return "stop"
+	case "length", "max_tokens", "max_output_tokens":
+		return "length"
+	default:
+		return reason
+	}
+}
+
+func responsesOutputText(response map[string]any) string {
+	if text := str(response["output_text"]); text != "" {
+		return text
+	}
+	var text strings.Builder
+	output, _ := response["output"].([]any)
+	for _, item := range output {
+		parts, _ := object(item)["content"].([]any)
+		for _, part := range parts {
+			if p := object(part); p["type"] == "output_text" {
+				text.WriteString(str(p["text"]))
+			}
+		}
+	}
+	return text.String()
+}
+
 func (a *App) streamText(ctx context.Context, req *http.Request, channel channel, task Row) (generationResult, error) {
 	trace := traceFrom(ctx)
 	if trace != nil {
@@ -315,6 +343,9 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 					return &upstreamError{Category: "content_policy"}
 				}
 				finished = finished || finish != ""
+				if finish != "" {
+					result.FinishReason = textFinishReason(finish)
+				}
 				parts, _ := object(candidate["content"])["parts"].([]any)
 				for _, part := range parts {
 					p := object(part)
@@ -338,6 +369,27 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 			finished = finished || done
 		} else {
 			eventType := str(payload["type"])
+			response := object(payload["response"])
+			if !stream {
+				response = payload
+			}
+			status := str(response["status"])
+			if eventType == "response.failed" || status == "failed" || response["error"] != nil {
+				return responseError(400, response, "", channel.APIKey)
+			}
+			if eventType == "response.incomplete" || status == "incomplete" {
+				reason := str(object(response["incomplete_details"])["reason"])
+				if reason == "content_filter" {
+					return &upstreamError{Category: "content_policy"}
+				}
+				if reason != "max_output_tokens" {
+					return &upstreamError{Category: "stream_interrupted"}
+				}
+				finished = true
+				result.FinishReason = "length"
+			} else if status != "" && status != "completed" && (eventType == "response.completed" || eventType == "response.done" || !stream && payload["object"] == "response") {
+				return &upstreamError{Category: "stream_interrupted"}
+			}
 			if eventType == "response.output_text.delta" {
 				delta = str(payload["delta"])
 			} else if eventType == "response.output_text.done" {
@@ -346,9 +398,9 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 				}
 			} else if eventType == "response.completed" || eventType == "response.done" {
 				finished = true
-			} else if outText := str(payload["output_text"]); outText != "" && !stream {
-				delta = outText
-				finished = true
+			}
+			if content.Len() == 0 && (finished || !stream) {
+				delta = responsesOutputText(response)
 			}
 			choices, _ := payload["choices"].([]any)
 			if len(choices) > 0 {
@@ -361,7 +413,10 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 					return &upstreamError{Category: "content_policy"}
 				}
 				delta = str(message["content"])
-				finished = finished || str(choice["finish_reason"]) != ""
+				if finish := str(choice["finish_reason"]); finish != "" {
+					finished = true
+					result.FinishReason = textFinishReason(finish)
+				}
 			}
 			usage := object(payload["usage"])
 			if len(usage) == 0 {
@@ -437,6 +492,9 @@ func (a *App) streamText(ctx context.Context, req *http.Request, channel channel
 	result.Text = content.String()
 	if !finished || strings.TrimSpace(result.Text) == "" {
 		return generationResult{}, &upstreamError{Category: "stream_interrupted", Retryable: content.Len() == 0}
+	}
+	if result.FinishReason == "" {
+		result.FinishReason = "stop"
 	}
 	if err = flush(); err != nil {
 		return generationResult{}, err

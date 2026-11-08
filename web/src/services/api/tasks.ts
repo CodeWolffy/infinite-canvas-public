@@ -7,11 +7,12 @@ import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 export function getGenerationTask(id: string, signal?: AbortSignal) {
     return apiRequest<{ task: GenerationTask }>(`/api/generation-tasks/${id}`, { signal });
 }
-export const cancelGenerationTask = (id: string) => apiRequest<void>(`/api/generation-tasks/${id}/cancel`, { method: "POST", body: {} });
+export type TaskCancellation = { canceled: boolean; status: GenerationTask["status"]; refunded: string };
+export const cancelGenerationTask = (id: string) => apiRequest<TaskCancellation>(`/api/generation-tasks/${id}/cancel`, { method: "POST", body: {} });
 export const getCapabilityBatches = (capability: string, offset = 0) => apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?${serializeApiParams({ capability, limit: 50, offset })}`);
 export const getStudioBatch = (id: string) => apiRequest<GenerationBatchDetail>(`/api/generation-batches/${id}`);
 export const getAdminTasks = (status = "", capability = "", offset = 0) => apiRequest<{ tasks: Array<GenerationTask & { username: string; modelDisplayName: string; capability: string }> }>(`/api/admin/tasks?${serializeApiParams({ status, capability, limit: 50, offset })}`);
-export const cancelAdminTask = (id: string) => apiRequest<void>(`/api/admin/tasks/${id}/cancel`, { method: "POST", body: {} });
+export const cancelAdminTask = (id: string) => apiRequest<TaskCancellation>(`/api/admin/tasks/${id}/cancel`, { method: "POST", body: {} });
 
 export function taskDelay(signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
@@ -40,17 +41,20 @@ export function selectedPlatformModel(models: PublicModel[], selected: string, c
     return model.id;
 }
 
-export async function ensurePlatformMedia(reference: { storageKey?: string; url?: string; dataUrl?: string; name?: string }, signal?: AbortSignal) {
+export async function ensurePlatformMedia(reference: { storageKey?: string; url?: string; dataUrl?: string; name?: string }, signal?: AbortSignal, assertInput?: () => void) {
     const session = useUserStore.getState().sessionVersion;
+    assertInput?.();
     const serverURL = reference.url || reference.dataUrl || "";
     const urlID = serverURL.match(/^\/api\/media\/([0-9a-f-]{36})(?:$|[?#])/i)?.[1];
     const keyID = reference.storageKey?.match(/^(?:image:|media:)?([0-9a-f-]{36})$/i)?.[1];
     if (urlID || keyID) return (urlID || keyID)!;
     const blob = reference.storageKey ? await getMediaBlob(reference.storageKey) : await (await fetch(serverURL, { signal })).blob();
     assertCurrentSession(session);
+    assertInput?.();
     if (signal?.aborted) throw new DOMException("已停止准备", "AbortError");
     if (!blob) throw new Error("参考文件无法读取，请重新上传");
     const media = await uploadMedia(blob, reference.name || "reference");
     assertCurrentSession(session);
+    assertInput?.();
     return media.id;
 }

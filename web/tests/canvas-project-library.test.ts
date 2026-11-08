@@ -23,6 +23,10 @@ function setup(t: { onTestFinished: (fn: () => void) => void }) {
         "@/services/api/canvas-projects": api,
         "@/services/api/request": { ApiError: class extends Error {} },
         "@/lib/canvas/canvas-collaboration-merge": { mergeCanvasSnapshots },
+        "@/lib/canvas/canvas-recovery": loadModule(readSource("lib/canvas/canvas-recovery.ts"), {}, {
+            nanoid: nodeRequire("nanoid"),
+            localforage: { __esModule: true, default: { createInstance: () => ({ setItem: async () => undefined, removeItem: async () => undefined, iterate: async () => undefined }) } },
+        }),
         "@/stores/use-user-store": { useUserStore: user, assertCurrentSession: (version: number) => { if (version !== user.getState().sessionVersion) throw new DOMException("登录会话已变更", "AbortError"); } },
     });
     const canvas = module.useCanvasStore;

@@ -18,6 +18,7 @@ require (
 	github.com/redis/go-redis/v9 v9.12.1
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartwalle/alipay/v3 v3.2.31
+	github.com/tiktoken-go/tokenizer v0.10.0
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/wI2L/jsondiff v0.7.0
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
@@ -32,6 +33,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-audio/riff v1.0.0 // indirect

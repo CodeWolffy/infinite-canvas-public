@@ -5,7 +5,7 @@ import { CreditCard, Plus } from "lucide-react";
 import dayjs from "dayjs";
 
 import { adjustBalance, getAdminPaymentOrders, getAdminWalletEntries, getPaymentChannels, paymentMethodLabels, paymentProviderLabels, reconcilePaymentOrder, savePaymentChannel, walletEntryLabels, type PaymentChannel, type PaymentMethod, type PaymentOrder, type PaymentProvider, type WalletEntry } from "@/services/api/billing";
-import { getAdminUsers } from "@/services/api/admin-users";
+import { AdminUserSelect } from "@/pages/admin/components/admin-user-select";
 import { useSecurityProof } from "@/hooks/use-security-proof";
 import CostReport from "./components/cost-report";
 
@@ -33,7 +33,6 @@ export default function BillingPage() {
     const channels = useQuery({ queryKey: ["payment-channels"], queryFn: getPaymentChannels });
     const orders = useQuery({ queryKey: ["admin-payment-orders", status, page], queryFn: () => getAdminPaymentOrders(status, (page - 1) * 50), enabled: tab === "orders" });
     const ledger = useQuery({ queryKey: ["admin-wallet-entries", page], queryFn: () => getAdminWalletEntries("", (page - 1) * 50), enabled: tab === "ledger" });
-    const users = useQuery({ queryKey: ["admin-users"], queryFn: getAdminUsers, enabled: adjustmentOpen });
     const save = useMutation({ mutationFn: async (values: ChannelValues) => savePaymentChannel(editing?.id, values, await requestProof()), onSuccess: () => { setEditing(undefined); void client.invalidateQueries({ queryKey: ["payment-channels"] }); message.success("支付渠道已保存"); }, onError: (error: Error) => message.error(error.message) });
     const reconcile = useMutation({ mutationFn: reconcilePaymentOrder, onSuccess: () => { void orders.refetch(); message.success("查单完成"); }, onError: (error: Error) => message.error(error.message) });
     const adjust = useMutation({ mutationFn: async (values: { userId: string; amount: string; note: string }) => adjustBalance(values.userId, { amount: String(values.amount), note: values.note, requestId: adjustmentID }, await requestProof()), onSuccess: () => { setAdjustmentOpen(false); void client.invalidateQueries({ queryKey: ["admin-wallet-entries"] }); void client.invalidateQueries({ queryKey: ["admin-users"] }); message.success("余额已调整"); }, onError: (error: Error) => message.error(error.message) });
@@ -87,7 +86,7 @@ export default function BillingPage() {
             </Form>
         </Modal>
         <Modal title="调整用户余额" open={adjustmentOpen} onCancel={() => setAdjustmentOpen(false)} footer={null} destroyOnHidden>
-            <Form form={balanceForm} layout="vertical" onFinish={(values) => adjust.mutate(values)}><Form.Item name="userId" label="用户" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" loading={users.isPending} options={(users.data || []).map((user) => ({ value: user.id, label: `${user.displayName} · ${user.username}` }))} /></Form.Item><Form.Item name="amount" label="调整金额（元）" extra="正数增加可用余额，负数扣减可用余额，不影响已冻结金额。" rules={[{ required: true }]}><InputNumber<string> stringMode precision={6} className="!w-full" /></Form.Item><Form.Item name="note" label="调整原因" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item><Button type="primary" htmlType="submit" block loading={adjust.isPending}>确认调整</Button></Form>
+            <Form form={balanceForm} layout="vertical" onFinish={(values) => adjust.mutate(values)}><Form.Item name="userId" label="用户" rules={[{ required: true }]}><AdminUserSelect placeholder="搜索用户名或昵称" /></Form.Item><Form.Item name="amount" label="调整金额（元）" extra="正数增加可用余额，负数扣减可用余额，不影响已冻结金额。" rules={[{ required: true }]}><InputNumber<string> stringMode precision={6} className="!w-full" /></Form.Item><Form.Item name="note" label="调整原因" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item><Button type="primary" htmlType="submit" block loading={adjust.isPending}>确认调整</Button></Form>
         </Modal>
         </div>
     );

@@ -6,7 +6,8 @@ import dayjs, { type Dayjs } from "dayjs";
 import { saveAs } from "file-saver";
 import { Activity, BarChart3, CircleDollarSign, Clock3, Database, Download, Image, ListTodo, MessageSquareText, PieChart, Send, TrendingUp, Waypoints } from "lucide-react";
 
-import { getAdminUsers } from "@/services/api/admin-users";
+import { AdminUserSelect } from "@/pages/admin/components/admin-user-select";
+import { formatMoney } from "@/lib/format-money";
 import { getAdminChannels, getAdminModels, getAdminStats } from "@/services/api/admin-platform";
 import { formatBytes } from "@/lib/image-utils";
 
@@ -16,12 +17,11 @@ export default function AdminStatsPage() {
     // 默认统计最近 30 天：后端在没有时间范围时也会按 30 天兜底，前端保持同一口径。
     const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().subtract(29, "day").startOf("day"), dayjs().startOf("day")] }));
     const [preset, setPresetState] = useState<number | null>(30);
-    const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
     const statsQuery = useQuery({
-        queryKey: ["admin", "stats", filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId],
-        queryFn: () => getAdminStats({ from: filters.range[0].startOf("day").toISOString(), to: filters.range[1].add(1, "day").startOf("day").toISOString(), userId: filters.userId, modelId: filters.modelId, channelId: filters.channelId }),
+        queryKey: ["admin", "stats", preset, filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId],
+        queryFn: () => getAdminStats({ from: preset ? dayjs().subtract(preset - 1, "day").startOf("day").toISOString() : filters.range[0].startOf("day").toISOString(), to: preset ? dayjs().toISOString() : filters.range[1].add(1, "day").startOf("day").toISOString(), userId: filters.userId, modelId: filters.modelId, channelId: filters.channelId }),
         staleTime: 0,
         refetchOnMount: "always",
         refetchOnWindowFocus: true,
@@ -45,7 +45,7 @@ export default function AdminStatsPage() {
             <div className="flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
                 <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => setPreset(Number(value))} />
                 <DatePicker.RangePicker className="w-full min-w-0 sm:w-auto" value={filters.range} allowClear={false} onChange={(range) => range && updateFilters("range", range as [Dayjs, Dayjs])} />
-                <Select allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => updateFilters("userId", userId)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
+                <AdminUserSelect allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => updateFilters("userId", userId)} />
                 <Select allowClear placeholder="全部模型" className="min-w-44" value={filters.modelId} onChange={(modelId) => updateFilters("modelId", modelId)} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
                 <Select allowClear placeholder="全部渠道" className="min-w-40" value={filters.channelId} onChange={(channelId) => updateFilters("channelId", channelId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />
             </div>
@@ -56,7 +56,7 @@ export default function AdminStatsPage() {
                 <Metric icon={Activity} label="任务成功率" value={percent(totals?.succeededTaskCount, totals?.requestCount)} />
                 <Metric icon={Image} label="成功图片" value={totals?.successImageCount || 0} />
                 <Metric icon={MessageSquareText} label="文本调用" value={`${statsQuery.data?.textTotals.succeededRequestCount || 0}/${statsQuery.data?.textTotals.requestCount || 0}`} sub="成功 / 总量" />
-                <Metric icon={CircleDollarSign} label="生成预估消费" value={`¥${Number(totals?.estimatedCost || 0).toFixed(4)}`} />
+                <Metric icon={CircleDollarSign} label="实际生成消费" value={formatMoney(totals?.estimatedCost)} />
                 <Metric icon={Waypoints} label="渠道调用总数" value={`${totals?.attemptCount || 0} 次`} sub={`成功率 ${percent(totals?.succeededAttemptCount, totals?.attemptCount)}`} />
                 <Metric icon={Clock3} label="平均耗时" value={duration(totals?.averageDurationMs || 0)} />
                 <Metric icon={Clock3} label="P50 耗时" value={duration(totals?.p50DurationMs || 0)} />
@@ -221,7 +221,7 @@ export default function AdminStatsPage() {
 const taskColumns = [
     { title: "请求数", dataIndex: "requestCount", width: 120, align: "right" as const, sorter: (a: { requestCount: number }, b: { requestCount: number }) => a.requestCount - b.requestCount, render: (v: number) => <span className="font-mono font-medium">{v?.toLocaleString() || 0}</span> },
     { title: "成功图片", dataIndex: "successImageCount", width: 120, align: "right" as const, sorter: (a: { successImageCount: number }, b: { successImageCount: number }) => a.successImageCount - b.successImageCount, render: (v: number) => <span className="font-mono text-emerald-600 dark:text-emerald-400">{v?.toLocaleString() || 0}</span> },
-    { title: "生成消费", dataIndex: "estimatedCost", width: 140, align: "right" as const, render: (value: string) => <span className="font-mono font-semibold text-stone-900 dark:text-stone-100">¥{Number(value || 0).toFixed(4)}</span>, sorter: (a: { estimatedCost: string }, b: { estimatedCost: string }) => Number(a.estimatedCost) - Number(b.estimatedCost) },
+    { title: "生成消费", dataIndex: "estimatedCost", width: 140, align: "right" as const, render: (value: string) => <span className="font-mono font-semibold text-stone-900 dark:text-stone-100">{formatMoney(value)}</span>, sorter: (a: { estimatedCost: string }, b: { estimatedCost: string }) => Number(a.estimatedCost) - Number(b.estimatedCost) },
 ];
 
 function Metric({ icon: Icon, label, value, sub }: { icon: typeof Send; label: string; value: string | number; sub?: string }) {
@@ -288,7 +288,7 @@ function DailyTrendsBoard({ dates }: { dates: Array<{ date: string; requestCount
                             <div className="absolute -top-12 hidden whitespace-nowrap rounded-lg bg-stone-900 px-2.5 py-1.5 text-[11px] text-white shadow-xl group-hover:block z-30 dark:bg-stone-100 dark:text-stone-900 pointer-events-none">
                                 <div className="font-semibold">{d.date}</div>
                                 <div className="text-blue-300 dark:text-blue-600">请求: {d.requestCount} (成功 {d.succeededCount})</div>
-                                <div className="text-emerald-300 dark:text-emerald-600">消费: ¥{costVal.toFixed(4)}</div>
+                                <div className="text-emerald-300 dark:text-emerald-600">消费: {formatMoney(d.estimatedCost)}</div>
                             </div>
                             <div className="flex items-end gap-1.5 w-full justify-center h-full pb-1">
                                 <div style={{ height: `${reqHeight}%` }} className="w-3 rounded-t-sm bg-blue-500 hover:bg-blue-600 transition-all cursor-pointer shadow-sm" />
@@ -358,7 +358,7 @@ function CapabilityBreakdownBoard({ capabilities }: { capabilities: Array<{ capa
                             </div>
                             <div className="flex items-center gap-4">
                                 <span className="text-stone-600 dark:text-stone-300 font-mono font-medium">{c.requestCount.toLocaleString()} 次 ({ratio})</span>
-                                <span className="text-stone-900 dark:text-stone-100 font-mono font-semibold w-24 text-right">¥{Number(c.estimatedCost || 0).toFixed(4)}</span>
+                                <span className="text-stone-900 dark:text-stone-100 font-mono font-semibold w-24 text-right">{formatMoney(c.estimatedCost)}</span>
                             </div>
                         </div>
                     );

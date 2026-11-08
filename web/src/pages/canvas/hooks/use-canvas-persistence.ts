@@ -39,6 +39,12 @@ export function useCanvasPersistence(projectId: string, enabled: boolean, snapsh
     blockerRef.current = blocker;
 
     useEffect(() => {
+        const value = changes();
+        // 视口仍沿用原有服务端保存节奏，浏览器副本先保留尚未入队的位置。
+        if (value) value.store.retainRecovery(projectId, value.current.snapshot);
+    }, [projectId, session, enabled, snapshot.viewport, changes]);
+
+    useEffect(() => {
         const beforeUnload = (event: BeforeUnloadEvent) => {
             if (!dirty()) return;
             void flush().catch(() => undefined);
@@ -75,7 +81,7 @@ export function useCanvasPersistence(projectId: string, enabled: boolean, snapsh
             if (!dirty()) { current.proceed(); return; }
             dialog = modal.confirm({
                 title: "画布尚未保存",
-                content: "保存失败或存在版本冲突。继续编辑可以处理保存问题；离开后本地编辑仍保留在当前标签页，刷新前请先保存。",
+                content: useCanvasStore.getState().recoveryErrors[latest.current.projectId] || "保存失败或存在版本冲突。继续编辑可以处理保存问题；浏览器恢复副本会保留未保存编辑，重新打开画布时可选择恢复或另存。",
                 okText: "继续编辑", cancelText: "仍然离开", closable: false, mask: { closable: false }, keyboard: false,
                 onOk: () => { if (blockerRef.current.state === "blocked") blockerRef.current.reset(); },
                 onCancel: () => { if (blockerRef.current.state === "blocked") blockerRef.current.proceed(); },

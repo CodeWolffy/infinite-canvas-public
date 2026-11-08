@@ -82,6 +82,8 @@ export const defaultConfig: AiConfig = {
 
 type ConfigStore = {
     config: AiConfig;
+    configEditVersion: number;
+    lastEditedConfigKey: keyof AiConfig | null;
     hydratePlatformModels: () => Promise<void>;
     hydratePreferences: () => Promise<Record<string, unknown>>;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
@@ -157,6 +159,8 @@ export const useConfigStore = create<ConfigStore>()(
     persist(
         (set) => ({
             config: defaultConfig,
+            configEditVersion: 0,
+            lastEditedConfigKey: null,
             hydratePlatformModels: async () => {
                 const sessionVersion = useUserStore.getState().sessionVersion;
                 const models = await fetchPublicModels();
@@ -186,6 +190,8 @@ export const useConfigStore = create<ConfigStore>()(
             },
             updateConfig: (key, value) =>
                 set((state) => ({
+                    configEditVersion: state.configEditVersion + 1,
+                    lastEditedConfigKey: key,
                     config: {
                         ...state.config,
                         [key]: value,

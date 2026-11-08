@@ -11,7 +11,7 @@ import { findNode, loadModule, sourceFile } from "./support/source-loader";
 
 const state = vi.hoisted(() => ({
     sessionVersion: 1, pending: false, enabled: true, projects: [] as CanvasProject[],
-    updateProject: vi.fn(), flushProject: vi.fn(), capture: undefined as undefined | (() => void),
+    updateProject: vi.fn(), flushProject: vi.fn(), retainRecovery: vi.fn(), recoveryErrors: {}, capture: undefined as undefined | (() => void),
 }));
 vi.mock("@/stores/use-user-store", () => ({ useUserStore: { getState: () => state } }));
 vi.mock("@/stores/canvas/use-canvas-store", () => ({ useCanvasStore: { getState: () => ({ ...state, hasPendingChanges: () => state.pending, registerSnapshotCapture: (_id: string, capture: () => void) => { state.capture = capture; return () => { state.capture = undefined; }; } }) } }));
@@ -60,6 +60,7 @@ beforeEach(() => {
     state.projects = [{ id: "project", snapshotLoaded: true, accessRole: "owner", ...value } as CanvasProject];
     state.updateProject.mockReset().mockImplementation((id, patch) => { Object.assign(state.projects.find((item) => item.id === id)!, patch); state.pending = true; });
     state.flushProject.mockReset().mockImplementation(async () => { state.pending = false; });
+    state.retainRecovery.mockReset();
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
     // React Router 的 Request 使用 Node fetch，须匹配同一运行时的 signal。
     vi.stubGlobal("AbortController", transferableAbortController().constructor);
@@ -81,6 +82,14 @@ test("关页前把尚未入队的视口一起保存，未保存时触发浏览�
     const clean = new Event("beforeunload", { cancelable: true });
     act(() => window.dispatchEvent(clean));
     expect(clean.defaultPrevented).toBe(false);
+});
+
+test("视口尚未到服务端保存时机就先写恢复副本，不提前发起保存", () => {
+    value = { ...value, viewport: { x: 37, y: 42, k: 2 } };
+    mount();
+    expect(state.retainRecovery).toHaveBeenCalledWith("project", value);
+    expect(state.updateProject).not.toHaveBeenCalled();
+    expect(state.flushProject).not.toHaveBeenCalled();
 });
 
 test("真实路由导航等待保存完成，然后自动进入目标页面", async () => {

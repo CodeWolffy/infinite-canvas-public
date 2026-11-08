@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { deleteGenerationBatch, getGenerationBatch, watchGenerationBatch, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
+import { deleteGenerationBatch, getGenerationPreferences, watchGenerationBatch, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { fetchPublicModels } from "@/hooks/use-public-models";
 import { getCapabilityBatches } from "@/services/api/tasks";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -29,18 +29,45 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
 }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const updateAgentTask = useWorkbenchAgentStore((state) => state.updateTask);
     const [logs, setLogs] = useState<L[]>([]);
     const [activeBatchIds, setActiveBatchIds] = useState<string[]>([]);
+    const [subscriptionErrors, setSubscriptionErrors] = useState<Record<string, string>>({});
+    const mountedRef = useRef(false);
     const activeBatchIdsRef = useRef<string[]>([]);
     const previewLogIdRef = useRef("");
     const watchedBatchesRef = useRef(new Set<string>());
-    const subscriptionsRef = useRef(new Map<string, () => void>());
-    const agentTasksRef = useRef(new Map<string, string>());
+    const subscriptionsRef = useRef(new Map<string, { cleanup: () => void }>());
+    const agentTasksRef = useRef(new Map<string, Set<string>>());
     const defaultTitleRef = useRef(document.title);
     const applyDetailRef = useRef<(detail: GenerationBatchDetail) => { log: L; results: R[] }>(() => { throw new Error("uninitialized"); });
     const [previewLog, setPreviewLog] = useState<L | null>(null);
     const [results, setResults] = useState<R[]>([]);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        const subscriptions = subscriptionsRef.current;
+        const clearSubscriptions = () => {
+            const stale = [...subscriptions.values()];
+            subscriptions.clear();
+            stale.forEach(({ cleanup }) => cleanup());
+        };
+        const unsubscribe = useUserStore.subscribe((state, previous) => {
+            if (state.sessionVersion === previous.sessionVersion) return;
+            clearSubscriptions();
+            watchedBatchesRef.current.clear();
+            agentTasksRef.current.clear();
+            activeBatchIdsRef.current = [];
+            previewLogIdRef.current = "";
+            setActiveBatchIds([]);
+            setSubscriptionErrors({});
+            setLogs([]);
+            setPreviewLog(null);
+            setResults([]);
+        });
+        return () => { mountedRef.current = false; unsubscribe(); clearSubscriptions(); };
+    }, []);
 
     useEffect(() => {
         activeBatchIdsRef.current = activeBatchIds;
@@ -48,42 +75,53 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
 
     useEffect(() => {
         const syncTitle = () => {
-            const count = activeBatchIdsRef.current.length;
+            const count = activeBatchIdsRef.current.filter((id) => !subscriptionErrors[id]).length;
             document.title = count ? t("imageWorkbench.runningTabTitle", { count }) : defaultTitleRef.current;
         };
         if (!document.hidden) syncTitle();
         document.addEventListener("visibilitychange", syncTitle);
         return () => document.removeEventListener("visibilitychange", syncTitle);
-    }, [activeBatchIds.length, t]);
+    }, [activeBatchIds.length, subscriptionErrors, t]);
 
     useEffect(() => {
         previewLogIdRef.current = previewLog?.id ?? "";
     }, [previewLog]);
 
     // 活跃批次走 SSE 推送：任务状态变化时服务端立刻下发快照，任务全部结束后服务端关闭连接；
-    // 连接异常时 watchGenerationBatch 内部会退化为轮询兜底。
+    // 连接异常时 watchGenerationBatch 内部会退化为轮询兜底；终止错误保留任务状态，等待手动恢复监听。
     useEffect(() => {
+        if (sessionVersion !== useUserStore.getState().sessionVersion) return;
         const subscriptions = subscriptionsRef.current;
         const active = new Set(activeBatchIds);
-        subscriptions.forEach((cleanup, id) => {
-            if (!active.has(id)) { cleanup(); subscriptions.delete(id); }
+        subscriptions.forEach((subscription, id) => {
+            if (!active.has(id)) { subscriptions.delete(id); subscription.cleanup(); }
         });
         active.forEach((batchId) => {
-            if (subscriptions.has(batchId)) return;
-            subscriptions.set(batchId, watchGenerationBatch(batchId, (detail) => {
-                const applied = applyDetailRef.current(detail);
-                if (previewLogIdRef.current === batchId) {
-                    setPreviewLog(applied.log);
-                    setResults(applied.results);
-                }
-            }));
+            if (subscriptions.has(batchId) || subscriptionErrors[batchId]) return;
+            const subscription = { cleanup: () => {} };
+            const isCurrent = () => mountedRef.current && sessionVersion === useUserStore.getState().sessionVersion && subscriptions.get(batchId) === subscription;
+            const onError = (error: Error) => {
+                if (!isCurrent()) return;
+                subscriptions.delete(batchId);
+                subscription.cleanup();
+                setSubscriptionErrors((current) => ({ ...current, [batchId]: error.message || "生成状态读取中断，请恢复状态同步" }));
+            };
+            subscriptions.set(batchId, subscription);
+            try {
+                subscription.cleanup = watchGenerationBatch(batchId, (detail) => {
+                    if (!isCurrent()) return;
+                    const applied = applyDetailRef.current(detail);
+                    if (previewLogIdRef.current === batchId) {
+                        setPreviewLog(applied.log);
+                        setResults(applied.results);
+                    }
+                }, undefined, onError);
+                if (!isCurrent()) subscription.cleanup();
+            } catch (error) {
+                onError(error instanceof Error ? error : new Error("生成状态读取中断，请恢复状态同步"));
+            }
         });
-    }, [activeBatchIds]);
-
-    useEffect(() => {
-        const subscriptions = subscriptionsRef.current;
-        return () => { subscriptions.forEach((cleanup) => cleanup()); subscriptions.clear(); };
-    }, []);
+    }, [activeBatchIds, sessionVersion, subscriptionErrors]);
 
     const ensureNotifyPermission = () => {
         if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
@@ -104,11 +142,11 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     };
 
     const settleAgentTask = (batchId: string, detail: GenerationBatchDetail) => {
-        const agentTaskId = agentTasksRef.current.get(batchId);
-        if (!agentTaskId) return;
+        const agentTaskIds = agentTasksRef.current.get(batchId);
+        if (!agentTaskIds) return;
         agentTasksRef.current.delete(batchId);
         const successCount = detail.tasks.filter((task) => task.status === "succeeded").length;
-        updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount: detail.tasks.filter((task) => task.status === "failed" || task.status === "canceled").length, error: successCount ? undefined : detail.tasks.find((task) => task.errorMessage)?.errorMessage ?? undefined });
+        agentTaskIds.forEach((id) => updateAgentTask(id, { status: successCount ? "succeeded" : "failed", successCount, failCount: detail.tasks.filter((task) => task.status === "failed" || task.status === "canceled").length, error: successCount ? undefined : detail.tasks.find((task) => task.errorMessage)?.errorMessage ?? undefined }));
     };
 
     const applyDetail = (detail: GenerationBatchDetail) => {
@@ -121,9 +159,17 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
             return active ? [...current, applied.log.id] : current.filter((id) => id !== applied.log.id);
         });
         if (active) watchedBatchesRef.current.add(applied.log.id);
-        else if (watchedBatchesRef.current.delete(applied.log.id)) {
-            settleAgentTask(applied.log.id, detail);
-            notifyCompletion(detail);
+        else {
+            setSubscriptionErrors((current) => {
+                if (!(applied.log.id in current)) return current;
+                const next = { ...current };
+                delete next[applied.log.id];
+                return next;
+            });
+            if (watchedBatchesRef.current.delete(applied.log.id)) {
+                settleAgentTask(applied.log.id, detail);
+                notifyCompletion(detail);
+            }
         }
         return applied;
     };
@@ -131,16 +177,28 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
     applyDetailRef.current = applyDetail;
 
     const watchBatch = (batchId: string) => {
+        if (!mountedRef.current || sessionVersion !== useUserStore.getState().sessionVersion) return;
         watchedBatchesRef.current.add(batchId);
+        setSubscriptionErrors((current) => {
+            if (!(batchId in current)) return current;
+            const next = { ...current };
+            delete next[batchId];
+            return next;
+        });
         setActiveBatchIds((current) => (current.includes(batchId) ? current : [...current, batchId]));
     };
 
     const registerAgentTask = (batchId: string, agentTaskId: string) => {
-        agentTasksRef.current.set(batchId, agentTaskId);
+        const tasks = agentTasksRef.current.get(batchId) || new Set<string>();
+        tasks.add(agentTaskId);
+        agentTasksRef.current.set(batchId, tasks);
+        watchedBatchesRef.current.add(batchId);
     };
 
     const deleteBatches = async (ids: string[]) => {
+        if (!mountedRef.current || sessionVersion !== useUserStore.getState().sessionVersion) return [];
         const settled = await Promise.allSettled(ids.map((id) => deleteGenerationBatch(id)));
+        if (!mountedRef.current || sessionVersion !== useUserStore.getState().sessionVersion) return [];
         const deletedIds = ids.flatMap((id, index) => (settled[index]?.status === "fulfilled" ? [id] : []));
         if (deletedIds.length) {
             const deleted = new Set(deletedIds);
@@ -152,17 +210,17 @@ export function useGenerationBatches<L extends GenerationBatchLog, R>(options: {
         return deletedIds;
     };
 
-    return { logs, setLogs, activeBatchIds, setActiveBatchIds, activeBatchIdsRef, previewLog, setPreviewLog, previewLogIdRef, watchedBatchesRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission };
+    return { logs, setLogs, activeBatchIds, setActiveBatchIds, activeBatchIdsRef, subscriptionErrors, retrySubscription: watchBatch, previewLog, setPreviewLog, previewLogIdRef, watchedBatchesRef, results, setResults, applyDetail, watchBatch, registerAgentTask, deleteBatches, ensureNotifyPermission };
 }
 
-// 生图/视频工作台共用的初始化：拉取模型、生成记录与偏好，并回填页面状态。
+// 模型、历史和偏好独立加载；模型就绪即可创作，历史或偏好失败只影响对应区域。
 export function useWorkbenchBootstrap<L extends GenerationBatchLog, R>(options: {
     capability: "image" | "video";
     modelsRef: { current: PublicModel[] };
     preferencesRef: { current: Record<string, unknown> };
     batches: {
-        setLogs: (logs: L[]) => void;
-        setActiveBatchIds: (ids: string[]) => void;
+        setLogs: Dispatch<SetStateAction<L[]>>;
+        setActiveBatchIds: Dispatch<SetStateAction<string[]>>;
         applyDetail: (detail: GenerationBatchDetail) => { log: L; results: R[] };
         setPreviewLog: (log: L) => void;
         setResults: (results: R[]) => void;
@@ -171,44 +229,79 @@ export function useWorkbenchBootstrap<L extends GenerationBatchLog, R>(options: 
     applyPreferences: (preferences: Record<string, unknown>, models: PublicModel[]) => void;
     resolveInitialBatchId: (batches: GenerationBatchListItem[]) => string | null | undefined;
     onBatch?: (batch: GenerationBatchListItem) => void;
-    ignoreDetailError?: boolean;
-}): { initialized: boolean } {
-    const { message } = App.useApp();
-    const [initialized, setInitialized] = useState(false);
+    captureInputScope: () => () => void;
+}) {
+    const session = useUserStore.getState().sessionVersion;
+    const current = useRef(options);
+    current.current = options;
+    const initialInputScope = useRef<() => void>(() => {});
+    const [modelsSession, setModelsSession] = useState<number | null>(null);
+    const [historySession, setHistorySession] = useState<number | null>(null);
+    const initialized = modelsSession === session;
+    const historyReady = historySession === session;
+    const [modelsError, setModelsError] = useState("");
+    const [historyError, setHistoryError] = useState("");
+    const [preferencesError, setPreferencesError] = useState("");
+    const [attempts, setAttempts] = useState({ models: 0, history: 0, preferences: 0 });
+    const [preferences, setPreferences] = useState<{ value: Record<string, unknown>; assertInput: () => void } | null>(null);
+
+    useEffect(() => { initialInputScope.current = current.current.captureInputScope(); }, [session]);
 
     useEffect(() => {
-        const sessionVersion = useUserStore.getState().sessionVersion;
         let disposed = false;
-        void Promise.all([fetchPublicModels(), getCapabilityBatches(options.capability), useConfigStore.getState().hydratePreferences()]).then(async ([availableModels, batchResp, preferences]) => {
-            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-            const batches = batchResp.batches;
-            const models = availableModels.filter((item) => item.capability === options.capability);
-            options.preferencesRef.current = preferences;
-            options.modelsRef.current = models;
-            options.applyPreferences(preferences, models);
-            batches.forEach((batch) => options.onBatch?.(batch));
-            options.batches.setLogs(batches.map((batch) => options.toLog(batch, models)));
-            const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
-            if (activeBatches.length) options.batches.setActiveBatchIds(activeBatches.map((batch) => batch.id));
-            const initialBatchId = options.resolveInitialBatchId(batches);
-            if (!initialBatchId) return;
-            try {
-                const detail = await getGenerationBatch(initialBatchId);
-                if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
-                const applied = options.batches.applyDetail(detail);
-                options.batches.setPreviewLog(applied.log);
-                options.batches.setResults(applied.results);
-            } catch (error) {
-                if (!options.ignoreDetailError) throw error;
-            }
+        setModelsError("");
+        void Promise.all([fetchPublicModels(), useConfigStore.getState().hydratePlatformModels()]).then(([available]) => {
+            if (disposed || useUserStore.getState().sessionVersion !== session) return;
+            current.current.modelsRef.current = available.filter((item) => item.capability === current.current.capability);
+            setModelsSession(session);
         }).catch((error) => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) message.error(error instanceof Error ? error.message : "生成记录加载失败");
-        }).finally(() => {
-            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) setInitialized(true);
+            if (!disposed && useUserStore.getState().sessionVersion === session) setModelsError(error instanceof Error ? error.message : "模型加载失败");
         });
         return () => { disposed = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [session, attempts.models]);
 
-    return { initialized };
+    useEffect(() => {
+        let disposed = false;
+        const assertInput = initialInputScope.current;
+        setHistoryError("");
+        void getCapabilityBatches(current.current.capability).then(({ batches }) => {
+            if (disposed || useUserStore.getState().sessionVersion !== session) return;
+            const options = current.current;
+            batches.forEach((batch) => options.onBatch?.(batch));
+            options.batches.setLogs((logs) => [...logs, ...batches.filter((batch) => !logs.some((log) => log.id === batch.id)).map((batch) => options.toLog(batch, options.modelsRef.current))].sort((a, b) => b.createdAt - a.createdAt));
+            options.batches.setActiveBatchIds((ids) => [...new Set([...ids, ...batches.filter((batch) => batch.summary.activeCount > 0).map((batch) => batch.id)])]);
+            setHistorySession(session);
+            try { assertInput(); } catch { return; }
+            options.resolveInitialBatchId(batches);
+        }).catch((error) => {
+            if (!disposed && useUserStore.getState().sessionVersion === session) setHistoryError(error instanceof Error ? error.message : "生成记录加载失败");
+        });
+        return () => { disposed = true; };
+    }, [session, attempts.history]);
+
+    useEffect(() => {
+        let disposed = false;
+        const assertInput = initialInputScope.current;
+        setPreferencesError("");
+        void getGenerationPreferences().then((value) => {
+            if (disposed || useUserStore.getState().sessionVersion !== session) return;
+            current.current.preferencesRef.current = value;
+            setPreferences({ value, assertInput });
+        }).catch((error) => {
+            if (!disposed && useUserStore.getState().sessionVersion === session) setPreferencesError(error instanceof Error ? error.message : "偏好加载失败");
+        });
+        return () => { disposed = true; };
+    }, [session, attempts.preferences]);
+
+    useEffect(() => {
+        if (!initialized || !preferences) return;
+        try { preferences.assertInput(); } catch { return; }
+        current.current.applyPreferences(preferences.value, current.current.modelsRef.current);
+    }, [initialized, preferences]);
+
+    return { initialized, historyReady, modelsError, historyError, preferencesError,
+        retryModels: () => setAttempts((value) => ({ ...value, models: value.models + 1 })),
+        retryHistory: () => setAttempts((value) => ({ ...value, history: value.history + 1 })),
+        retryPreferences: () => setAttempts((value) => ({ ...value, preferences: value.preferences + 1 })),
+    };
 }

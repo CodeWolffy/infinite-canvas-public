@@ -260,6 +260,7 @@ func (a *App) walletRoutes(api *gin.RouterGroup) {
 	}))
 	api.GET("/user/payment-orders/:id", respond(a.getPaymentOrder))
 	api.POST("/user/payment-orders/:id/refresh", respond(a.refreshPaymentOrder))
+	api.POST("/user/payment-orders/:id/resume", respond(a.resumePaymentOrder))
 }
 
 func (a *App) billingAdminRoutes(admin *gin.RouterGroup) {
