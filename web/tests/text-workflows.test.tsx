@@ -6,7 +6,14 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { getTextConversation, TextRequestDetail } from "@/services/api/text";
 
-const api = vi.hoisted(() => ({ models: vi.fn(), conversation: vi.fn(), request: vi.fn(), list: vi.fn(), quote: vi.fn(), send: vi.fn(), upload: vi.fn(), update: vi.fn(), watch: vi.fn(), ensure: vi.fn(), renderText: vi.fn() }));
+const api = vi.hoisted(() => ({ models: vi.fn(), conversation: vi.fn(), request: vi.fn(), list: vi.fn(), quote: vi.fn(), send: vi.fn(), upload: vi.fn(), update: vi.fn(), watch: vi.fn(), ensure: vi.fn(), renderText: vi.fn(), holdSearchNavigation: false }));
+vi.mock("react-router-dom", async (importOriginal) => {
+    const original = await importOriginal<typeof import("react-router-dom")>();
+    return { ...original, useSearchParams: () => {
+        const [search, setSearch] = original.useSearchParams();
+        return [search, api.holdSearchNavigation ? () => undefined : setSearch];
+    } };
+});
 vi.mock("@/services/api/generation", () => ({ getPublicModels: api.models }));
 vi.mock("@/services/api/billing", () => ({ getWallet: async () => ({ wallet: { balance: "10" } }) }));
 vi.mock("@/services/api/platform-operations", () => ({ quoteGeneration: api.quote }));
@@ -42,6 +49,7 @@ function mount(entry = "/text?conversation=history") {
 }
 beforeEach(() => {
     vi.clearAllMocks();
+    api.holdSearchNavigation = false;
     clearWorkbenchDraft("text:"); clearWorkbenchDraft("text:history"); clearWorkbenchDraft("text:old");
     useUserStore.setState({ sessionVersion: 1 }); useCreationDraftStore.getState().clearDraft();
     api.models.mockResolvedValue([model]); api.conversation.mockResolvedValue(detail()); api.list.mockResolvedValue([]);
@@ -172,7 +180,8 @@ test("搜索可展开旧记录，但旧记录没有编辑与重新生成操作",
     expect(screen.queryByRole("button", { name: "编辑消息" })).not.toBeInTheDocument();
 });
 
-test("搜索定位只消费一次，用户随后可收起旧记录", async () => {
+test.each([false, true])("搜索定位只消费一次，导航等待 %s 时用户随后可收起旧记录", async (holdSearchNavigation) => {
+    api.holdSearchNavigation = holdSearchNavigation;
     const current = detail(); current.messages = current.messages.map((item) => ({ ...item, supersededAt: "2026-01-02" })); api.conversation.mockResolvedValue(current);
     const user = userEvent.setup(); mount("/text?conversation=history&message=a1");
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
@@ -180,6 +189,18 @@ test("搜索定位只消费一次，用户随后可收起旧记录", async () =>
     await user.click(summary);
     await waitFor(() => expect(summary.closest("details")).not.toHaveAttribute("open"));
     expect(screen.queryByText("原始回答")).not.toBeInTheDocument();
+});
+
+test("收起后再次搜索同一条旧消息仍可展开并定位", async () => {
+    const current = detail(); current.messages = current.messages.map((item) => ({ ...item, supersededAt: "2026-01-02" })); api.conversation.mockResolvedValue(current);
+    api.list.mockResolvedValue([{ id: "history", title: "再次定位", matchedMessageId: "a1", updatedAt: "2026-01-01" }]);
+    const user = userEvent.setup(); mount("/text?conversation=history&message=a1");
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByText(/历史记录 · 2 条/));
+    await waitFor(() => expect(screen.queryByText("原始回答")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "再次定位" }));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("原始回答")).toBeVisible();
 });
 
 test("重新生成模式不接受粘贴的新图片", async () => {

@@ -83,6 +83,7 @@ function TextConversationPage() {
     const scroll = useRef<HTMLDivElement>(null);
     const fileInput = useRef<HTMLInputElement>(null);
     const follow = useRef(true);
+    const consumedFocus = useRef<string | null>(null);
     const inputRevision = useRef(0);
     const previousSession = useRef(session);
     const restoredConversation = useRef(savedInput ? conversationId : "");
@@ -232,11 +233,13 @@ function TextConversationPage() {
     useEffect(() => { if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; }, [conversation.data?.messages.length, latest?.partialText, conversationId]);
     const focusMessageId = search.get("message");
     useEffect(() => {
-        if (!focusMessageId || !conversation.data) return;
+        if (!focusMessageId) { consumedFocus.current = null; return; }
+        if (!conversation.data || consumedFocus.current === focusMessageId) return;
         if (conversation.data.messages.some((item) => item.id === focusMessageId && item.supersededAt) && !oldMessagesOpen) { setOldMessagesOpen(true); return; }
         const frame = requestAnimationFrame(() => {
             const element = document.getElementById(`text-message-${focusMessageId}`);
-            if (element) { follow.current = false; element.scrollIntoView({ block: "center" }); element.focus({ preventScroll: true }); setShowLatest(true); setSearch((current) => { const next = new URLSearchParams(current); next.delete("message"); return next; }, { replace: true }); }
+            // URL 更新可能迟于折叠事件，定位成功时就消费，避免用户收起后再次展开。
+            if (element) { consumedFocus.current = focusMessageId; follow.current = false; element.scrollIntoView({ block: "center" }); element.focus({ preventScroll: true }); setShowLatest(true); setSearch((current) => { const next = new URLSearchParams(current); next.delete("message"); return next; }, { replace: true }); }
         });
         return () => cancelAnimationFrame(frame);
     }, [focusMessageId, conversation.data?.conversation.id, conversation.data?.messages.length, oldMessagesOpen]);

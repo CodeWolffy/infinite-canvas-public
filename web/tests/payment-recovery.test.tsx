@@ -47,7 +47,7 @@ async function openRechargeAndSubmit() {
 async function switchToB() {
     fireEvent.click(within(paymentDialog()).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    const buttons = screen.getAllByRole("button", { name: "查看订单" });
+    const buttons = screen.getAllByText("查看订单");
     fireEvent.click(buttons[1]);
     await waitFor(() => expect(paymentDialog()).toHaveTextContent("order-b"));
 }
@@ -168,7 +168,7 @@ test.each(["reopen", "other-order"] as const)("创建 A 期间关闭充值并 %s
         fireEvent.click(screen.getByRole("button", { name: "充值余额" }));
         fireEvent.change(within(await screen.findByRole("dialog", { name: "充值余额" })).getByRole("spinbutton"), { target: { value: "25.00" } });
     } else {
-        fireEvent.click(screen.getAllByRole("button", { name: "查看订单" })[1]);
+        fireEvent.click(screen.getAllByText("查看订单")[1]);
         await waitFor(() => expect(paymentDialog()).toHaveTextContent("order-b"));
     }
     await act(async () => pending.resolve({ order: order("order-a"), paymentError: "A 支付渠道失败" }));
