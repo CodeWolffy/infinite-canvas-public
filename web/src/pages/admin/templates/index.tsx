@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { App, Button, Form, Input, Modal, Popconfirm, Select, Table, Typography } from "antd";
+import { App, Button, Form, Grid, Input, Modal, Popconfirm, Select, Table, Typography } from "antd";
 import { PencilLine, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -8,7 +8,8 @@ import { listCanvasProjects } from "@/services/api/canvas-projects";
 
 /** 管理员维护画布模板：从自己的画布快照生成模板，普通用户在画布库一键套用。 */
 export default function AdminTemplatesPage() {
-    const { message } = App.useApp();
+    const screens = Grid.useBreakpoint();
+    const { message, modal } = App.useApp();
     const { t } = useTranslation();
     const [form] = Form.useForm<{ title: string; description?: string; projectId?: string }>();
     const [templates, setTemplates] = useState<CanvasTemplate[]>([]);
@@ -63,7 +64,7 @@ export default function AdminTemplatesPage() {
     };
 
     return (
-        <div className="mx-auto flex min-w-0 max-w-5xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+        <div className="flex min-w-0 w-full flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-semibold">{t("templates.adminTitle")}</h1>
@@ -78,15 +79,16 @@ export default function AdminTemplatesPage() {
                 loading={loading}
                 dataSource={templates}
                 pagination={false}
-                scroll={{ x: "max-content" }}
+                scroll={{ x: 900 }}
                 columns={[
-                    { title: t("templates.name"), dataIndex: "title" },
-                    { title: t("templates.description"), dataIndex: "description", render: (value: string) => value || "—" },
+                    { title: t("templates.name"), dataIndex: "title", width: 220, ellipsis: true },
+                    { title: t("templates.description"), dataIndex: "description", render: (value: string, tpl) => value ? <button type="button" className="block w-full min-w-0 text-left" aria-label={`查看 ${tpl.title} 的完整描述`} onClick={() => modal.info({ title: tpl.title, content: <div className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words">{value}</div>, okText: "关闭" })}><span className="line-clamp-2 break-words text-muted-foreground">{value}</span></button> : "—" },
                     { title: t("templates.size"), width: 130, render: (_, tpl) => t("canvas.project.stats", { nodes: tpl.nodeCount, connections: tpl.connectionCount }) },
                     { title: t("templates.createdAt"), width: 150, render: (_, tpl) => new Date(tpl.createdAt).toLocaleDateString() },
                     {
                         title: "",
                         width: 100,
+                        fixed: screens.lg ? "right" : undefined,
                         render: (_, tpl) => (
                             <div className="flex items-center gap-1">
                                 <Button size="small" type="text" icon={<PencilLine className="size-4" />} aria-label={t("common.edit")} onClick={() => openEdit(tpl)} />

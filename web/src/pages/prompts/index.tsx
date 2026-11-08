@@ -39,15 +39,15 @@ export default function PromptsPage() {
     };
 
     return (
-        <div className="flex h-full flex-col overflow-hidden bg-background text-stone-800 dark:text-stone-100">
-            <main className="min-h-0 flex-1 overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] sm:px-6 lg:py-8 dark:bg-[radial-gradient(rgba(245,245,244,.16)_1px,transparent_1px)]" onScroll={handleListScroll}>
+        <div className="@container/prompts flex h-full flex-col overflow-hidden bg-background text-stone-800 dark:text-stone-100">
+            <main className="min-h-0 flex-1 overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] @min-[640px]/prompts:px-6 @min-[1024px]/prompts:py-8 dark:bg-[radial-gradient(rgba(245,245,244,.16)_1px,transparent_1px)]" onScroll={handleListScroll}>
                 <div className="mx-auto max-w-7xl">
                     <div className="text-center">
                         <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("prompts.title")}</h1>
                         <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{t("prompts.total", { count: totalPrompts })}</p>
                     </div>
-                    <div className="mt-5 grid items-start gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
-                        <aside className="thin-scrollbar max-h-72 overflow-y-auto border-b border-stone-200 pb-5 lg:sticky lg:top-0 lg:max-h-[calc(100dvh-6rem)] lg:border-b-0 lg:border-r lg:pb-8 lg:pr-5 dark:border-stone-800">
+                    <div className="mt-5 grid items-start gap-5 @min-[1024px]/prompts:grid-cols-[240px_minmax(0,1fr)] @min-[1024px]/prompts:gap-6">
+                        <aside className="thin-scrollbar max-h-72 overflow-y-auto border-b border-stone-200 pb-5 @min-[1024px]/prompts:sticky @min-[1024px]/prompts:top-0 @min-[1024px]/prompts:max-h-[calc(100dvh-6rem)] @min-[1024px]/prompts:border-b-0 @min-[1024px]/prompts:border-r @min-[1024px]/prompts:pb-8 @min-[1024px]/prompts:pr-5 dark:border-stone-800">
                             <PromptFilter label={t("prompts.category")} options={promptCategoryOptions} selected={selectedCategory} onChange={setSelectedCategory} />
                             <div className="mt-6">
                                 <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-stone-400 dark:text-stone-500">{t("prompts.tags")}</div>
@@ -64,7 +64,7 @@ export default function PromptsPage() {
                             {query.isLoading ? <div className="flex h-60 items-center justify-center"><Spin /></div> : null}
                             {!query.isLoading ? (
                                 <div className="mt-5">
-                                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                                    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-4">
                                         {promptItems.map((item) => <PromptCard key={item.sourceId + ":" + item.id} item={item} onOpen={() => setSelectedPrompt(item)} onCopy={() => startCreation(item)} actionLabel="用此创作" actionIcon={<Sparkles className="size-3.5" />} actionType="primary" extraAction={<Button type="text" size="small" aria-label={t("common.copyPrompt")} title={t("common.copyPrompt")} icon={<Copy className="size-3.5" />} onClick={() => copyText(item.prompt, t("common.promptCopied"))} />} />)}
                                     </div>
                                     {!promptItems.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("prompts.empty")} className="py-16" /> : null}

@@ -34,7 +34,14 @@ const imports = {
     "@/stores/use-canvas-side-panel-store": { useCanvasSidePanelStore: (selector: any) => selector(panelState), CANVAS_SIDE_PANEL_MAX_WIDTH: 500, CANVAS_SIDE_PANEL_MIN_WIDTH: 200, CANVAS_SIDE_PANEL_MOTION_MS: 200 },
     "@/stores/use-theme-store": { useThemeStore: (selector: any) => selector({ theme: "light" }) }, "@/types/canvas": { CanvasNodeType },
 };
-const context = { window, document, navigator, localStorage, setTimeout, clearTimeout };
+let availableWidth = 1280;
+const layoutObservers = new Set<() => void>();
+class LayoutObserver {
+    constructor(private callback: () => void) {}
+    observe() { layoutObservers.add(this.callback); }
+    disconnect() { layoutObservers.delete(this.callback); }
+}
+const context = { window, document, navigator, localStorage, setTimeout, clearTimeout, ResizeObserver: LayoutObserver };
 const { CanvasSelectionToolbar } = loadModule(readSource("components/canvas/canvas-selection-toolbar.tsx"), context, imports);
 const { CanvasSidePanel } = loadModule(readSource("components/canvas/canvas-side-panel.tsx"), context, imports);
 const node = (id: string, type = CanvasNodeType.Text, groupId?: string): CanvasNodeData => ({ id, type, title: id, position: { x: 0, y: 0 }, width: 100, height: 80, metadata: { content: `${id}内容`, groupId } });
@@ -42,10 +49,13 @@ const nodes = [node("组", CanvasNodeType.Group), node("图片", CanvasNodeType.
 const toolbarProps = { viewport: { x: 0, y: 0, k: 1 }, showToolbar: true, canGroup: true, canUngroup: true, onGroup: noop, onUngroup: noop, onArrange: noop, arrangeDisabled: { distributeHorizontal: true, distributeVertical: true } };
 
 beforeEach(() => {
+    availableWidth = 1280;
+    panelState.panelMounted = true;
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => availableWidth);
     api.session = 1; api.export.mockReset().mockResolvedValue(undefined); api.info.mockReset(); api.success.mockReset(); api.error.mockReset(); api.loading.mockReset().mockReturnValue(noop); panelState.closePanel.mockReset();
     vi.stubGlobal("matchMedia", (media: string) => ({ matches: true, media, addEventListener: noop, removeEventListener: noop }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 test("选区包含组和组内成员时完整下载并按节点去重", async () => {
     render(<CanvasSelectionToolbar {...toolbarProps} nodes={[nodes[0], nodes[1]]} allNodes={nodes} />);
@@ -127,10 +137,57 @@ test("切换登录会话后不显示旧下载成功提示", async () => {
     expect(api.error).not.toHaveBeenCalled();
 });
 
-test("手机侧栏关闭按钮与遮罩共用现有关闭动作，桌面调整柄保留", () => {
-    render(<CanvasSidePanel nodes={nodes} selectedNodeIds={new Set()} onFocusNode={noop} onPreviewNode={noop} onHoverNode={noop} onInsertAsset={noop} />);
+test("Agent 挤窄画布后侧栏自动收起，重新打开可用关闭按钮和遮罩", () => {
+    const props = { nodes, selectedNodeIds: new Set<string>(), onFocusNode: noop, onPreviewNode: noop, onHoverNode: noop, onInsertAsset: noop };
+    const view = render(<CanvasSidePanel {...props} />);
+    expect(screen.getByRole("button", { name: "canvas.sidePanel.resize" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "关闭画布侧栏遮罩" })).not.toBeInTheDocument();
+    act(() => { availableWidth = 800; layoutObservers.forEach((notify) => notify()); });
+    expect(panelState.closePanel).toHaveBeenCalledOnce();
+    panelState.panelMounted = false;
+    view.rerender(<CanvasSidePanel {...props} />);
+    panelState.panelMounted = true;
+    view.rerender(<CanvasSidePanel {...props} />);
+    expect(panelState.closePanel).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "canvas.sidePanel.resize" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭画布侧栏" }));
     fireEvent.click(screen.getByRole("button", { name: "关闭画布侧栏遮罩" }));
+    expect(panelState.closePanel).toHaveBeenCalledTimes(3);
+});
+
+test("覆盖侧栏定位节点后收起，恢复宽屏后定位和 Escape 不关闭侧栏", () => {
+    availableWidth = 800;
+    const focus = vi.fn();
+    render(<CanvasSidePanel nodes={nodes} selectedNodeIds={new Set()} onFocusNode={focus} onPreviewNode={noop} onHoverNode={noop} onInsertAsset={noop} />);
+    panelState.closePanel.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "其他" }));
+    expect(focus).toHaveBeenCalledWith("其他");
+    expect(panelState.closePanel).toHaveBeenCalledOnce();
+    fireEvent.keyDown(window, { key: "Escape" });
     expect(panelState.closePanel).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("button", { name: "canvas.sidePanel.resize" })).toHaveClass("hidden", "lg:block");
+    act(() => { availableWidth = 1280; layoutObservers.forEach((notify) => notify()); });
+    fireEvent.click(screen.getByRole("button", { name: "其他" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(panelState.closePanel).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "canvas.sidePanel.resize" })).toBeInTheDocument();
+});
+
+test("侧栏隐藏时仍跟踪画布空间，重新打开沿用当前布局", () => {
+    panelState.panelMounted = false;
+    const props = { nodes, selectedNodeIds: new Set<string>(), onFocusNode: noop, onPreviewNode: noop, onHoverNode: noop, onInsertAsset: noop };
+    const view = render(<CanvasSidePanel {...props} />);
+    act(() => { availableWidth = 800; layoutObservers.forEach((notify) => notify()); });
+    panelState.panelMounted = true;
+    view.rerender(<CanvasSidePanel {...props} />);
+    expect(screen.getByRole("button", { name: "关闭画布侧栏遮罩" })).toBeInTheDocument();
+    view.unmount();
+    expect(layoutObservers.size).toBe(0);
+});
+
+test("初始窄屏侧栏使用原关闭动作，保留已保存宽度", () => {
+    availableWidth = 390;
+    render(<CanvasSidePanel nodes={nodes} selectedNodeIds={new Set()} onFocusNode={noop} onPreviewNode={noop} onHoverNode={noop} onInsertAsset={noop} />);
+    expect(panelState.closePanel).toHaveBeenCalledOnce();
+    expect(panelState.width).toBe(320);
 });

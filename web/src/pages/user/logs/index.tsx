@@ -48,7 +48,7 @@ export default function UserLogsPage() {
             title: t("userCenter.colTime"),
             dataIndex: "startedAt",
             key: "startedAt",
-            width: 160,
+            width: 136,
             render: (value: string, record) => {
                 const bar = isFundLog(record)
                     ? (Number(record.deltaBalance) < 0 ? "bg-red-500" : "bg-emerald-500")
@@ -56,7 +56,7 @@ export default function UserLogsPage() {
                 return (
                     <span className="flex items-center gap-2">
                         <span className={`h-3.5 w-0.5 shrink-0 rounded-full ${bar}`} />
-                        <span className="font-mono text-xs text-stone-500">{dayjs(value).format("MM-DD HH:mm:ss")}</span>
+                        <span className="whitespace-nowrap font-mono text-xs text-stone-500">{dayjs(value).format("MM-DD HH:mm:ss")}</span>
                     </span>
                 );
             },
@@ -65,16 +65,17 @@ export default function UserLogsPage() {
             title: t("userCenter.colType"),
             dataIndex: "type",
             key: "type",
-            width: 100,
+            width: 96,
             render: (value: string) => <Tag color={typeColors[value]}>{value === "recharge" ? "充值到账" : typeLabel(value)}</Tag>,
         },
         {
             title: t("userCenter.colModel"),
             dataIndex: "modelDisplayName",
             key: "modelDisplayName",
-            ellipsis: true,
+            width: 220,
+            minWidth: 220,
             render: (value: string | null) => (
-                <span className="font-medium text-stone-900 dark:text-stone-100">
+                <span title={value || undefined} className="line-clamp-2 whitespace-normal font-medium text-stone-900 [overflow-wrap:anywhere] dark:text-stone-100">
                     {value || "-"}
                 </span>
             ),
@@ -83,16 +84,16 @@ export default function UserLogsPage() {
             title: t("userCenter.colStatus"),
             dataIndex: "status",
             key: "status",
-            width: 90,
+            width: 80,
             render: (value: string | null, record) => (isFundLog(record) || !value ? <span className="text-xs text-stone-400">-</span> : <Tag color={statusColors[value]}>{statusLabel(value)}</Tag>),
         },
         {
             title: t("userCenter.colDuration"),
             dataIndex: "durationMs",
             key: "durationMs",
-            width: 90,
+            width: 80,
             render: (value: number | null) => (
-                <span className="font-mono text-xs text-stone-500">
+                <span className="whitespace-nowrap font-mono text-xs text-stone-500">
                     {value !== null ? formatDuration(value) : "-"}
                 </span>
             ),
@@ -100,9 +101,10 @@ export default function UserLogsPage() {
         {
             title: t("userCenter.colTokens"),
             key: "tokens",
-            width: 110,
+            width: 128,
+            hidden: Boolean(typeFilter && typeFilter !== "text"),
             render: (_, record) => (
-                <span className="font-mono text-xs text-stone-500">
+                <span className="whitespace-nowrap font-mono text-xs text-stone-500">
                     {record.promptTokens !== null || record.completionTokens !== null
                         ? `${(record.promptTokens ?? 0).toLocaleString()} / ${(record.completionTokens ?? record.outputTokens ?? 0).toLocaleString()}`
                         : "-"}
@@ -117,19 +119,20 @@ export default function UserLogsPage() {
             render: (value: string | null, record) => {
                 if (isFundLog(record)) {
                     const positive = Number(record.deltaBalance) >= 0;
-                    return <span className={`font-mono text-xs ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{fundAmount(record.deltaBalance)}</span>;
+                    return <span className={`whitespace-nowrap font-mono text-xs ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{fundAmount(record.deltaBalance)}</span>;
                 }
-                return <span className="font-mono text-xs text-stone-500">{value ? `¥${value}` : "-"}</span>;
+                return <span className="whitespace-nowrap font-mono text-xs text-stone-500">{value ? `¥${value}` : "-"}</span>;
             },
         },
         {
             title: "详情",
             key: "detail",
-            ellipsis: true,
+            minWidth: 240,
+            className: "whitespace-normal [overflow-wrap:anywhere]",
             render: (_, record) => {
-                if (isFundLog(record)) return <span className="text-xs text-stone-500">{record.note || "-"}</span>;
+                if (isFundLog(record)) return <span className="line-clamp-2 text-xs text-stone-500">{record.note || "-"}</span>;
                 const errText = record.errorMessage || record.errorCategory;
-                if (errText) return <span className="text-xs text-red-600 dark:text-red-400">{errText}</span>;
+                if (errText) return <span className="line-clamp-2 text-xs text-red-600 dark:text-red-400">{errText}</span>;
                 return <span className="text-xs text-stone-400">-</span>;
             },
         },
@@ -231,6 +234,7 @@ export default function UserLogsPage() {
 
                 <Table
                     rowKey="id"
+                    tableLayout="auto"
                     columns={columns}
                     dataSource={logs}
                     loading={loading}

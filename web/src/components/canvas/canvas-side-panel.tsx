@@ -63,21 +63,34 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     const setWidth = useCanvasSidePanelStore((state) => state.setWidth);
     const closePanel = useCanvasSidePanelStore((state) => state.closePanel);
     const [resizing, setResizing] = useState(false);
+    const hostRef = useRef<HTMLDivElement>(null);
+    const [overlay, setOverlay] = useState(true);
 
     useEffect(() => {
-        const desktop = window.matchMedia("(min-width: 1024px)");
-        const closeOnNarrowScreen = () => { if (!desktop.matches) closePanel(); };
-        const closeOnEscape = (event: KeyboardEvent) => { if (!desktop.matches && event.key === "Escape") closePanel(); };
-        closeOnNarrowScreen();
-        desktop.addEventListener("change", closeOnNarrowScreen);
-        window.addEventListener("keydown", closeOnEscape);
-        return () => {
-            desktop.removeEventListener("change", closeOnNarrowScreen);
-            window.removeEventListener("keydown", closeOnEscape);
+        const host = hostRef.current?.parentElement;
+        if (!host) return;
+        let wasOverlay = false;
+        // 观察扣除 Agent 后的画布区域；不能观察中央画布，否则切换覆盖模式会反复触发断点。
+        const updateLayout = () => {
+            const nextOverlay = host.clientWidth < 1024;
+            setOverlay(nextOverlay);
+            if (nextOverlay && !wasOverlay) closePanel();
+            wasOverlay = nextOverlay;
         };
+        updateLayout();
+        const observer = new ResizeObserver(updateLayout);
+        observer.observe(host);
+        return () => observer.disconnect();
     }, [closePanel]);
 
-    const closeOnMobile = () => { if (window.innerWidth < 1024) closePanel(); };
+    useEffect(() => {
+        if (!overlay || !panelOpen) return;
+        const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented) closePanel(); };
+        window.addEventListener("keydown", closeOnEscape);
+        return () => window.removeEventListener("keydown", closeOnEscape);
+    }, [closePanel, overlay, panelOpen]);
+
+    const closeOverlay = () => { if (overlay) closePanel(); };
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -99,13 +112,12 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
         window.addEventListener("pointerup", onUp);
     };
 
-    if (!panelMounted) return null;
-
     return (
-        <>
-        {panelOpen ? <button type="button" className="fixed inset-0 z-[75] opacity-70 lg:hidden" style={{ background: theme.canvas.background }} onClick={closePanel} aria-label="关闭画布侧栏遮罩" /> : null}
+        <div ref={hostRef} className="contents">
+        {panelMounted ? <>
+        {overlay && panelOpen ? <button type="button" className="absolute inset-0 z-[75] opacity-70" style={{ background: theme.canvas.background }} onClick={closePanel} aria-label="关闭画布侧栏遮罩" /> : null}
         <motion.div
-            className="fixed inset-y-0 left-0 z-[80] flex h-dvh max-w-[calc(100vw-2rem)] shrink-0 lg:relative lg:inset-auto lg:z-[60] lg:h-full lg:max-w-none"
+            className={cn("flex h-full shrink-0", overlay ? "absolute inset-y-0 left-0 z-[80] max-w-[calc(100%_-_2rem)]" : "relative z-[60]")}
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: panelOpen ? width + 1 : 0, opacity: panelOpen ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
@@ -119,25 +131,26 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                 style={{ width, maxWidth: "100%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
-                <div className="flex items-center gap-3 px-3 pt-2 lg:gap-5 lg:px-4 lg:pt-3.5">
+                <div className={cn("flex items-center", overlay ? "gap-3 px-3 pt-2" : "gap-5 px-4 pt-3.5")}>
                     <TabButton label={t("canvas.sidePanel.canvas")} active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <TabButton label={t("canvas.sidePanel.assets")} active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <TabButton label={t("canvas.sidePanel.prompts")} active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
-                    <button type="button" onClick={closePanel} className="ml-auto grid size-10 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 lg:hidden" aria-label="关闭画布侧栏"><X className="size-4" /></button>
+                    {overlay ? <button type="button" onClick={closePanel} className="ml-auto grid size-10 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10" aria-label="关闭画布侧栏"><X className="size-4" /></button> : null}
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
                     {tab === "canvas" ? (
-                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={(id) => { onFocusNode(id); closeOnMobile(); }} onPreviewNode={onPreviewNode} onHoverNode={onHoverNode} theme={theme} />
+                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={(id) => { onFocusNode(id); closeOverlay(); }} onPreviewNode={onPreviewNode} onHoverNode={onHoverNode} theme={theme} />
                     ) : tab === "assets" ? (
-                        <CanvasAssetsTab onInsert={(payload) => { onInsertAsset(payload); closeOnMobile(); }} theme={theme} />
+                        <CanvasAssetsTab onInsert={(payload) => { onInsertAsset(payload); closeOverlay(); }} theme={theme} />
                     ) : (
-                        <CanvasPromptsTab onInsert={(payload) => { onInsertAsset(payload); closeOnMobile(); }} theme={theme} />
+                        <CanvasPromptsTab onInsert={(payload) => { onInsertAsset(payload); closeOverlay(); }} theme={theme} />
                     )}
                 </div>
-                <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize lg:block" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} />
+                {!overlay ? <button type="button" className="absolute inset-y-0 right-0 z-40 w-4 translate-x-1/2 cursor-col-resize" onPointerDown={startResize} aria-label={t("canvas.sidePanel.resize")} /> : null}
             </motion.aside>
         </motion.div>
-        </>
+        </> : null}
+        </div>
     );
 }
 

@@ -1,9 +1,9 @@
 import { useDeferredValue, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
+import { Alert, App, Button, Dropdown, Empty, Form, Grid, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { Copy, KeyRound, Plus, Search, ShieldOff, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
+import { Copy, Ellipsis, KeyRound, Plus, Search, ShieldOff, UserRoundCog, UserRoundPlus, Users } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useSecurityProof } from "@/hooks/use-security-proof";
@@ -16,6 +16,7 @@ type CreateValues = { username: string; displayName: string; temporaryPassword: 
 type Credential = { username: string; displayName: string; temporaryPassword: string };
 
 export default function AdminUsersPage() {
+    const screens = Grid.useBreakpoint();
     const { message, modal } = App.useApp();
     const { requestProof } = useSecurityProof();
     const copyText = useCopyText();
@@ -76,14 +77,18 @@ export default function AdminUsersPage() {
     };
 
     const columns: TableColumnsType<AuthUser> = [
-        { title: "用户", key: "user", fixed: "left", width: 210, render: (_, user) => <div className="min-w-0"><div className="truncate font-medium text-stone-950 dark:text-stone-100">{user.displayName}</div><div className="truncate text-xs text-stone-500">@{user.username}</div></div> },
+        { title: "用户", key: "user", fixed: screens.lg ? "left" : undefined, width: 210, render: (_, user) => <div className="min-w-0"><div className="truncate font-medium text-stone-950 dark:text-stone-100" title={user.displayName}>{user.displayName}</div><div className="truncate text-xs text-stone-500" title={`@${user.username}`}>@{user.username}</div></div> },
         { title: "角色", dataIndex: "role", width: 100, render: (role: UserRole) => <Tag color={role === "admin" ? "gold" : "default"}>{role === "admin" ? "管理员" : "普通用户"}</Tag> },
-        { title: "分组", dataIndex: "groupName", width: 110, render: (value: string | null, user) => <Button type="text" size="small" className="!px-1.5" onClick={() => { setGroupUser(user); setGroupValue(user.groupId || undefined); }}>{value || "未分组"}</Button> },
+        { title: "分组", dataIndex: "groupName", width: 110, render: (value: string | null, user) => <Button type="text" size="small" className="max-w-full !px-1.5" title={value || "未分组"} onClick={() => { setGroupUser(user); setGroupValue(user.groupId || undefined); }}><span className="truncate">{value || "未分组"}</span></Button> },
         { title: "首次改密", dataIndex: "mustChangePassword", width: 110, render: (required: boolean) => required ? <Tag color="orange">待修改</Tag> : <span className="text-stone-500">已完成</span> },
         { title: "最近登录", dataIndex: "lastLoginAt", width: 170, render: (value: string | null) => <span className="text-stone-500">{value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "尚未登录"}</span> },
         { title: "创建时间", dataIndex: "createdAt", width: 170, render: (value: string) => <span className="text-stone-500">{dayjs(value).format("YYYY-MM-DD HH:mm")}</span> },
         { title: "启用", dataIndex: "status", width: 90, render: (status: AuthUser["status"], user) => <Switch size="small" checked={status === "active"} disabled={user.id === currentUser?.id || statusMutation.isPending} onChange={(checked) => changeStatus(user, checked)} /> },
-        { title: "操作", key: "actions", fixed: "right", width: 285, render: (_, user) => <Space size={0}><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<KeyRound className="size-3.5" />} onClick={() => setResettingUser(user)}>重置密码</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<UserRoundCog className="size-3.5" />} onClick={() => { setRoleUser(user); setRoleValue(user.role); }}>改角色</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<ShieldOff className="size-3.5" />} onClick={() => confirmResetMfa(user)}>重置两步验证</Button></Space> },
+        { title: "操作", key: "actions", fixed: screens.lg ? "right" : undefined, width: 100, render: (_, user) => <Dropdown trigger={["click"]} placement="bottomRight" disabled={user.id === currentUser?.id} menu={{ items: [
+            { key: "password", label: "重置密码", icon: <KeyRound className="size-3.5" />, onClick: () => setResettingUser(user) },
+            { key: "role", label: "改角色", icon: <UserRoundCog className="size-3.5" />, onClick: () => { setRoleUser(user); setRoleValue(user.role); } },
+            { key: "mfa", label: "重置两步验证", icon: <ShieldOff className="size-3.5" />, danger: true, onClick: () => confirmResetMfa(user) },
+        ] }}><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<Ellipsis className="size-4" />} aria-label={`管理 ${user.displayName}`}>管理</Button></Dropdown> },
     ];
 
     return (
@@ -108,7 +113,7 @@ export default function AdminUsersPage() {
                     </div>
                     <span className="text-xs text-stone-500">共 {total} 个账号</span>
                 </div>
-                <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1080 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
+                <Table<AuthUser> rowKey="id" columns={columns} tableLayout="fixed" dataSource={users} loading={usersQuery.isLoading} pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1060 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
             </div>
 
             <Modal title="创建用户" open={createOpen} footer={null} onCancel={() => setCreateOpen(false)} destroyOnHidden>

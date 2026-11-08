@@ -3338,7 +3338,7 @@ function InfiniteCanvasPage() {
     if (!projectReady) return <CanvasRefreshShell />;
 
     return (
-        <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
+        <main className="relative flex h-full min-h-0 min-w-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={(nodeId) => { const node = nodeById.get(nodeId); if (node) handleNodeViewImage(node); }} onHoverNode={setHoverPreviewNodeId} onInsertAsset={handleAssetInsert} />
             <section className="relative min-w-0 flex-1 overflow-hidden @container/canvas">
                 {canEdit && !nodes.length ? <CanvasEmptyGuide onDescribe={(prompt) => createNode(CanvasNodeType.Image, undefined, prompt)} onUpload={() => handleUploadRequest()} onTemplates={() => setTemplatesOpen(true)} /> : null}

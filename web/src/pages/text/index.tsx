@@ -355,37 +355,37 @@ function TextConversationPage() {
         </div>
     </>;
 
-    return <div className="flex h-full min-h-0 min-w-0">
-        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-muted/40 px-2 py-4 lg:flex">{sidebarBody}</aside>
+    return <div className="@container/text-workbench flex h-full min-h-0 min-w-0">
+        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-muted/40 px-2 py-4 @min-[1024px]/text-workbench:flex">{sidebarBody}</aside>
         <Drawer placement="left" size="min(300px, 100vw)" open={historyOpen} onClose={() => setHistoryOpen(false)} styles={{ body: { display: "flex", flexDirection: "column", padding: "16px 8px" } }} closable={false}>{sidebarBody}</Drawer>
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4 sm:px-6">
+        <section className="@container/conversation flex min-h-0 min-w-0 flex-1 flex-col">
+            <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2 @min-[640px]/conversation:px-6">
                 <div className="flex min-w-0 items-center gap-1">
-                    <Button type="text" className="lg:!hidden" aria-label="历史对话" title="历史对话" icon={<PanelLeft className="size-4" />} onClick={() => setHistoryOpen(true)} />
+                    <Button type="text" className="@min-[1024px]/text-workbench:!hidden" aria-label="历史对话" title="历史对话" icon={<PanelLeft className="size-4" />} onClick={() => setHistoryOpen(true)} />
                     <h2 className="min-w-0 truncate text-sm font-medium">{conversation.data?.conversation.title || "新对话"}</h2>
                 </div>
-                <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+                <div className="flex shrink-0 items-center gap-1 @min-[640px]/conversation:gap-2">
                     <Link to="/user/wallet" className="mr-2 text-xs text-muted-foreground hover:text-foreground">余额 ¥{wallet.data?.wallet.balance ?? "—"}</Link>
                     <Button type="text" aria-label="对话设置" icon={<Settings2 className="size-4" />} onClick={() => setSettingsOpen(true)} />
-                    <Button type="text" className="lg:!hidden" aria-label="新建对话" icon={<Plus className="size-4" />} disabled={sending} onClick={() => selectConversation("")} />
+                    <Button type="text" className="@min-[1024px]/text-workbench:!hidden" aria-label="新建对话" icon={<Plus className="size-4" />} disabled={sending} onClick={() => selectConversation("")} />
                 </div>
             </header>
             <div ref={scroll} className="thin-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
-                <div className="mx-auto min-w-0 max-w-3xl space-y-6 break-words px-4 py-6 sm:px-6">
+                <div className="mx-auto min-w-0 max-w-3xl space-y-6 break-words px-4 py-6 @min-[640px]/conversation:px-6">
                     {models.error || conversation.error ? <Alert type="error" title={models.error ? "模型列表读取失败，请重试。" : "对话读取失败，请重试。"} description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{models.error?.message || conversation.error?.message}</p></details>} action={<Button size="small" onClick={() => void (models.error ? models.refetch() : conversation.refetch())}>{models.error ? "刷新模型列表" : "刷新对话"}</Button>} /> : null}
                     {unavailableModel ? <Alert type="warning" showIcon title={ambiguousDraftModel ? "草稿名称对应多个模型配置，请明确选择后继续发送" : "已选模型已下线或暂无可用渠道，请明确选择其它模型后继续发送"} /> : null}
                     {conversationId && conversation.isPending ? <Spin className="!block py-10" /> : null}
                     {!conversationId ? <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">有什么可以帮忙的？</h2>
+                        <h2 className="text-2xl font-semibold tracking-tight @min-[640px]/conversation:text-3xl">有什么可以帮忙的？</h2>
                         <p className="mt-3 max-w-md text-sm leading-7 text-muted-foreground">输入问题开始对话，对话自动保存；支持图片输入的模型可以直接识图问答。</p>
-                        <div className="mt-7 grid w-full gap-2 text-left sm:grid-cols-3">
+                        <div className="mt-7 grid w-full gap-2 text-left @min-[640px]/conversation:grid-cols-3">
                             {textExamples.map((item) => <button key={item.id} type="button" disabled={sending} onClick={() => setDraft(item.example)} className="rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/60 disabled:opacity-50"><span className="text-sm font-medium">{item.title}</span><span className="mt-1 block line-clamp-2 text-xs leading-6 text-muted-foreground">{item.example.prompt}</span></button>)}
                         </div>
                         {!models.isPending && !models.isError && !available.length ? <Empty className="mt-8" description={noModelsHint} /> : null}
                     </div> : null}
                     {conversation.data?.messages.map((item) => item.role === "user" ? (
                         <div key={item.id} className="group flex flex-col items-end">
-                            <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 sm:max-w-[75%]">
+                            <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 @min-[640px]/conversation:max-w-[75%]">
                                 {item.attachments?.length ? <MessageAttachments attachments={item.attachments} /> : null}
                                 {item.content ? <p className="whitespace-pre-wrap break-words text-[15px] leading-7">{item.content}</p> : null}
                             </div>
@@ -411,7 +411,7 @@ function TextConversationPage() {
                     {streamError ? <Alert type="warning" title="连接已中断，请刷新对话查看最新结果。" description={<details><summary className="cursor-pointer">查看错误详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{streamError}</p></details>} action={<Button size="small" onClick={() => void conversation.refetch()}>刷新对话</Button>} /> : null}
                 </div>
             </div>
-            <footer className="thin-scrollbar max-h-[60%] shrink-0 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
+            <footer className="thin-scrollbar max-h-[60%] shrink-0 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 @min-[640px]/conversation:px-6">
                 <div className="mx-auto max-w-3xl">
                     <div className="rounded-3xl border border-border bg-background p-3 transition-colors focus-within:border-muted-foreground/40">
                         {files.length ? <div className="flex flex-wrap gap-2 px-1 pb-2">
@@ -421,15 +421,13 @@ function TextConversationPage() {
                             </div>)}
                         </div> : null}
                         <Input.TextArea aria-label="消息内容" variant="borderless" className="!px-1 !pt-0 !text-[15px] !leading-7" autoSize={{ minRows: 1, maxRows: 8 }} maxLength={100000} value={prompt} disabled={sending} onChange={(event) => setPrompt(event.target.value)} placeholder="有什么问题，尽管问" onPaste={pasteFiles} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
-                        <div className="mt-1 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1">
-                                <input ref={fileInput} type="file" className="hidden" multiple accept="image/*" onChange={pickFiles} />
-                                <Tooltip title={model?.imageInput ? "添加图片" : "当前模型不支持图片输入"}>
-                                    <span className="inline-flex"><Button type="text" aria-label="添加图片" icon={<Paperclip className="size-4" />} disabled={!model?.imageInput || sending || active || files.length >= maxAttachments} onClick={() => fileInput.current?.click()} /></span>
-                                </Tooltip>
-                            </div>
-                            <div className="flex min-w-0 items-center justify-end gap-1 sm:gap-2">
-                                <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-0 max-w-64 flex-1 sm:flex-none sm:min-w-36 sm:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? ambiguousDraftModel ? "请明确选择模型" : "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }} placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, name: item.name, description: item.description, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">价格：{option.data.price}</div>{option.data.description ? <p className="mt-1 whitespace-normal text-xs leading-5 text-muted-foreground">适用说明：{option.data.description}</p> : null}</div>} />
+                        <div className="mt-1 flex flex-wrap items-center justify-end gap-2">
+                            <input ref={fileInput} type="file" className="hidden" multiple accept="image/*" onChange={pickFiles} />
+                            <Tooltip title={model?.imageInput ? "添加图片" : "当前模型不支持图片输入"}>
+                                <span className="mr-auto inline-flex"><Button type="text" aria-label="添加图片" icon={<Paperclip className="size-4" />} disabled={!model?.imageInput || sending || active || files.length >= maxAttachments} onClick={() => fileInput.current?.click()} /></span>
+                            </Tooltip>
+                            <Select aria-label="选择文本模型" title="选择模型" variant="borderless" className="min-w-36 max-w-full flex-1 @min-[640px]/conversation:max-w-80" prefix={<Circle className="size-3.5 text-muted-foreground" />} suffixIcon={<ChevronDown className="size-3" />} value={modelId || undefined} labelRender={(option) => unavailableModel ? ambiguousDraftModel ? "请明确选择模型" : "已选模型不可用" : option.label} onChange={changeModel} disabled={sending || active} loading={models.isPending} placeholder="选择模型" showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }} placement="topRight" popupMatchSelectWidth={false} styles={{ popup: { root: { maxWidth: "calc(100vw - 32px)" } } }} options={available.map((item) => ({ value: item.id, label: item.displayName, name: item.name, description: item.description, price: modelPriceLabel(item), image: Boolean(item.imageInput) }))} optionRender={(option) => <div className="max-w-80 py-1"><div className="flex items-center gap-2 font-medium">{option.data.label}{option.data.image ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">图片</span> : null}</div><div className="mt-1 whitespace-normal text-xs text-muted-foreground">价格：{option.data.price}</div>{option.data.description ? <p className="mt-1 whitespace-normal text-xs leading-5 text-muted-foreground">适用说明：{option.data.description}</p> : null}</div>} />
+                            <div className="flex shrink-0 items-center gap-2">
                                 <Select<ReasoningEffort> aria-label="思考强度" title="思考强度" variant="borderless" className="!w-24 shrink-0" prefix={<Brain className="size-4" />} suffixIcon={<ChevronDown className="size-3" />} value={effort} onChange={setReasoningEffort} disabled={!model?.reasoningEfforts?.length || sending || active} placement="topRight" options={modelReasoningOptions(model)} />
                                 {active ? <Button type="text" className="!size-8 !min-w-8 !rounded-full" aria-label="取消生成" title={latest?.canCancel ? "取消生成并全退" : "已提交上游，无法取消"} disabled={!latest?.canCancel} icon={<Square className="size-3.5" />} loading={canceling} onClick={() => void cancel()} /> : <Button type="primary" className="!size-8 !min-w-8 !rounded-full" aria-label="发送消息" aria-describedby={sendBlockedReason ? "text-send-status" : undefined} title={sendBlockedReason || "发送消息"} icon={<ArrowUp className="size-4" />} loading={sending} disabled={!canSend} onClick={() => void send()} />}
                             </div>

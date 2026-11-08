@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Segmented, Select, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Segmented, Select, Table } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { History, RefreshCw, Trash2 } from "lucide-react";
@@ -49,21 +49,19 @@ export default function AdminRequestLogsPage() {
     const setFilter = <K extends keyof Filters>(key: K, value: Filters[K]) => { setPage(1); if (key === "range") setPreset(null); setFilters((current) => ({ ...current, [key]: value })); };
 
     const columns: TableColumnsType<RequestLog> = [
-        { title: "时间", key: "time", width: 190, render: (_, log) => <div><div>{dayjs(log.startedAt).format("YYYY-MM-DD HH:mm:ss")}</div><div className={log.status === "succeeded" ? "text-emerald-600" : log.status === "failed" ? "text-red-500" : "text-stone-400"}>{statusLabels[log.status]}</div></div> },
-        { title: "用户", key: "user", width: 130, ellipsis: true, render: (_, log) => log.userDisplayName ? <span title={`@${log.username || ""}`}>{log.userDisplayName}</span> : <span className="text-stone-400">—</span> },
-        { title: "类型", dataIndex: "type", width: 76, render: (value: RequestLog["type"]) => value === "probe" ? <span className="text-stone-400">{typeLabels[value]}</span> : typeLabels[value] },
-        { title: "模型 / 渠道", key: "model", width: 250, ellipsis: true, render: (_, log) => <div><div className="truncate" title={log.modelDisplayNameSnapshot || undefined}>{log.modelDisplayNameSnapshot || <span className="text-stone-400">—</span>}</div><div className="truncate text-xs text-stone-500" title={log.upstreamModel || undefined}>{[log.channelNameSnapshot, log.upstreamModel].filter(Boolean).join(" · ") || "—"}</div></div> },
-        { title: "HTTP", dataIndex: "httpStatus", width: 70, render: (value: number | null, log) => value ? <span className={log.status === "failed" ? "text-red-500" : ""}>{value}</span> : <span className="text-stone-300 dark:text-stone-600">—</span> },
-        { title: "费用", key: "cost", width: 90, render: (_, log) => log.billedAmount != null ? `¥${Number(log.billedAmount).toFixed(2)}` : <span className="text-stone-300 dark:text-stone-600">—</span> },
-        { title: "耗时", key: "duration", width: 130, render: (_, log) => <div className="flex items-center gap-2">{log.durationMs != null && <span className={`h-4 w-[3px] rounded-full ${log.status === "failed" ? "bg-red-400" : "bg-emerald-500"}`} />}<span className={log.durationMs == null ? "text-stone-300 dark:text-stone-600" : ""}>{log.durationMs == null ? "—" : `${(log.durationMs / 1000).toFixed(1)}s`}</span></div> },
+        { title: "时间", key: "time", width: 164, render: (_, log) => <div><div>{dayjs(log.startedAt).format("YYYY-MM-DD HH:mm:ss")}</div><div className={log.status === "succeeded" ? "text-emerald-600" : log.status === "failed" ? "text-red-500" : "text-stone-400"}>{statusLabels[log.status]}</div></div> },
+        { title: "用户", key: "user", width: 120, ellipsis: true, render: (_, log) => log.userDisplayName ? <span title={`@${log.username || ""}`}>{log.userDisplayName}</span> : <span className="text-stone-400">—</span> },
+        { title: "类型", dataIndex: "type", width: 64, render: (value: RequestLog["type"]) => value === "probe" ? <span className="text-stone-400">{typeLabels[value]}</span> : typeLabels[value] },
+        { title: "模型 / 渠道", key: "model", width: 220, ellipsis: true, render: (_, log) => <div><div className="truncate" title={log.modelDisplayNameSnapshot || undefined}>{log.modelDisplayNameSnapshot || <span className="text-stone-400">—</span>}</div><div className="truncate text-xs text-stone-500" title={log.upstreamModel || undefined}>{[log.channelNameSnapshot, log.upstreamModel].filter(Boolean).join(" · ") || "—"}</div></div> },
+        { title: "HTTP", dataIndex: "httpStatus", width: 64, render: (value: number | null, log) => value ? <span className={log.status === "failed" ? "text-red-500" : ""}>{value}</span> : <span className="text-stone-300 dark:text-stone-600">—</span> },
+        { title: "费用", key: "cost", width: 84, render: (_, log) => log.billedAmount != null ? `¥${Number(log.billedAmount).toFixed(2)}` : <span className="text-stone-300 dark:text-stone-600">—</span> },
+        { title: "耗时", key: "duration", width: 90, render: (_, log) => <div className="flex items-center gap-2">{log.durationMs != null && <span className={`h-4 w-[3px] shrink-0 rounded-full ${log.status === "failed" ? "bg-red-400" : "bg-emerald-500"}`} />}<span className={log.durationMs == null ? "text-stone-300 dark:text-stone-600" : ""}>{log.durationMs == null ? "—" : `${(log.durationMs / 1000).toFixed(1)}s`}</span></div> },
         {
             title: "详情",
             key: "detail",
             render: (_, log) => {
                 const summary = [log.errorCategory, log.httpStatus ? `HTTP ${log.httpStatus}` : "", log.errorMessage].filter(Boolean).join(" · ");
-                return summary ? (
-                    <Tooltip title="点击复制详情"><button type="button" className="max-w-[420px] cursor-pointer truncate text-left hover:text-stone-950 dark:hover:text-stone-100" aria-label="复制请求详情" onClick={() => copyText(logDetail(log), "请求详情已复制")}>{summary}</button></Tooltip>
-                ) : <span className="text-stone-300 dark:text-stone-600">—</span>;
+                return <button type="button" className="block max-w-full cursor-pointer truncate text-left hover:text-stone-950 dark:hover:text-stone-100" aria-label="查看请求详情" onClick={() => modal.info({ title: "请求详情", content: <div className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-all text-sm">{logDetail(log)}</div>, okText: "关闭", footer: (_, { OkBtn }) => <><Button onClick={() => copyText(logDetail(log), "请求详情已复制")}>复制详情</Button><OkBtn /></> })}>{summary || "查看详情"}</button>;
             },
         },
     ];
@@ -100,7 +98,7 @@ export default function AdminRequestLogsPage() {
                     columns={columns}
                     dataSource={logsQuery.data?.logs || []}
                     loading={logsQuery.isLoading}
-                    scroll={{ x: 1160 }}
+                    scroll={{ x: 1100 }}
                     pagination={{ current: page, pageSize, total: logsQuery.data?.total || 0, showSizeChanger: true, showQuickJumper: true, pageSizeOptions: [10, 20, 50, 100], onChange: (page, size) => { setPage(page); setPageSize(size); }, showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条 / 共 ${total} 条` }}
                 />
             </div>

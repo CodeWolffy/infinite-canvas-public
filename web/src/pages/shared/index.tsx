@@ -159,7 +159,7 @@ function SharedNodeContent({ token, node, meta }: { token: string; node: CanvasN
         const texts = Array.isArray(meta.texts) ? (meta.texts as CanvasNodeText[]) : [];
         const primary = texts.find((item) => item.id === meta.primaryTextId) || texts[texts.length - 1];
         const content = meta.content || primary?.content || "";
-        return <div className="h-full overflow-auto whitespace-pre-wrap p-3" style={{ color: theme.node.text, fontSize: meta.fontSize || 14 }}>{content}</div>;
+        return <div className="h-full overflow-auto whitespace-pre-wrap p-3 [overflow-wrap:anywhere]" style={{ color: theme.node.text, fontSize: meta.fontSize || 14 }}>{content}</div>;
     }
     if (node.type === "config") {
         return (
@@ -184,7 +184,7 @@ function SharedAssetView({ token, asset }: { token: string; asset: Extract<Share
     const url = asset.mediaId ? sharedMediaUrl(token, asset.mediaId) : "";
     const tags = Array.isArray(asset.metadata?.tags) ? (asset.metadata.tags as string[]) : [];
     return (
-        <div className="mx-auto flex h-full max-w-4xl flex-col gap-5 overflow-auto px-6 py-8">
+        <div className="mx-auto h-full max-w-4xl space-y-5 overflow-auto px-6 py-8 [overflow-wrap:anywhere]">
             <div className="flex flex-wrap items-center gap-2">
                 <Tag>{t(`assets.kinds.${asset.type}`)}</Tag>
                 {tags.map((tag) => (
@@ -193,7 +193,7 @@ function SharedAssetView({ token, asset }: { token: string; asset: Extract<Share
             </div>
             <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${theme.node.stroke}`, background: theme.node.panel }}>
                 {asset.type === "image" && url ? <img src={url} alt={asset.title} className="max-h-[70dvh] w-full object-contain" /> : null}
-                {asset.type === "video" && url ? <video src={url} controls className="max-h-[70dvh] w-full bg-black" /> : null}
+                {asset.type === "video" && url ? <video src={url} controls className="max-h-[70dvh] w-full bg-black object-contain" /> : null}
                 {asset.type === "audio" && url ? <div className="p-6"><audio src={url} controls className="w-full" /></div> : null}
                 {asset.type === "text" ? <pre className="whitespace-pre-wrap p-6 text-sm" style={{ color: theme.node.text }}>{asset.content}</pre> : null}
             </div>

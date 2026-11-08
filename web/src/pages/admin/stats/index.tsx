@@ -87,7 +87,7 @@ export default function AdminStatsPage() {
                     <CapabilityBreakdownBoard capabilities={statsQuery.data.byCapabilities || []} />
                 </section>
             </div>
-            <div className="mt-6 grid gap-5 xl:grid-cols-2">
+            <div className="mt-6 grid grid-cols-[repeat(auto-fit,minmax(min(100%,38rem),1fr))] gap-5">
                 <StatsTable
                     title="按用户排行"
                     loading={statsQuery.isLoading}
@@ -96,11 +96,12 @@ export default function AdminStatsPage() {
                         {
                             title: "用户",
                             key: "user",
-                            minWidth: 180,
+                            width: 220,
+                            ellipsis: true,
                             render: (_, row) => (
                                 <div className="min-w-0">
-                                    <div className="font-medium text-stone-900 dark:text-stone-100 truncate">{row.displayName}</div>
-                                    <div className="text-xs text-stone-400 font-mono truncate">@{row.username}</div>
+                                    <div className="font-medium text-stone-900 dark:text-stone-100 truncate" title={row.displayName}>{row.displayName}</div>
+                                    <div className="text-xs text-stone-400 font-mono truncate" title={`@${row.username}`}>@{row.username}</div>
                                 </div>
                             ),
                         },
@@ -116,11 +117,12 @@ export default function AdminStatsPage() {
                         {
                             title: "模型",
                             key: "model",
-                            minWidth: 180,
+                            width: 220,
+                            ellipsis: true,
                             render: (_, row) => (
                                 <div className="min-w-0">
-                                    <div className="font-medium text-stone-900 dark:text-stone-100 truncate">{row.displayName}</div>
-                                    <div className="text-xs text-stone-400 font-mono truncate">{row.name}</div>
+                                    <div className="font-medium text-stone-900 dark:text-stone-100 truncate" title={row.displayName}>{row.displayName}</div>
+                                    <div className="text-xs text-stone-400 font-mono truncate" title={row.name}>{row.name}</div>
                                 </div>
                             ),
                         },
@@ -138,7 +140,8 @@ export default function AdminStatsPage() {
                         {
                             title: "渠道名称",
                             dataIndex: "name",
-                            minWidth: 200,
+                            width: 220,
+                            ellipsis: true,
                             render: (value: string) => (
                                 <span className="font-medium text-stone-900 dark:text-stone-100">{value}</span>
                             ),
@@ -245,7 +248,7 @@ function StatsTable<T extends { id: string }>({ title, loading, rows, columns, o
                     <Button type="text" size="small" icon={<Download className="size-3.5" />} onClick={onExport} className="text-xs text-stone-500 hover:text-stone-900 dark:hover:text-stone-100">导出 CSV</Button>
                 ) : null}
             </div>
-            <Table<T> size="middle" rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} scroll={{ x: "max-content" }} />
+            <Table<T> size="middle" rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} scroll={{ x: columns.reduce((total, column) => total + Number(column.width || 0), 0) }} />
         </section>
     );
 }
