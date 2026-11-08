@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Cpu } from "lucide-react";
 import { Select } from "antd";
 import { useTranslation } from "react-i18next";
@@ -24,6 +24,8 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     const { t } = useTranslation();
     const isAdmin = useUserStore((state) => state.user?.role === "admin");
     const pickerId = useId();
+    const triggerRef = useRef<HTMLDivElement>(null);
+    const popupClassName = `model-picker-popup-${pickerId}`;
     const [open, setOpen] = useState(false);
     const options = useMemo(() => selectableModelsByCapability(config, capability).map((value) => {
         const model = findChannelModel(config, value)?.model;
@@ -44,8 +46,36 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
         return () => window.removeEventListener("model-picker-open", closeOtherPicker);
     }, [pickerId]);
 
+    useEffect(() => {
+        if (!open) return;
+        const close = () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && triggerRef.current?.contains(active)) active.blur();
+            setOpen(false);
+        };
+        const closeOutside = (event: Event) => {
+            const target = event.target;
+            const popup = document.getElementsByClassName(popupClassName)[0];
+            if (target instanceof Node && (triggerRef.current?.contains(target) || popup?.contains(target))) return;
+            close();
+        };
+        // Canvas gestures can suppress the mouse/blur events used by Select's outside-click handling.
+        window.addEventListener("pointerdown", closeOutside, true);
+        window.addEventListener("wheel", closeOutside, { capture: true, passive: true });
+        window.addEventListener("scroll", closeOutside, true);
+        window.addEventListener("resize", close);
+        window.addEventListener("blur", close);
+        return () => {
+            window.removeEventListener("pointerdown", closeOutside, true);
+            window.removeEventListener("wheel", closeOutside, true);
+            window.removeEventListener("scroll", closeOutside, true);
+            window.removeEventListener("resize", close);
+            window.removeEventListener("blur", close);
+        };
+    }, [open, popupClassName]);
+
     return (
-        <div className="contents" onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={triggerRef} className="contents" onPointerDown={(event) => event.stopPropagation()}>
             <Select
                 aria-label={pickerPlaceholder}
                 title={currentTitle}
@@ -65,6 +95,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 status={unavailable ? unavailableLabel ? "warning" : "error" : undefined}
                 showSearch={{ filterOption: (input, option) => `${option?.label || ""} ${option?.name || ""} ${option?.description || ""}`.toLowerCase().includes(input.toLowerCase()) }}
                 popupMatchSelectWidth={false}
+                classNames={{ popup: { root: popupClassName } }}
                 styles={{ popup: { root: { zIndex: 1200, minWidth: "min(20rem, calc(100vw - 24px))", maxWidth: "calc(100vw - 24px)" } } }}
                 options={options}
                 notFoundContent={options.length ? "没有匹配的模型，试试模型名称或用途关键词" : emptyModelLabel(capability, isAdmin)}
