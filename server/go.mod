@@ -20,7 +20,7 @@ require (
 	github.com/smartwalle/alipay/v3 v3.2.31
 	github.com/tiktoken-go/tokenizer v0.10.0
 	github.com/tmaxmax/go-sse v0.11.0
-	github.com/wI2L/jsondiff v0.7.0
+	github.com/wI2L/jsondiff v0.7.1
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
 	golang.org/x/image v0.46.0
 )
